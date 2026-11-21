@@ -11,6 +11,9 @@ public static class HoverTimings
     /// <summary>Rest on a folder row before its child flyout opens.</summary>
     public static readonly TimeSpan Open = TimeSpan.FromMilliseconds(150);
 
+    /// <summary>Rest on an image / presentation row before its preview appears.</summary>
+    public static readonly TimeSpan Preview = TimeSpan.FromMilliseconds(150);
+
     /// <summary>Time on a file row / blank space before the open child closes.</summary>
     public static readonly TimeSpan Grace = TimeSpan.FromMilliseconds(300);
 

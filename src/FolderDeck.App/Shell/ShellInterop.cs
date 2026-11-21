@@ -58,27 +58,23 @@ internal static class ShellInterop
         }
     }
 
-    /// <summary>Converts a 32-bpp DIB section keeping its (premultiplied) alpha channel.</summary>
+    /// <summary>Converts a 32-bpp bitmap keeping its (premultiplied) alpha channel.</summary>
+    /// <remarks>
+    /// The rows are read with <c>GetDIBits</c> as a top-down DIB, so GDI resolves the row order.
+    /// Reading <c>bmBits</c> directly is not safe: <c>GetObject</c> reports a positive
+    /// <c>biHeight</c> (bottom-up) for every shell bitmap, yet real thumbnails are stored
+    /// top-down while icons are stored bottom-up — flipping on that sign drew thumbnails upside down.
+    /// </remarks>
     public static unsafe BitmapSource? FromHBitmap(HBITMAP hbm)
     {
-        DIBSECTION ds = default;
-        int got = PInvoke.GetObject(new HGDIOBJ(hbm.Value), sizeof(DIBSECTION), &ds);
-        if (got >= sizeof(BITMAP) && ds.dsBm.bmBits != null && ds.dsBm.bmBitsPixel == 32 && ds.dsBm.bmWidth > 0 && ds.dsBm.bmHeight != 0)
+        BITMAP bm = default;
+        int got = PInvoke.GetObject(new HGDIOBJ(hbm.Value), sizeof(BITMAP), &bm);
+        if (got >= sizeof(BITMAP) && bm.bmBitsPixel == 32 && bm.bmWidth > 0 && bm.bmHeight != 0
+            && ReadTopDown32(hbm, bm.bmWidth, Math.Abs(bm.bmHeight)) is { } pixels)
         {
-            int width = ds.dsBm.bmWidth;
-            int height = Math.Abs(ds.dsBm.bmHeight);
-            int stride = ds.dsBm.bmWidthBytes;
-            bool bottomUp = got == sizeof(DIBSECTION) ? ds.dsBmih.biHeight > 0 : true;
-            var pixels = new byte[stride * height];
-            byte* src = (byte*)ds.dsBm.bmBits;
-            fixed (byte* dst = pixels)
-            {
-                for (int y = 0; y < height; y++)
-                {
-                    int srcRow = bottomUp ? height - 1 - y : y;
-                    Buffer.MemoryCopy(src + ((long)srcRow * stride), dst + ((long)y * stride), stride, stride);
-                }
-            }
+            int width = bm.bmWidth;
+            int height = Math.Abs(bm.bmHeight);
+            int stride = width * 4;
 
             // All-zero alpha = a bitmap without alpha; all-255 = opaque. Shell bitmaps are usually
             // premultiplied, but some (folder thumbnails) carry straight alpha: a color channel above
@@ -114,6 +110,38 @@ internal static class ShellInterop
         catch (Exception ex) when (ex is COMException or ArgumentException or InvalidOperationException)
         {
             return null;
+        }
+    }
+
+    /// <summary>The bitmap's pixels as top-down 32-bpp BGRA rows (stride = width × 4), or null.</summary>
+    private static unsafe byte[]? ReadTopDown32(HBITMAP hbm, int width, int height)
+    {
+        var info = default(BITMAPINFO);
+        info.bmiHeader.biSize = (uint)sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height; // negative = top-down
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = 0; // BI_RGB
+
+        var pixels = new byte[width * 4 * height];
+        var dc = PInvoke.CreateCompatibleDC(HDC.Null);
+        if (dc.IsNull)
+        {
+            return null;
+        }
+
+        try
+        {
+            fixed (byte* dst = pixels)
+            {
+                int lines = PInvoke.GetDIBits(dc, hbm, 0, (uint)height, dst, &info, DIB_USAGE.DIB_RGB_COLORS);
+                return lines == height ? pixels : null;
+            }
+        }
+        finally
+        {
+            PInvoke.DeleteDC(dc);
         }
     }
 

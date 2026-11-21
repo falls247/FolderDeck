@@ -19,7 +19,21 @@ public partial class EntryListView : UserControl
         List.AddHandler(PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler(OnLeftDown), handledEventsToo: true);
         List.AddHandler(PreviewMouseLeftButtonUpEvent, new MouseButtonEventHandler(OnLeftUp), handledEventsToo: true);
         List.AddHandler(PreviewMouseRightButtonUpEvent, new MouseButtonEventHandler(OnRightUp), handledEventsToo: true);
+
+        // The list's own scrolling stays here: ScrollChanged bubbles, and the card grid around the
+        // overlay would otherwise take it for a grid scroll and close the whole cascade.
+        AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
+        {
+            e.Handled = true;
+            if (e.VerticalChange != 0)
+            {
+                Scrolled?.Invoke(this);
+            }
+        }));
     }
+
+    /// <summary>The rows scrolled (wheel, scroll bar or keyboard selection).</summary>
+    public event Action<EntryListView>? Scrolled;
 
     /// <summary>The pointer moved onto a row, or onto blank space (row = null).</summary>
     public event Action<EntryListView, EntryRowViewModel?, FrameworkElement?>? RowHovered;
