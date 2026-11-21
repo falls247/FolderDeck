@@ -24,6 +24,9 @@ public interface ICardHost
 
     void CardRemove(CardView card);
 
+    /// <summary>The 📌 of a pinned card was clicked: unpins it.</summary>
+    void CardUnpin(CardView card);
+
     /// <summary>
     /// True when the card may be dragged at all (to other apps; at the top level also to a new
     /// position). Missing / not responding cards cannot: their press stays a click.
@@ -136,6 +139,12 @@ public partial class CardView : UserControl
         Host?.CardRemove(this);
     }
 
+    private void OnPinClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        Host?.CardUnpin(this);
+    }
+
     /// <summary>
     /// Starts a drag (to other apps; at the top level also to a new position) once the pointer
     /// moved past the system drag distance with the button held.
@@ -163,7 +172,7 @@ public partial class CardView : UserControl
         host.CardDrag(this);
     }
 
-    /// <summary>Presses on the overlay's rows or on a button (×) never start a card drag.</summary>
+    /// <summary>Presses on the overlay's rows or on a button (×, 📌) never start a card drag.</summary>
     private bool IsOnOverlayOrButton(DependencyObject? source) =>
         (CurrentOverlay is not null && FindAncestor<OverlayView>(source) is not null)
         || FindAncestor<System.Windows.Controls.Primitives.ButtonBase>(source) is not null;
@@ -283,6 +292,7 @@ public partial class CardView : UserControl
         NameText.TextDecorations = disabled ? TextDecorations.Strikethrough : null;
         UpdateOpacity();
         Cursor = disabled ? Cursors.Arrow : Cursors.Hand;
+        PinButton.IsEnabled = !disabled; // like the menu: a missing item cannot be unpinned from its card
         UpdateCloseButton();
     }
 

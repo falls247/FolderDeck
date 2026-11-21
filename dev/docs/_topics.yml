@@ -1,0 +1,76 @@
+# dev/docs の目録と目次（開発者・エージェント向け）
+#
+# 使い方
+#   1. まず topics の summary / read_when を見て、読む文書を選ぶ。
+#   2. sections（目次）で必要な節を選び、その節だけ読む（文書を通読しない）。
+#   3. コードコメントの「§9.6」などは、削除済みの旧仕様書（SPEC_20261121_native_folder_app.md）の節番号。
+#      根拠を確かめるときだけ `git show 1122384:dev/docs/SPEC_20261121_native_folder_app.md` で読む。
+#      コードの対応箇所は `rg "§9\.6" src` で引ける。
+#
+# 同期ルール
+#   - 各 Markdown の front matter（id / title / summary / tags / status / updated）は、
+#     ここの同じ項目と一致させる。sections は front matter には書かず、ここだけに書く。
+#   - dev/docs に文書を追加・更新・削除したら、同じコミットでこの目録と front matter を更新する。
+#   - 見出しを変えたら sections も直す。
+
+version: 1
+updated: 2026-11-21
+
+topics:
+  - id: codebase_overview
+    file: codebase_overview.md
+    title: コードベース概要（改修の入口）
+    summary: 層構成・主要クラスの責務・処理の流れ・スレッド規約・改修レシピ・テスト対応表。改修や調査の最初に読む地図
+    tags: [architecture, overview, wpf, core, recipe, testing, threading, persistence]
+    status: 現行（実装に追従して更新する）
+    updated: 2026-11-21
+    read_when: 改修・調査を始めるとき（最初に読む）。触るファイルを決めるとき
+    sections:
+      - id: "0"
+        heading: このドキュメントの位置づけ
+        about: 本書と README の役割分担、旧仕様書（削除済み）の読み方
+      - id: "1"
+        heading: 全体像
+        about: 技術スタック、プロジェクトの依存方向、大きいファイル
+        children:
+          - { id: "1.1", heading: プロジェクトと依存方向, about: App → Core、テストは Core のみ }
+          - { id: "1.2", heading: 起動と終了（App.xaml.cs）, about: 単一インスタンス、データ読み込み、未処理例外 }
+          - { id: "1.3", heading: オブジェクトの所有関係, about: AppServices（合成ルート）から View までの木構造 }
+      - id: "2"
+        heading: ファイルマップ
+        about: ファイルごとの責務の一覧
+        children:
+          - { id: "2.1", heading: Core, about: Infrastructure / Layout / Listing / Ordering / Paths / Ranking / Stores / Text / Transfer }
+          - { id: "2.2", heading: App, about: Services / Shell / ViewModels / Views / Themes }
+          - { id: "2.3", heading: その他, about: tools と BAT（文字コードの注意） }
+      - id: "3"
+        heading: 主要な処理の流れ
+        about: 呼び出しの順序をメンバー名でたどる
+        children:
+          - { id: "3.1", heading: タブの読み込み, about: TabViewModel.LoadAsync、NavLocation、_baseCards と Cards }
+          - { id: "3.2", heading: カードの段階読み込み, about: Realize / Unrealize、DetailGate、ThumbnailService }
+          - { id: "3.3", heading: カスケード（CascadeController、§9）, about: オーバーレイ・フライアウト・タイマー・開閉の判断 }
+          - { id: "3.4", heading: プレビュー, about: PreviewTextCache → Office / テキスト抜粋 → サムネイル }
+          - { id: "3.5", heading: 開く・移動する, about: OpenFileAsync、利用記録、右クリックの操作、ごみ箱への削除（DeleteAsync / RecycleBin） }
+          - { id: "3.6", heading: 並べ替え・ピン留め, about: SetSortMode、MoveCard、ApplyPins、PlaceInBase、📌 のクリック、カードの形 }
+          - { id: "3.7", heading: 他アプリへのドラッグ, about: FileDragOut、BeginDrag / EndDrag、Copy | Link のみ }
+          - { id: "3.8", heading: 永続化, about: StoreBase の保存予約、原子的書き込み、壊れたファイルの退避 }
+          - { id: "3.9", heading: テーマ, about: ThemeManager と Light / Dark の差し替え }
+      - id: "4"
+        heading: スレッドと非同期の規約
+        about: UI スレッドで待たない、STA ワーカーとタイムアウト、キャンセル
+      - id: "5"
+        heading: 改修レシピ
+        about: よくある改修ごとに触るファイルの順番と注意・関連テスト
+      - id: "6"
+        heading: テスト・ビルド
+        about: 関連テストだけ流すコマンド、テストファイルと対象の対応表
+      - id: "7"
+        heading: 守ること・落とし穴
+        about: 削除はごみ箱へだけ（完全削除・移動・上書きをしない）、パス比較、設定のコピー、コメント記号（§ / R / P / AC）
+      - id: "8"
+        heading: 調べ方のショートカット
+        about: rg での引き方、ログの見方
+      - id: "9"
+        heading: 本書の更新ルール
+        about: どの変更で本書と目録を更新するか

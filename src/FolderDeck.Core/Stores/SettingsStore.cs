@@ -1,4 +1,5 @@
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Layout;
 using FolderDeck.Core.Ordering;
 
 namespace FolderDeck.Core.Stores;
@@ -45,6 +46,9 @@ public sealed class AppSettings
 
     public int CardSize { get; set; } = CardSizeDefault;
 
+    /// <summary>Card shape for every tab: <c>portrait</c> (3:4 thumbnail) or <c>square</c> (1:1).</summary>
+    public string? CardShape { get; set; } = CardShapes.Portrait;
+
     /// <summary>
     /// Sort mode per tab: <see cref="TabRegistered"/> / <see cref="TabRecent"/> / <see cref="TabFrequent"/> →
     /// <c>manual</c>, <c>name_asc</c>, <c>name_desc</c>, <c>modified_asc</c>, <c>modified_desc</c>.
@@ -65,7 +69,7 @@ public sealed class AppSettings
 
     public bool AddToWindowsRecent { get; set; }
 
-    /// <summary>"Show / open in Explorer" uses a new tab of the running File Explorer window (Windows 11 22H2+).</summary>
+    /// <summary>"Show in Explorer" uses a new tab of the running File Explorer window (Windows 11 22H2+).</summary>
     public bool OpenExplorerInNewTab { get; set; }
 
     public static int ClampCardSize(int value)
@@ -127,6 +131,7 @@ public sealed class AppSettings
         }
 
         CardSize = ClampCardSize(CardSize);
+        CardShape = CardShapes.ToSetting(CardShapes.FromSetting(CardShape));
         RecentLimit = Math.Clamp(RecentLimit, 10, 500);
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
     }

@@ -294,6 +294,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
     }
 
+    public void CardUnpin(CardView card)
+    {
+        if (card.ViewModel is { IsDisabled: false } vm && _vm.IsPinned(vm.Path))
+        {
+            _cascade.CloseAll(); // the card may move to its sorted place
+            _vm.TogglePin(vm.ToItemRef());
+        }
+    }
+
     public bool CanDragCard(CardView card) => card.ViewModel is { IsDisabled: false } vm && FileDragOut.CanDrag(vm.Path);
 
     /// <summary>
@@ -347,6 +356,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
     public double GetScrollOffset() => Grid.VerticalOffset;
 
     public void ScrollTo(double offset) => Grid.ScrollTo(offset);
+
+    public nint WindowHandle => new WindowInteropHelper(this).Handle;
 
     public bool Confirm(string title, string body, string? path, string primaryText, bool danger)
     {

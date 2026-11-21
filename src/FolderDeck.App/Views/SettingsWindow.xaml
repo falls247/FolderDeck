@@ -42,7 +42,7 @@
 
         <TextBlock Text="エクスプローラー" Style="{StaticResource Section}" />
         <CheckBox IsChecked="{Binding OpenExplorerInNewTab}">
-            <TextBlock Text="エクスプローラーで表示・開くとき、開いているエクスプローラーに新しいタブで開く（Windows 11）" TextWrapping="Wrap" />
+            <TextBlock Text="エクスプローラーで表示するとき、開いているエクスプローラーに新しいタブで開く（Windows 11）" TextWrapping="Wrap" />
         </CheckBox>
         <TextBlock Text="エクスプローラーが開いていないとき、またはタブに対応していない Windows では、新しいウィンドウで開きます。"
                    TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="20,0,0,0" />

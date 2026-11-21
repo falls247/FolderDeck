@@ -40,11 +40,6 @@ public sealed class ContextMenuFactory
             _ = card is not null ? _vm.ActivateCardAsync(card) : _vm.OpenItemAsync(item);
         }));
         menu.Items.Add(Item("エクスプローラーで表示", "", !disabled, () => _ = _vm.ShowInExplorerAsync(item)));
-        if (item.IsFolder)
-        {
-            menu.Items.Add(Item("エクスプローラーで開く", "", !disabled, () => _ = _vm.OpenInExplorerAsync(item)));
-        }
-
         menu.Items.Add(Item("パスをコピー", "", !disabled, () => _vm.CopyPath(item)));
         menu.Items.Add(new Separator());
 
@@ -53,6 +48,16 @@ public sealed class ContextMenuFactory
         if (item.IsFolder)
         {
             menu.Items.Add(Item("登録フォルダに追加", "", !disabled, () => _ = _vm.AddToRegisteredAsync(item)));
+        }
+
+        if (MainViewModel.CanDelete(item))
+        {
+            menu.Items.Add(new Separator());
+            menu.Items.Add(Item("削除（ごみ箱へ移動）", "", true, () =>
+            {
+                BeforeNavigate?.Invoke(); // the confirmation and the reload replace the cascade
+                _ = _vm.DeleteAsync(item);
+            }));
         }
 
         if (topCard && card is not null)
