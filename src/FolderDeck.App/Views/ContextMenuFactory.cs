@@ -26,7 +26,10 @@ public sealed class ContextMenuFactory
     public void Show(ItemRef item, FrameworkElement target)
     {
         var card = item.Card;
-        bool disabled = card?.IsDisabled == true;
+
+        // The 登録フォルダ row of the sidebar this menu is for (null for cards, rows and headers).
+        var registered = item.Context == ItemContext.Sidebar ? _vm.FindRegistered(item.Path) : null;
+        bool disabled = card?.IsDisabled == true || registered?.IsDisabled == true;
         bool topCard = card?.IsTopLevel == true;
         var menu = new ContextMenu
         {
@@ -45,8 +48,10 @@ public sealed class ContextMenuFactory
 
         bool pinned = _vm.IsPinned(item.Path);
         menu.Items.Add(Item(pinned ? "ピン留めを外す" : "ピン留めする", pinned ? "" : "", !disabled, () => _vm.TogglePin(item)));
-        if (item.IsFolder)
+        if (item.IsFolder && item.Context != ItemContext.Sidebar && !_vm.IsRegistered(item.Path))
         {
+            // Any folder that is not on the sidebar yet (a card of 最近の履歴 / よく使う項目, a card or
+            // row inside a folder, a flyout header) can be put there.
             menu.Items.Add(Item("登録フォルダに追加", "", !disabled, () => _ = _vm.AddToRegisteredAsync(item)));
         }
 
@@ -60,14 +65,21 @@ public sealed class ContextMenuFactory
             }));
         }
 
+        if (registered is not null)
+        {
+            // Also for a missing folder: that is how it gets off the sidebar.
+            menu.Items.Add(new Separator());
+            menu.Items.Add(Item("登録を解除", "", true, () =>
+            {
+                BeforeNavigate?.Invoke();
+                _vm.Unregister(registered);
+            }));
+        }
+
         if (topCard && card is not null)
         {
             switch (card.OwnerTab)
             {
-                case TabKind.Registered:
-                    menu.Items.Add(new Separator());
-                    menu.Items.Add(Item("登録を解除", "", true, () => _vm.Unregister(card)));
-                    break;
                 case TabKind.Recent:
                     menu.Items.Add(new Separator());
                     menu.Items.Add(Item("履歴から外す", "", true, () => _vm.ExcludeFromRecent(card)));

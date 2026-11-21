@@ -20,10 +20,13 @@ public enum LoadOutcome
     Error,
 }
 
-/// <summary>One tab (§5.2, §10): its location, its cards, and how to load them.</summary>
+/// <summary>
+/// One tab (§5.2, §10): its location, its cards, and how to load them. 最近の履歴 and よく使う項目
+/// are fixed tabs with a top level; a folder tab (<see cref="TabKind.Folder"/>) is opened from the
+/// 登録フォルダ sidebar, always shows a folder and can be closed and moved.
+/// </summary>
 public sealed partial class TabViewModel : ObservableObject
 {
-    private static readonly TimeSpan RegisteredCheckTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan RecentCheckTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan SlowAfter = TimeSpan.FromSeconds(5);
 
@@ -35,12 +38,20 @@ public sealed partial class TabViewModel : ObservableObject
     private IReadOnlyList<CardViewModel> _baseCards = [];
     private bool _baseIsTop = true;
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsTop), nameof(ShowRegisterBar), nameof(ShowClearHistory))]
-    private NavLocation _location;
+    /// <summary>The base order with the sort mode applied, before the filter (<see cref="Cards"/> is what the filter leaves).</summary>
+    private IReadOnlyList<CardViewModel> _orderedCards = [];
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsTop), nameof(ShowClearHistory), nameof(ShowFilter), nameof(CanGoUp), nameof(Title), nameof(ToolTipText))]
+    private NavLocation _location;
+
+    /// <summary>The shown cards: sorted, and at the top level filtered (<see cref="Filter"/>).</summary>
+    [ObservableProperty]
     private IReadOnlyList<CardViewModel> _cards = [];
+
+    /// <summary>The tab is the one shown (tab strip highlight).</summary>
+    [ObservableProperty]
+    private bool _isSelected;
 
     [ObservableProperty]
     private bool _isLoading;
@@ -63,18 +74,25 @@ public sealed partial class TabViewModel : ObservableObject
     [ObservableProperty]
     private string? _noticeText;
 
-    /// <summary>This tab's sort mode (top level and every folder opened in it).</summary>
+    /// <summary>This tab's sort mode (top level and every folder opened in it). Folder tabs share one.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SortModeText))]
     private CardSortMode _sortMode;
 
-    public TabViewModel(AppServices services, TabKind kind)
+    /// <summary>What the top level of 最近の履歴 / よく使う項目 shows (all, folders only, files only).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FilterText))]
+    private ItemFilter _filter;
+
+    /// <summary>A fixed tab (最近の履歴 / よく使う項目), or a folder tab at <paramref name="location"/>.</summary>
+    public TabViewModel(AppServices services, TabKind kind, NavLocation? location = null)
     {
         _services = services;
         Kind = kind;
-        Title = TabKinds.Title(kind);
-        _location = NavLocation.Top(kind);
-        _sortMode = services.Stores.Settings.Current.SortModeOf(TabKinds.ToSetting(kind));
+        _location = location ?? NavLocation.Top(kind);
+        var settings = services.Stores.Settings.Current;
+        _sortMode = settings.SortModeOf(TabKinds.ToSetting(kind));
+        _filter = kind == TabKind.Folder ? ItemFilter.All : settings.FilterOf(TabKinds.ToSetting(kind));
         _slowTimer.Tick += (_, _) =>
         {
             _slowTimer.Stop();
@@ -88,15 +106,31 @@ public sealed partial class TabViewModel : ObservableObject
 
     public TabKind Kind { get; }
 
-    public string Title { get; }
+    public bool IsFolderTab => Kind == TabKind.Folder;
+
+    /// <summary>Tab strip text: the fixed tab's name, or the name of the folder a folder tab shows.</summary>
+    public string Title => IsFolderTab
+        ? (CurrentFolderPath is { } path ? PathTools.DisplayName(path) : "（不明）")
+        : TabKinds.Title(Kind);
+
+    public string? ToolTipText => IsFolderTab ? CurrentFolderPath : null;
 
     public bool IsTop => Location.IsTop;
 
-    public bool ShowRegisterBar => Kind == TabKind.Registered && IsTop;
-
     public bool ShowClearHistory => Kind == TabKind.Recent && IsTop;
 
+    /// <summary>The filter is offered where it applies: the top level of 最近の履歴 / よく使う項目.</summary>
+    public bool ShowFilter => !IsFolderTab && IsTop;
+
+    public string FilterText => FilterLabels.Short(Filter);
+
     public string SortModeText => SortModeLabels.Short(SortMode);
+
+    /// <summary>「1つ上へ」: inside a folder of a fixed tab, or below the root of a folder tab.</summary>
+    public bool CanGoUp => IsFolderTab ? Location.Rel.Length > 0 : !IsTop;
+
+    /// <summary>Text of the button on the error banner (a folder tab has no list to go back to).</summary>
+    public string BackText => IsFolderTab ? "タブを閉じる" : TabKinds.Title(Kind) + "の一覧に戻る";
 
     /// <summary>Cards can be dragged to a new position: top level only, not while loading.</summary>
     public bool CanReorder => IsTop && _baseIsTop && !IsLoading;
@@ -104,23 +138,18 @@ public sealed partial class TabViewModel : ObservableObject
     /// <summary>The tab's data changed while hidden: reload when shown.</summary>
     public bool IsStale { get; set; } = true;
 
-    /// <summary>Absolute path of the current location, or null at the top level / unknown root.</summary>
+    /// <summary>Back / forward history of this tab (§8.3), newest last.</summary>
+    public List<NavEntry> BackStack { get; } = [];
+
+    public List<NavEntry> ForwardStack { get; } = [];
+
+    /// <summary>Scroll position when the tab was left for another one (a folder tab comes back to it).</summary>
+    public double SavedScrollOffset { get; set; }
+
+    /// <summary>Absolute path of the current location, or null at the top level.</summary>
     public string? CurrentFolderPath => ResolvePath(Location);
 
-    public string? ResolveRootPath(string root)
-    {
-        if (root.Length == 0)
-        {
-            return null;
-        }
-
-        if (Kind == TabKind.Registered)
-        {
-            return _services.Stores.Registered.FindById(root)?.Path;
-        }
-
-        return root;
-    }
+    public string? ResolveRootPath(string root) => root.Length == 0 ? null : root;
 
     public string? ResolvePath(NavLocation location)
     {
@@ -236,58 +265,20 @@ public sealed partial class TabViewModel : ObservableObject
 
     private Task<LoadOutcome> LoadTopAsync(CancellationToken ct) => Kind switch
     {
-        TabKind.Registered => LoadRegisteredAsync(ct),
         TabKind.Recent => LoadRecentAsync(ct),
-        _ => LoadFrequentAsync(ct),
+        TabKind.Frequent => LoadFrequentAsync(ct),
+        _ => LoadNothingAsync(),
     };
 
-    private Task<LoadOutcome> LoadRegisteredAsync(CancellationToken ct)
+    /// <summary>A folder tab without a folder (never created that way): an error banner, not a crash.</summary>
+    private Task<LoadOutcome> LoadNothingAsync()
     {
         NoticeText = null;
-        // The order of registered_folders.json is the manual order.
-        var folders = _services.Stores.Registered.Folders;
-        var pins = PinSet();
-        var cards = new List<CardViewModel>(folders.Count);
-        foreach (var f in folders)
-        {
-            var card = new CardViewModel(_services, f.Path, CardKind.Checking, new NavLocation(TabKind.Registered, f.Id, string.Empty), ItemContext.TopCard, f.Id)
-            {
-                OwnerTab = Kind,
-                SubText = f.Path,
-                IsPinned = pins.Contains(f.Path),
-            };
-            card.ExistenceTask = CheckRegisteredAsync(card, ct);
-            cards.Add(card);
-        }
-
-        ShowCards(cards, isTop: true);
-        CountText = $"登録 {cards.Count:N0}";
-        EmptyText = cards.Count == 0
-            ? "登録フォルダはまだありません。上の入力欄にパスを貼り付けるか「参照…」で追加してください。"
-            : null;
-        return Task.FromResult(LoadOutcome.Ok);
-    }
-
-    private async Task CheckRegisteredAsync(CardViewModel card, CancellationToken ct)
-    {
-        try
-        {
-            var (state, modified) = await Existence.ProbeAsync(_services.FileSystem, card.Path, RegisteredCheckTimeout, ct);
-            if (modified is { } time)
-            {
-                card.ModifiedUtc = time;
-            }
-
-            card.SetKind(state switch
-            {
-                ExistState.Folder => CardKind.Folder,
-                ExistState.Timeout => CardKind.NoResponse,
-                _ => CardKind.Missing,
-            });
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        ClearCards();
+        EmptyText = null;
+        CountText = string.Empty;
+        BannerText = "フォルダが見つかりません。";
+        return Task.FromResult(LoadOutcome.NotFound);
     }
 
     private async Task<LoadOutcome> LoadRecentAsync(CancellationToken ct)
@@ -325,11 +316,9 @@ public sealed partial class TabViewModel : ObservableObject
             sub: $"{Formatting.RelativeTime(k.Item.LastUsed, now)} · {PathTools.ParentOf(k.Item.Path)}")).ToList();
 
         ShowCards(ManualOrder.Apply(cards, _services.Stores.CardOrders.Get(CardOrderList.Recent), c => c.Path), isTop: true);
-        CountText = $"履歴 {cards.Count:N0}";
         NoticeText = settings.IncludeWindowsRecent && !tracking
             ? "Windows の設定で最近使った項目の記録が無効になっているため、このアプリで開いた項目だけを表示しています。"
             : null;
-        EmptyText = cards.Count == 0 ? "最近の履歴はありません。" : null;
         return LoadOutcome.Ok;
     }
 
@@ -352,10 +341,6 @@ public sealed partial class TabViewModel : ObservableObject
         }
 
         ShowCards(ManualOrder.Apply(cards, _services.Stores.CardOrders.Get(CardOrderList.Frequent), c => c.Path), isTop: true);
-        CountText = $"項目 {cards.Count:N0}";
-        EmptyText = cards.Count == 0
-            ? "よく使う項目はまだありません。ファイルやフォルダを開くと、ここに並びます。右クリックの「ピン留め」でも追加できます。"
-            : null;
         return LoadOutcome.Ok;
     }
 
@@ -381,7 +366,7 @@ public sealed partial class TabViewModel : ObservableObject
 
     // ---- order: manual order, sort mode, pinned cards fixed ---------------------------------
 
-    /// <summary>Re-applies the sort mode to the shown cards (same card instances, no disk access).</summary>
+    /// <summary>Re-applies the sort mode and the filter to the cards (same card instances, no disk access).</summary>
     public void ApplyOrder()
     {
         if (IsLoading)
@@ -389,17 +374,20 @@ public sealed partial class TabViewModel : ObservableObject
             return; // the running load applies the current mode when it finishes
         }
 
-        if (WaitsForChecks())
-        {
-            _ = ApplyWhenCheckedAsync(_loadCts?.Token ?? CancellationToken.None);
-            return;
-        }
-
         ShowInPlace(Ordered(_baseCards));
     }
 
     /// <summary>The order before sorting (the manual order at the top level, the default order inside folders).</summary>
     public IReadOnlyList<CardViewModel> BaseCards => _baseCards;
+
+    /// <summary>
+    /// Every card in sorted order, including the ones the filter hides. Pinned cards sit at the same
+    /// index here and in <see cref="BaseCards"/>.
+    /// </summary>
+    public IReadOnlyList<CardViewModel> OrderedCards => _orderedCards;
+
+    /// <summary>The filter hides this card right now (top level of 最近の履歴 / よく使う項目 only).</summary>
+    public bool IsShown(CardViewModel card) => !FilterApplies || ItemFilters.Matches(Filter, card.IsFolderLike);
 
     /// <summary>The given order becomes the base (manual) order: after a drop.</summary>
     public void SetBaseOrder(IReadOnlyList<CardViewModel> order)
@@ -454,10 +442,10 @@ public sealed partial class TabViewModel : ObservableObject
         _baseCards = _baseCards.Where(c => c != card).ToList();
 
         // In a sort mode the slots shift with the removal: re-sort so pinned cards stay on their base slot
-        // (later pins and drops rely on the shown order being exactly the sorted base order).
-        Cards = IsLoading || WaitsForChecks() || SortMode == CardSortMode.Manual
-            ? Cards.Where(c => c != card).ToList()
-            : Ordered(_baseCards);
+        // (later pins and drops rely on the sorted order being exactly the sorted base order).
+        Show(IsLoading || SortMode == CardSortMode.Manual
+            ? _orderedCards.Where(c => c != card).ToList()
+            : Ordered(_baseCards));
     }
 
     /// <summary>
@@ -494,27 +482,62 @@ public sealed partial class TabViewModel : ObservableObject
     private void ClearCards()
     {
         _baseCards = [];
+        _orderedCards = [];
         Cards = [];
     }
 
     /// <summary>
     /// Shows a freshly loaded list. <paramref name="baseOrder"/> is the manual order (top level) or
-    /// the default order (inside a folder); the tab's sort mode is applied on top of it.
+    /// the default order (inside a folder); the tab's sort mode and filter are applied on top of it.
     /// </summary>
     private void ShowCards(IReadOnlyList<CardViewModel> baseOrder, bool isTop)
     {
         _baseCards = baseOrder;
         _baseIsTop = isTop;
-        if (WaitsForChecks())
+        Show(Ordered(baseOrder));
+    }
+
+    /// <summary>The filter applies to what is loaded: the top level of 最近の履歴 / よく使う項目.</summary>
+    private bool FilterApplies => !IsFolderTab && _baseIsTop && Filter != ItemFilter.All;
+
+    /// <summary>Shows <paramref name="ordered"/> (every card, sorted) through the filter.</summary>
+    private void Show(IReadOnlyList<CardViewModel> ordered)
+    {
+        _orderedCards = ordered;
+        Cards = FilterApplies ? ItemFilters.Apply(ordered, Filter, c => c.IsFolderLike) : ordered;
+        UpdateTopSummary();
+    }
+
+    /// <summary>Count and empty text of a top level (they depend on the filter); a folder sets its own.</summary>
+    private void UpdateTopSummary()
+    {
+        if (IsFolderTab || !_baseIsTop)
         {
-            // 登録フォルダ by date: the times arrive with the existence checks (2 s at most), so the
-            // cards are re-ordered once, when every check is done, instead of jumping around.
-            Cards = baseOrder;
-            _ = ApplyWhenCheckedAsync(_loadCts?.Token ?? CancellationToken.None);
             return;
         }
 
-        Cards = Ordered(baseOrder);
+        int total = _orderedCards.Count;
+        int shown = Cards.Count;
+        string label = Kind == TabKind.Recent ? "履歴" : "項目";
+        CountText = FilterApplies ? $"{label} {shown:N0} / {total:N0}" : $"{label} {total:N0}";
+        EmptyText = (total, shown) switch
+        {
+            (0, _) => Kind == TabKind.Recent
+                ? "最近の履歴はありません。"
+                : "よく使う項目はまだありません。ファイルやフォルダを開くと、ここに並びます。右クリックの「ピン留め」でも追加できます。",
+            (_, 0) => Filter == ItemFilter.Folders
+                ? "フォルダはありません（表示：フォルダのみ）。"
+                : "ファイルはありません（表示：ファイルのみ）。",
+            _ => null,
+        };
+    }
+
+    partial void OnFilterChanged(ItemFilter value)
+    {
+        if (!IsLoading)
+        {
+            Show(_orderedCards); // the running load shows through the new filter when it finishes
+        }
     }
 
     private IReadOnlyList<CardViewModel> Ordered(IReadOnlyList<CardViewModel> baseOrder)
@@ -533,62 +556,39 @@ public sealed partial class TabViewModel : ObservableObject
         return CardOrdering.SortKeepingPinned(baseOrder, c => c.IsPinned, comparer);
     }
 
-    /// <summary>Shows <paramref name="ordered"/> unless it is already the shown order (avoids rebuilding the grid).</summary>
+    /// <summary>Shows <paramref name="ordered"/> unless it is already the sorted order (avoids rebuilding the grid).</summary>
     private void ShowInPlace(IReadOnlyList<CardViewModel> ordered)
     {
-        var shown = Cards;
-        if (shown.Count == ordered.Count)
+        var current = _orderedCards;
+        if (current.Count == ordered.Count)
         {
             bool same = true;
-            for (int i = 0; i < shown.Count && same; i++)
+            for (int i = 0; i < current.Count && same; i++)
             {
-                same = ReferenceEquals(shown[i], ordered[i]);
+                same = ReferenceEquals(current[i], ordered[i]);
             }
 
             if (same)
             {
+                _orderedCards = ordered;
                 return;
             }
         }
 
-        Cards = ordered;
-    }
-
-    private bool WaitsForChecks() =>
-        Kind == TabKind.Registered && _baseIsTop && CardSortModes.IsByModified(SortMode)
-        && _baseCards.Any(c => c.ExistenceTask is { IsCompleted: false });
-
-    private async Task ApplyWhenCheckedAsync(CancellationToken ct)
-    {
-        var checks = _baseCards.Select(c => c.ExistenceTask).OfType<Task>().ToArray();
-        try
-        {
-            await Task.WhenAll(checks).WaitAsync(ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return; // reloaded or navigated away meanwhile
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn("Existence checks of registered folders failed", ex); // order with what is known
-        }
-
-        // Idempotent: whatever happened meanwhile (drop, another mode), this shows the current order.
-        if (!IsLoading && !WaitsForChecks())
-        {
-            ShowInPlace(Ordered(_baseCards));
-        }
+        Show(ordered);
     }
 
     // ---- breadcrumbs (§5.3) -----------------------------------------------------------------
 
     public void UpdateBreadcrumbs()
     {
-        var items = new List<(string Text, NavLocation Target, string? Tip)>
+        // A fixed tab starts at its list; a folder tab at its root folder.
+        var items = new List<(string Text, NavLocation Target, string? Tip)>();
+        if (!IsFolderTab)
         {
-            (Title, NavLocation.Top(Kind), null),
-        };
+            items.Add((TabKinds.Title(Kind), NavLocation.Top(Kind), null));
+        }
+
         if (!Location.IsTop)
         {
             string? rootPath = ResolveRootPath(Location.Root);

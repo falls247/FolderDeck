@@ -20,6 +20,11 @@
     <Color x:Key="Color.DangerSoft">#fde6e6</Color>
     <Color x:Key="Color.CardShadow">#14101828</Color>
     <Color x:Key="Color.OnAccent">#ffffff</Color>
+    <!-- 登録フォルダ and the folder tabs opened from them (the fixed tabs use Accent) -->
+    <Color x:Key="Color.Folder">#0f766e</Color>
+    <Color x:Key="Color.FolderSoft">#d9f1ee</Color>
+    <SolidColorBrush x:Key="Brush.Folder" Color="{StaticResource Color.Folder}" />
+    <SolidColorBrush x:Key="Brush.FolderSoft" Color="{StaticResource Color.FolderSoft}" />
     <SolidColorBrush x:Key="Brush.Bg" Color="{StaticResource Color.Bg}" />
     <SolidColorBrush x:Key="Brush.Surface" Color="{StaticResource Color.Surface}" />
     <SolidColorBrush x:Key="Brush.Surface2" Color="{StaticResource Color.Surface2}" />

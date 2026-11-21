@@ -35,7 +35,7 @@ topics:
         children:
           - { id: "1.1", heading: プロジェクトと依存方向, about: App → Core、テストは Core のみ }
           - { id: "1.2", heading: 起動と終了（App.xaml.cs）, about: 単一インスタンス、データ読み込み、未処理例外 }
-          - { id: "1.3", heading: オブジェクトの所有関係, about: AppServices（合成ルート）から View までの木構造 }
+          - { id: "1.3", heading: オブジェクトの所有関係, about: AppServices（合成ルート）から View までの木構造（固定タブ・フォルダのタブ・サイドバー） }
       - id: "2"
         heading: ファイルマップ
         about: ファイルごとの責務の一覧
@@ -47,15 +47,16 @@ topics:
         heading: 主要な処理の流れ
         about: 呼び出しの順序をメンバー名でたどる
         children:
-          - { id: "3.1", heading: タブの読み込み, about: TabViewModel.LoadAsync、NavLocation、_baseCards と Cards }
+          - { id: "3.1", heading: タブの読み込み, about: TabViewModel.LoadAsync、NavLocation、_baseCards / _orderedCards / Cards（フィルター） }
           - { id: "3.2", heading: カードの段階読み込み, about: Realize / Unrealize、DetailGate、ThumbnailService（画像は ImageDecoder + ThumbDiskCache、ほかはシェル） }
-          - { id: "3.3", heading: カスケード（CascadeController、§9）, about: オーバーレイ・フライアウト・タイマー・開閉の判断 }
+          - { id: "3.3", heading: カスケード（CascadeController、§9）, about: オーバーレイ・フライアウト・タイマー・開閉の判断、カード起点とサイドバー起点 }
           - { id: "3.4", heading: プレビュー, about: PreviewTextCache → Office / テキスト抜粋 → サムネイル }
-          - { id: "3.5", heading: 開く・移動する, about: OpenFileAsync、利用記録、右クリックの操作、ごみ箱への削除（DeleteAsync / RecycleBin） }
-          - { id: "3.6", heading: 並べ替え・ピン留め, about: SetSortMode、MoveCard、ApplyPins、PlaceInBase、📌 のクリック、カードの形 }
+          - { id: "3.5", heading: 開く・移動する, about: OpenFileAsync、利用記録、右クリックの操作、右ボタンを押したままの左クリック、ごみ箱への削除（DeleteAsync / RecycleBin） }
+          - { id: "3.6", heading: 並べ替え・ピン留め, about: SetSortMode、SetFilter、MoveCard、MoveRegistered、ApplyPins、PlaceInBase、📌 のクリック、カードの形 }
           - { id: "3.7", heading: 他アプリへのドラッグ, about: FileDragOut、BeginDrag / EndDrag、Copy | Link のみ }
           - { id: "3.8", heading: 永続化, about: StoreBase の保存予約、原子的書き込み、壊れたファイルの退避 }
           - { id: "3.9", heading: テーマ, about: ThemeManager と Light / Dark の差し替え }
+          - { id: "3.10", heading: サイドバー（登録フォルダ）とフォルダのタブ, about: RefreshRegistered、OpenFolderTabAsync、ShowTabAsync、タブを閉じる・並べ替える、タブごとの履歴、open_tabs の保存 }
       - id: "4"
         heading: スレッドと非同期の規約
         about: UI スレッドで待たない、STA ワーカーとタイムアウト、キャンセル

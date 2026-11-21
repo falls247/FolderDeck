@@ -29,3 +29,23 @@ public static class SortModeLabels
         _ => "手動（ドラッグで並べた順）",
     };
 }
+
+/// <summary>User-facing names of the item filter (toolbar button left of the sort button, and its menu).</summary>
+public static class FilterLabels
+{
+    /// <summary>Short text on the toolbar button.</summary>
+    public static string Short(ItemFilter filter) => filter switch
+    {
+        ItemFilter.Folders => "フォルダのみ",
+        ItemFilter.Files => "ファイルのみ",
+        _ => "すべて",
+    };
+
+    /// <summary>Menu item text.</summary>
+    public static string Long(ItemFilter filter) => filter switch
+    {
+        ItemFilter.Folders => "フォルダのみ表示",
+        ItemFilter.Files => "ファイルのみ表示",
+        _ => "すべて表示",
+    };
+}

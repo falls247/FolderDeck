@@ -515,7 +515,7 @@ public class SettingsStoreTests
         store.Load();
         var s = store.Current;
         Assert.Equal(200, s.CardSize);
-        Assert.Equal(AppSettings.TabRegistered, s.LastTab);
+        Assert.Equal(AppSettings.TabRecent, s.LastTab);
         Assert.True(s.ConfirmExecutables);
         Assert.True(s.IncludeWindowsRecent);
         Assert.False(s.ShowHidden);
@@ -524,7 +524,40 @@ public class SettingsStoreTests
         Assert.Equal(50, s.FrequentLimit);
         Assert.Equal(512, s.ThumbCacheMb);
         Assert.Null(s.RecentClearedAt);
-        Assert.Equal(3, s.Locations!.Count);
+        Assert.Equal(2, s.Locations!.Count);
+        Assert.Empty(s.OpenTabs!);
+        Assert.Equal(AppSettings.SidebarWidthDefault, s.SidebarWidth);
+    }
+
+    [Fact]
+    public void FolderTabsAndSidebar_AreNormalized()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+
+        // Written by the version with a 登録フォルダ tab: its location (a registration id) is dropped.
+        File.WriteAllText(file, """
+            {"version":1,"last_tab":"registered","sidebar_width":9000,"selected_folder_tab":7,
+             "locations":{"registered":{"root":"3f9a1c0b7d2e","path":"2026"}},
+             "open_tabs":[{"root":"E:\\写真","path":"2026"},{"root":"","path":"x"},null,{"root":"E:\\仕事"}]}
+            """);
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        var s = store.Current;
+        Assert.Equal(LoadStatus.Loaded, store.LoadStatus);
+        Assert.Equal(AppSettings.TabRecent, s.LastTab);
+        Assert.Equal(AppSettings.SidebarWidthMax, s.SidebarWidth);
+        Assert.False(s.Locations!.ContainsKey("registered"));
+        Assert.Equal(2, s.OpenTabs!.Count); // the entries without a root are dropped
+        Assert.Equal("2026", s.OpenTabs[0].Path);
+        Assert.Equal(string.Empty, s.OpenTabs[1].Path);
+        Assert.Equal(1, s.SelectedFolderTab); // clamped to the last tab
+
+        // "folder" needs a folder tab to go back to.
+        var none = new AppSettings { LastTab = AppSettings.TabFolder, OpenTabs = null, SidebarWidth = double.NaN };
+        none.Normalize();
+        Assert.Equal(AppSettings.TabRecent, none.LastTab);
+        Assert.Equal(AppSettings.SidebarWidthDefault, none.SidebarWidth);
     }
 
     [Fact]
@@ -541,7 +574,7 @@ public class SettingsStoreTests
         Assert.Equal(500, s.RecentLimit);
         Assert.Equal(10, s.FrequentLimit);
         Assert.Equal(AppSettings.ThumbCacheMbMax, s.ThumbCacheMb);
-        Assert.Equal(AppSettings.TabRegistered, s.LastTab);
+        Assert.Equal(AppSettings.TabRecent, s.LastTab);
         Assert.Null(s.RecentClearedAt);
         Assert.True(s.ConfirmExecutables);
         Assert.NotNull(s.Window);
@@ -569,8 +602,11 @@ public class SettingsStoreTests
         store.Update(s =>
         {
             s.CardSize = 260;
-            s.LastTab = AppSettings.TabRecent;
-            s.Locations![AppSettings.TabRegistered] = new LocationSetting { Root = "3f9a1c0b7d2e", Path = "2026" };
+            s.LastTab = AppSettings.TabFolder;
+            s.Locations![AppSettings.TabFrequent] = new LocationSetting { Root = @"E:\写真", Path = "2026" };
+            s.OpenTabs = [new LocationSetting { Root = @"E:\仕事" }, new LocationSetting { Root = @"E:\写真", Path = @"2026\夏" }];
+            s.SelectedFolderTab = 1;
+            s.SidebarWidth = 300;
             s.Window = new WindowPlacementSetting { Left = 10, Top = 20, Width = 900, Height = 700, Maximized = true };
             s.RecentClearedAt = FakeClock.Default;
             s.ShowHidden = true;
@@ -579,7 +615,10 @@ public class SettingsStoreTests
 
         string text = File.ReadAllText(file);
         Assert.Contains("\"card_size\": 260", text);
-        Assert.Contains("\"last_tab\": \"recent\"", text);
+        Assert.Contains("\"last_tab\": \"folder\"", text);
+        Assert.Contains("\"open_tabs\"", text);
+        Assert.Contains("\"selected_folder_tab\": 1", text);
+        Assert.Contains("\"sidebar_width\": 300", text);
         Assert.Contains("\"recent_cleared_at\": \"2026-11-21T01:23:45+00:00\"", text);
         Assert.Contains("\"show_hidden\": true", text);
 
@@ -587,9 +626,14 @@ public class SettingsStoreTests
         reloaded.Load();
         var s = reloaded.Current;
         Assert.Equal(260, s.CardSize);
-        Assert.Equal(AppSettings.TabRecent, s.LastTab);
-        Assert.Equal("3f9a1c0b7d2e", s.Locations![AppSettings.TabRegistered].Root);
-        Assert.Equal("2026", s.Locations[AppSettings.TabRegistered].Path);
+        Assert.Equal(AppSettings.TabFolder, s.LastTab);
+        Assert.Equal(@"E:\写真", s.Locations![AppSettings.TabFrequent].Root);
+        Assert.Equal("2026", s.Locations[AppSettings.TabFrequent].Path);
+        Assert.Equal(2, s.OpenTabs!.Count);
+        Assert.Equal(@"E:\写真", s.OpenTabs[1].Root);
+        Assert.Equal(@"2026\夏", s.OpenTabs[1].Path);
+        Assert.Equal(1, s.SelectedFolderTab);
+        Assert.Equal(300, s.SidebarWidth);
         Assert.Equal(900, s.Window!.Width);
         Assert.True(s.Window.Maximized);
         Assert.Equal(FakeClock.Default, s.RecentClearedAt);
@@ -601,11 +645,15 @@ public class SettingsStoreTests
         using var tmp = new TempDir();
         var store = new SettingsStore(tmp.Combine("settings.json"), FakeClock.Fixed());
         store.Load();
+        store.Update(s => s.OpenTabs = [new LocationSetting { Root = @"E:\写真" }]);
         var copy = store.Current;
         copy.CardSize = 380;
         copy.Locations![AppSettings.TabRecent].Path = "x";
+        copy.OpenTabs![0].Path = "x";
+        copy.OpenTabs.Add(new LocationSetting { Root = @"E:\仕事" });
         Assert.Equal(200, store.Current.CardSize);
         Assert.Equal(string.Empty, store.Current.Locations![AppSettings.TabRecent].Path);
+        Assert.Equal(string.Empty, Assert.Single(store.Current.OpenTabs!).Path);
     }
 
     [Fact]

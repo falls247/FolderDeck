@@ -28,6 +28,12 @@ public interface ICardHost
     void CardUnpin(CardView card);
 
     /// <summary>
+    /// The card was left-clicked with the right button held and the right button was then released:
+    /// shows it in Explorer (instead of opening it or showing its menu).
+    /// </summary>
+    void CardShowInExplorer(CardView card);
+
+    /// <summary>
     /// True when the card may be dragged at all (to other apps; at the top level also to a new
     /// position). Missing / not responding cards cannot: their press stays a click.
     /// </summary>
@@ -58,10 +64,17 @@ public partial class CardView : UserControl
     private Point _pressedAt;
     private bool _hot;
 
+    /// <summary>
+    /// The card was left-clicked while the right button was held: it is shown in Explorer when the
+    /// right button is released (the card holds the mouse capture until then).
+    /// </summary>
+    private bool _rocker;
+
     public CardView()
     {
         InitializeComponent();
         _hoverShadow.Freeze();
+        LostMouseCapture += (_, _) => _rocker = false;
         DataContextChanged += OnDataContextChanged;
         Loaded += (_, _) => Realize();
         Unloaded += (_, _) => Unrealize();
@@ -102,6 +115,22 @@ public partial class CardView : UserControl
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
+        if (e.RightButton == MouseButtonState.Pressed)
+        {
+            // Right button held + left click: the card is shown in Explorer once the right button
+            // is released. This press is neither a click nor the start of a drag. (A press on a row
+            // of the overlay never gets here: the list handles its own.)
+            _pressed = false;
+            _dragCandidate = false;
+            if (!e.Handled && !_rocker && FindAncestor<System.Windows.Controls.Primitives.ButtonBase>(e.OriginalSource as DependencyObject) is null)
+            {
+                e.Handled = true;
+                _rocker = CaptureMouse();
+            }
+
+            return;
+        }
+
         // A double click must not run twice (§6.8): only the first press counts.
         _pressed = e.ClickCount == 1;
         _pressedAt = e.GetPosition(this);
@@ -130,6 +159,14 @@ public partial class CardView : UserControl
     {
         base.OnMouseRightButtonUp(e);
         e.Handled = true;
+        if (_rocker)
+        {
+            _rocker = false;
+            ReleaseMouseCapture();
+            Host?.CardShowInExplorer(this);
+            return;
+        }
+
         Host?.CardContextMenu(this);
     }
 

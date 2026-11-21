@@ -1,8 +1,10 @@
+using System.Collections.ObjectModel;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using FolderDeck.Core.Infrastructure;
 using FolderDeck.Core.Layout;
+using FolderDeck.Core.Listing;
 using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
 using FolderDeck.Core.Stores;
@@ -43,14 +45,17 @@ public sealed partial class MainViewModel : ObservableObject
 {
     public const int MaxHistory = 100;
 
+    private static readonly TimeSpan RegisteredCheckTimeout = TimeSpan.FromSeconds(2);
+
     private readonly AppServices _services;
-    private readonly List<NavEntry> _back = [];
-    private readonly List<NavEntry> _forward = [];
-    private readonly HashSet<TabKind> _restoring = [];
+    private readonly HashSet<TabViewModel> _restoring = [];
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
 
+    /// <summary>The fixed tab shown last: where closing the last folder tab leads.</summary>
+    private TabViewModel _lastFixedTab;
+
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(SelectedKind))]
+    [NotifyPropertyChangedFor(nameof(CanGoBack), nameof(CanGoForward))]
     [NotifyCanExecuteChangedFor(nameof(GoUpCommand))]
     private TabViewModel _selectedTab;
 
@@ -64,29 +69,20 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _registerInput = string.Empty;
 
+    /// <summary>Width of the 登録フォルダ sidebar (DIP), changed with the splitter.</summary>
+    [ObservableProperty]
+    private double _sidebarWidth = AppSettings.SidebarWidthDefault;
+
     public MainViewModel(AppServices services)
     {
         _services = services;
-        RegisteredTab = new TabViewModel(services, TabKind.Registered);
         RecentTab = new TabViewModel(services, TabKind.Recent);
         FrequentTab = new TabViewModel(services, TabKind.Frequent);
-        Tabs = [RegisteredTab, RecentTab, FrequentTab];
-        _selectedTab = RegisteredTab;
-        foreach (var tab in Tabs)
-        {
-            tab.PropertyChanged += (_, e) =>
-            {
-                if (e.PropertyName == nameof(TabViewModel.Location))
-                {
-                    GoUpCommand.NotifyCanExecuteChanged();
-                }
-                else if (e.PropertyName == nameof(TabViewModel.Cards) && ReferenceEquals(tab, SelectedTab))
-                {
-                    View?.CloseCascade(); // the grid rebuilds its cards: an open overlay would be left behind
-                }
-            };
-        }
-
+        Watch(RecentTab);
+        Watch(FrequentTab);
+        _selectedTab = RecentTab;
+        _lastFixedTab = RecentTab;
+        RecentTab.IsSelected = true;
         services.Stores.Pins.Changed += OnPinsChanged;
     }
 
@@ -96,53 +92,111 @@ public sealed partial class MainViewModel : ObservableObject
 
     public MessageBarViewModel Message { get; } = new();
 
-    public TabViewModel RegisteredTab { get; }
-
+    /// <summary>最近の履歴 (fixed tab).</summary>
     public TabViewModel RecentTab { get; }
 
+    /// <summary>よく使う項目 (fixed tab).</summary>
     public TabViewModel FrequentTab { get; }
 
-    public IReadOnlyList<TabViewModel> Tabs { get; }
+    /// <summary>The folder tabs, left to right: opened from the sidebar, closable, movable.</summary>
+    public ObservableCollection<TabViewModel> FolderTabs { get; } = [];
 
-    public TabKind SelectedKind => SelectedTab.Kind;
+    /// <summary>The 登録フォルダ of the sidebar, in the order of registered_folders.json.</summary>
+    public ObservableCollection<SidebarItemViewModel> Registered { get; } = [];
 
-    public bool CanGoBack => _back.Count > 0;
+    public bool HasNoRegistered => Registered.Count == 0;
 
-    public bool CanGoForward => _forward.Count > 0;
+    public string RegisteredCountText => Registered.Count.ToString("N0");
+
+    public bool CanGoBack => SelectedTab.BackStack.Count > 0;
+
+    public bool CanGoForward => SelectedTab.ForwardStack.Count > 0;
 
     private AppSettings Settings => _services.Stores.Settings.Current;
 
-    public TabViewModel TabOf(TabKind kind) => kind switch
+    /// <summary>Every tab: the two fixed ones, then the folder tabs.</summary>
+    private IEnumerable<TabViewModel> AllTabs => new[] { RecentTab, FrequentTab }.Concat(FolderTabs);
+
+    private void Watch(TabViewModel tab) => tab.PropertyChanged += OnTabPropertyChanged;
+
+    private void OnTabPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        TabKind.Registered => RegisteredTab,
-        TabKind.Recent => RecentTab,
-        _ => FrequentTab,
-    };
+        if (e.PropertyName == nameof(TabViewModel.Location))
+        {
+            GoUpCommand.NotifyCanExecuteChanged();
+        }
+        else if (e.PropertyName == nameof(TabViewModel.Cards) && ReferenceEquals(sender, SelectedTab))
+        {
+            View?.CloseCascade(); // the grid rebuilds its cards: an open overlay would be left behind
+        }
+    }
+
+    partial void OnSelectedTabChanged(TabViewModel? oldValue, TabViewModel newValue)
+    {
+        if (oldValue is not null)
+        {
+            oldValue.IsSelected = false;
+        }
+
+        newValue.IsSelected = true;
+        if (!newValue.IsFolderTab)
+        {
+            _lastFixedTab = newValue;
+        }
+    }
 
     // ---- startup / shutdown -----------------------------------------------------------------
 
-    /// <summary>Restores tabs' locations and opens the last tab (§5.5). Not recorded in history (§10.4).</summary>
+    /// <summary>
+    /// Restores the fixed tabs' locations, the folder tabs and the sidebar, and opens the last tab
+    /// (§5.5). Not recorded in history (§10.4).
+    /// </summary>
     public async Task InitializeAsync()
     {
         var settings = Settings;
         CardSize = settings.CardSize;
         CardShape = CardShapes.FromSetting(settings.CardShape);
-        foreach (var tab in Tabs)
+        SidebarWidth = settings.SidebarWidth;
+        foreach (var tab in new[] { RecentTab, FrequentTab })
         {
             if (settings.Locations is { } locations && locations.TryGetValue(TabKinds.ToSetting(tab.Kind), out var loc)
                 && loc.Root.Length > 0 && PathTools.IsSafeRel(loc.Path))
             {
                 tab.Location = new NavLocation(tab.Kind, loc.Root, loc.Path);
-                _restoring.Add(tab.Kind);
+                _restoring.Add(tab);
             }
         }
 
-        SelectedTab = TabOf(TabKinds.FromSetting(settings.LastTab));
+        // A folder tab whose folder is gone stays, with its error banner: the user closes it.
+        int selected = -1;
+        var open = settings.OpenTabs ?? [];
+        for (int i = 0; i < open.Count; i++)
+        {
+            if (open[i].Root.Length > 0 && PathTools.IsSafeRel(open[i].Path))
+            {
+                AddFolderTab(new NavLocation(TabKind.Folder, open[i].Root, open[i].Path));
+                if (i == settings.SelectedFolderTab)
+                {
+                    selected = FolderTabs.Count - 1;
+                }
+            }
+        }
+
+        RefreshRegistered();
+        SelectedTab = TabKinds.FromSetting(settings.LastTab) switch
+        {
+            TabKind.Frequent => FrequentTab,
+            TabKind.Folder when selected >= 0 => FolderTabs[selected],
+            _ => RecentTab,
+        };
         await LoadTabAsync(SelectedTab);
     }
 
     public void SaveState(WindowPlacementSetting? window)
     {
+        string lastTab = TabKinds.ToSetting(SelectedTab.Kind);
+        int selectedFolderTab = Math.Max(0, FolderTabs.IndexOf(SelectedTab));
+        var openTabs = FolderTabs.Select(t => new LocationSetting { Root = t.Location.Root, Path = t.Location.Rel }).ToList();
         _services.Stores.Settings.Update(s =>
         {
             if (window is not null)
@@ -150,11 +204,14 @@ public sealed partial class MainViewModel : ObservableObject
                 s.Window = window;
             }
 
-            s.LastTab = TabKinds.ToSetting(SelectedTab.Kind);
+            s.LastTab = lastTab;
+            s.SelectedFolderTab = selectedFolderTab;
+            s.OpenTabs = openTabs;
+            s.SidebarWidth = SidebarWidth;
             s.CardSize = CardSize;
             s.CardShape = CardShapes.ToSetting(CardShape);
             s.Locations ??= new Dictionary<string, LocationSetting>();
-            foreach (var tab in Tabs)
+            foreach (var tab in new[] { RecentTab, FrequentTab })
             {
                 s.Locations[TabKinds.ToSetting(tab.Kind)] = new LocationSetting { Root = tab.Location.Root, Path = tab.Location.Rel };
             }
@@ -164,24 +221,146 @@ public sealed partial class MainViewModel : ObservableObject
     // ---- tabs and navigation (§8) -----------------------------------------------------------
 
     [RelayCommand(AllowConcurrentExecutions = true)]
-    private async Task SelectTab(TabKind kind)
+    private async Task SelectTab(TabViewModel? tab)
     {
-        var tab = TabOf(kind);
-        if (tab == SelectedTab)
+        if (tab is null || tab == SelectedTab || (tab.IsFolderTab && !FolderTabs.Contains(tab)))
         {
             return;
         }
 
         View?.CloseCascade();
         Message.ClearPersistent();
-        SelectedTab = tab;
-        bool reload = tab.IsStale || (tab.IsTop && tab.Kind != TabKind.Registered);
+        await ShowTabAsync(tab);
+        SaveLocations();
+    }
+
+    /// <summary>
+    /// Makes <paramref name="tab"/> the shown one. The tab left remembers its scroll position; the
+    /// lists of 最近の履歴 / よく使う項目 are rebuilt each time they are shown, a folder is listed
+    /// again only when it went stale and otherwise comes back where it was scrolled to.
+    /// </summary>
+    private async Task ShowTabAsync(TabViewModel tab)
+    {
+        bool switched = !ReferenceEquals(tab, SelectedTab);
+        double offset = switched ? tab.SavedScrollOffset : View?.GetScrollOffset() ?? 0;
+        if (switched)
+        {
+            SelectedTab.SavedScrollOffset = View?.GetScrollOffset() ?? 0;
+            SelectedTab = tab;
+        }
+
+        bool top = tab.IsTop && !tab.IsFolderTab;
+        bool reload = tab.IsStale || (top && switched);
         if (reload)
         {
             await LoadTabAsync(tab);
         }
 
-        View?.ScrollTo(0);
+        if ((switched || reload) && ReferenceEquals(tab, SelectedTab))
+        {
+            View?.ScrollTo(top && switched ? 0 : offset);
+        }
+    }
+
+    /// <summary>
+    /// Opens a folder in a folder tab of its own: what a click on a 登録フォルダ of the sidebar, or
+    /// on a row / header of the cascade opened from it, does. A tab that already shows that very
+    /// folder is selected instead of opening a second one.
+    /// </summary>
+    public async Task OpenFolderTabAsync(NavLocation target, string? recordPath = null)
+    {
+        View?.CloseCascade();
+        Message.ClearPersistent();
+        var tab = FolderTabs.FirstOrDefault(t => SameLocation(t.Location, target));
+        if (tab is null)
+        {
+            tab = AddFolderTab(target with { Tab = TabKind.Folder });
+        }
+
+        await ShowTabAsync(tab);
+        if (recordPath is not null && tab.BannerText is null)
+        {
+            RecordUse(recordPath, ItemKind.Folder);
+        }
+
+        SaveLocations();
+    }
+
+    private TabViewModel AddFolderTab(NavLocation location)
+    {
+        var tab = new TabViewModel(_services, TabKind.Folder, location);
+        Watch(tab);
+        FolderTabs.Add(tab);
+        return tab;
+    }
+
+    private static bool SameLocation(NavLocation a, NavLocation b) =>
+        PathTools.PathEquals(a.Root, b.Root) && string.Equals(a.Rel, b.Rel, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Closes a folder tab (× / middle click). The tab to its right (else the left one, else the last fixed tab) is shown.</summary>
+    [RelayCommand(AllowConcurrentExecutions = true)]
+    private async Task CloseTab(TabViewModel? tab)
+    {
+        int index = tab is null ? -1 : FolderTabs.IndexOf(tab);
+        if (tab is null || index < 0)
+        {
+            return;
+        }
+
+        bool wasSelected = ReferenceEquals(tab, SelectedTab);
+        if (wasSelected)
+        {
+            View?.CloseCascade();
+            Message.ClearPersistent();
+        }
+
+        tab.CancelLoad();
+        tab.PropertyChanged -= OnTabPropertyChanged;
+        FolderTabs.RemoveAt(index);
+        if (wasSelected)
+        {
+            await ShowTabAsync(FolderTabs.Count > 0 ? FolderTabs[Math.Min(index, FolderTabs.Count - 1)] : _lastFixedTab);
+        }
+
+        SaveLocations();
+    }
+
+    /// <summary>Closes every folder tab but <paramref name="keep"/>, which is shown.</summary>
+    public async Task CloseOtherTabsAsync(TabViewModel keep)
+    {
+        if (!FolderTabs.Contains(keep))
+        {
+            return;
+        }
+
+        View?.CloseCascade();
+        foreach (var tab in FolderTabs.Where(t => !ReferenceEquals(t, keep)).ToList())
+        {
+            tab.CancelLoad();
+            tab.PropertyChanged -= OnTabPropertyChanged;
+            FolderTabs.Remove(tab);
+        }
+
+        if (!ReferenceEquals(keep, SelectedTab))
+        {
+            Message.ClearPersistent();
+            await ShowTabAsync(keep);
+        }
+
+        SaveLocations();
+    }
+
+    /// <summary>A folder tab was dragged to <paramref name="newIndex"/> of the folder tabs.</summary>
+    public void MoveFolderTab(TabViewModel tab, int newIndex)
+    {
+        int from = FolderTabs.IndexOf(tab);
+        newIndex = Math.Clamp(newIndex, 0, FolderTabs.Count - 1);
+        if (from < 0 || from == newIndex)
+        {
+            return;
+        }
+
+        FolderTabs.Move(from, newIndex);
         SaveLocations();
     }
 
@@ -189,7 +368,7 @@ public sealed partial class MainViewModel : ObservableObject
     private Task GoUp()
     {
         var loc = SelectedTab.Location;
-        if (loc.IsTop)
+        if (!SelectedTab.CanGoUp)
         {
             return Task.CompletedTask;
         }
@@ -198,33 +377,35 @@ public sealed partial class MainViewModel : ObservableObject
         return NavigateAsync(target, NavMode.New);
     }
 
-    private bool CanGoUpNow() => !SelectedTab.Location.IsTop;
+    private bool CanGoUpNow() => SelectedTab.CanGoUp;
 
     [RelayCommand(AllowConcurrentExecutions = true)]
     private Task GoBack()
     {
-        if (_back.Count == 0)
+        var tab = SelectedTab;
+        if (tab.BackStack.Count == 0)
         {
             return Task.CompletedTask;
         }
 
-        var entry = _back[^1];
-        _back.RemoveAt(_back.Count - 1);
-        Push(_forward, CurrentEntry());
+        var entry = tab.BackStack[^1];
+        tab.BackStack.RemoveAt(tab.BackStack.Count - 1);
+        Push(tab.ForwardStack, CurrentEntry());
         return NavigateAsync(entry.Location, NavMode.Back, entry.ScrollOffset);
     }
 
     [RelayCommand(AllowConcurrentExecutions = true)]
     private Task GoForward()
     {
-        if (_forward.Count == 0)
+        var tab = SelectedTab;
+        if (tab.ForwardStack.Count == 0)
         {
             return Task.CompletedTask;
         }
 
-        var entry = _forward[^1];
-        _forward.RemoveAt(_forward.Count - 1);
-        Push(_back, CurrentEntry());
+        var entry = tab.ForwardStack[^1];
+        tab.ForwardStack.RemoveAt(tab.ForwardStack.Count - 1);
+        Push(tab.BackStack, CurrentEntry());
         return NavigateAsync(entry.Location, NavMode.Forward, entry.ScrollOffset);
     }
 
@@ -239,8 +420,11 @@ public sealed partial class MainViewModel : ObservableObject
         return NavigateAsync(crumb.Target, NavMode.New);
     }
 
+    /// <summary>The button on the error banner: back to the fixed tab's list; a folder tab closes.</summary>
     [RelayCommand(AllowConcurrentExecutions = true)]
-    private Task BackToTop() => NavigateAsync(NavLocation.Top(SelectedTab.Kind), NavMode.New);
+    private Task BackToTop() => SelectedTab.IsFolderTab
+        ? CloseTab(SelectedTab)
+        : NavigateAsync(NavLocation.Top(SelectedTab.Kind), NavMode.New);
 
     [RelayCommand]
     private async Task Refresh()
@@ -249,27 +433,50 @@ public sealed partial class MainViewModel : ObservableObject
         Message.ClearPersistent();
         _services.ClearCaches();
         _services.Thumbnails.Clear();
+        foreach (var tab in AllTabs)
+        {
+            tab.IsStale = true; // the hidden tabs list again when they are shown
+        }
+
+        RefreshRegistered(recheck: true);
         await LoadTabAsync(SelectedTab);
     }
 
-    /// <summary>Moves inside the app. <paramref name="recordPath"/> is set when the move counts as a use (§10.4).</summary>
+    /// <summary>
+    /// Moves inside the shown tab (a card, a row of its cascade, a breadcrumb, back / forward).
+    /// <paramref name="recordPath"/> is set when the move counts as a use (§10.4). A folder-tab
+    /// location while a fixed tab is shown opens a folder tab instead.
+    /// </summary>
     public async Task NavigateAsync(NavLocation target, NavMode mode, double restoreOffset = 0, string? recordPath = null)
     {
-        View?.CloseCascade();
-        Message.ClearPersistent();
-        var tab = TabOf(target.Tab);
-        if (mode == NavMode.New)
+        TabViewModel? tab = target.Tab switch
         {
-            Push(_back, CurrentEntry());
-            _forward.Clear();
+            TabKind.Recent => RecentTab,
+            TabKind.Frequent => FrequentTab,
+            _ => SelectedTab.IsFolderTab ? SelectedTab : null,
+        };
+        if (tab is null)
+        {
+            await OpenFolderTabAsync(target, recordPath);
+            return;
         }
 
-        NotifyNav();
-        if (SelectedTab != tab)
+        View?.CloseCascade();
+        Message.ClearPersistent();
+        bool shown = ReferenceEquals(tab, SelectedTab);
+        if (mode == NavMode.New)
         {
+            Push(tab.BackStack, shown ? CurrentEntry() : new NavEntry(tab.Location, tab.SavedScrollOffset));
+            tab.ForwardStack.Clear();
+        }
+
+        if (!shown)
+        {
+            SelectedTab.SavedScrollOffset = View?.GetScrollOffset() ?? 0;
             SelectedTab = tab;
         }
 
+        NotifyNav();
         tab.Location = target;
         View?.ScrollTo(0);
         var outcome = await LoadTabAsync(tab);
@@ -292,7 +499,7 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task<LoadOutcome> LoadTabAsync(TabViewModel tab)
     {
         var outcome = await tab.LoadAsync();
-        if (_restoring.Remove(tab.Kind) && outcome is LoadOutcome.NotFound or LoadOutcome.Error && !tab.IsTop)
+        if (_restoring.Remove(tab) && outcome is LoadOutcome.NotFound or LoadOutcome.Error && !tab.IsTop)
         {
             // The remembered location is gone: show the tab's top level instead (§5.5).
             tab.Location = NavLocation.Top(tab.Kind);
@@ -356,9 +563,24 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void SetCardShape(CardShape shape) => CardShape = shape;
 
-    // ---- card order: sort modes and drag & drop ---------------------------------------------
+    partial void OnSidebarWidthChanged(double value)
+    {
+        double clamped = AppSettings.ClampSidebarWidth(value);
+        if (clamped != value)
+        {
+            SidebarWidth = clamped;
+            return;
+        }
 
-    /// <summary>Changes the selected tab's sort mode (saved per tab) and re-orders its cards in place.</summary>
+        _services.Stores.Settings.Update(s => s.SidebarWidth = clamped);
+    }
+
+    // ---- card order: sort modes, filter and drag & drop -------------------------------------
+
+    /// <summary>
+    /// Changes the selected tab's sort mode (saved per tab; the folder tabs share one, so all of
+    /// them follow) and re-orders the cards in place.
+    /// </summary>
     public void SetSortMode(CardSortMode mode)
     {
         View?.CloseCascade();
@@ -370,6 +592,34 @@ public sealed partial class MainViewModel : ObservableObject
 
         SaveSortMode(tab, mode);
         tab.ApplyOrder();
+        if (tab.IsFolderTab)
+        {
+            foreach (var other in FolderTabs.Where(t => !ReferenceEquals(t, tab)))
+            {
+                other.SortMode = mode;
+                other.ApplyOrder();
+            }
+        }
+
+        View?.ScrollTo(0);
+    }
+
+    /// <summary>
+    /// Changes what the top level of the selected tab (最近の履歴 / よく使う項目) shows: everything,
+    /// folders only or files only. Saved per tab; the cards are filtered in place.
+    /// </summary>
+    public void SetFilter(ItemFilter filter)
+    {
+        View?.CloseCascade();
+        var tab = SelectedTab;
+        if (tab.IsFolderTab || tab.Filter == filter)
+        {
+            return;
+        }
+
+        string key = TabKinds.ToSetting(tab.Kind);
+        _services.Stores.Settings.Update(s => s.SetFilter(key, filter));
+        tab.Filter = filter;
         View?.ScrollTo(0);
     }
 
@@ -399,14 +649,17 @@ public sealed partial class MainViewModel : ObservableObject
 
         cards.RemoveAt(from);
         cards.Insert(insertIndex > from ? insertIndex - 1 : insertIndex, card);
+
+        // Cards hidden by the filter keep their slots; the shown ones take the new order.
+        var all = ItemFilters.MergeShownOrder(tab.OrderedCards, cards, tab.IsShown);
         bool switched = tab.SortMode != CardSortMode.Manual;
         if (switched)
         {
             SaveSortMode(tab, CardSortMode.Manual);
         }
 
-        tab.SetBaseOrder(cards);
-        SaveManualOrder(tab, cards);
+        tab.SetBaseOrder(all);
+        SaveManualOrder(tab, all);
         if (switched)
         {
             Message.Info("並び順を「手動」に切り替えました。");
@@ -421,18 +674,12 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Saves <paramref name="shown"/> as the manual order of the tab's top level: 登録フォルダ in
-    /// registered_folders.json, the others in card_order.json (shown paths first, then the
-    /// previously saved ones that are not shown now).
+    /// Saves <paramref name="shown"/> (every card of the list, in order) as the manual order of the
+    /// tab's top level in card_order.json: these paths first, then the previously saved ones that
+    /// are not listed now. (The order of 登録フォルダ is registered_folders.json: <see cref="MoveRegistered"/>.)
     /// </summary>
     private void SaveManualOrder(TabViewModel tab, IReadOnlyList<CardViewModel> shown)
     {
-        if (tab.Kind == TabKind.Registered)
-        {
-            _services.Stores.Registered.Reorder(shown.Select(c => c.RegisteredId).OfType<string>().ToList());
-            return;
-        }
-
         if (OrderListOf(tab.Kind) is not { } list)
         {
             return;
@@ -444,7 +691,7 @@ public sealed partial class MainViewModel : ObservableObject
         _services.Stores.CardOrders.Set(list, paths.Concat(hidden));
     }
 
-    /// <summary>The card_order.json list of a tab, or null for 登録フォルダ (its order is registered_folders.json).</summary>
+    /// <summary>The card_order.json list of a fixed tab, or null for a folder tab (no top level to order).</summary>
     private static CardOrderList? OrderListOf(TabKind kind) => kind switch
     {
         TabKind.Recent => CardOrderList.Recent,
@@ -456,8 +703,8 @@ public sealed partial class MainViewModel : ObservableObject
     private bool HasSavedOrder(TabKind kind) => OrderListOf(kind) is { } list && _services.Stores.CardOrders.HasOrder(list);
 
     /// <summary>
-    /// 「手動の並びをリセット」 is offered on 最近の履歴 and よく使う項目, at any level (登録フォルダ has
-    /// nothing to reset: its manual order is the order of registered_folders.json).
+    /// 「手動の並びをリセット」 is offered on 最近の履歴 and よく使う項目, at any level (a folder tab
+    /// has no manual order).
     /// </summary>
     public bool ShowResetManualOrder => OrderListOf(SelectedTab.Kind) is not null;
 
@@ -504,7 +751,10 @@ public sealed partial class MainViewModel : ObservableObject
         {
             if (item.Target is { } target)
             {
-                return NavigateAsync(target, NavMode.New, recordPath: item.Path);
+                // From the sidebar (a row, or its cascade): a folder tab of its own. Otherwise the shown tab moves.
+                return item.NewTab
+                    ? OpenFolderTabAsync(target, recordPath: item.Path)
+                    : NavigateAsync(target, NavMode.New, recordPath: item.Path);
             }
 
             return Task.CompletedTask;
@@ -700,7 +950,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         View?.CloseCascade();
         _services.ClearCaches();
-        foreach (var tab in Tabs)
+        foreach (var tab in AllTabs)
         {
             tab.IsStale = true;
         }
@@ -747,12 +997,13 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Pinning a card of a sorted top level: the card takes its shown index as its base-order slot
-    /// (only that card moves in the base order), so it stays where it is once pinned (pinned cards
-    /// sit at their base-order slot). The move is saved for 登録フォルダ (registered_folders.json)
-    /// and, in card_order.json, only for a tab that already has a saved order (cards were dragged
-    /// there); otherwise it is kept in memory only and a later reload puts the card at its default
-    /// slot (saving would freeze the recency / usage order for good). Returns true in that last case.
+    /// Pinning a card of a sorted top level: the card takes its index in the sorted order (counted
+    /// with the cards the filter hides) as its base-order slot (only that card moves in the base
+    /// order), so it stays where it is once pinned (pinned cards sit at their base-order slot). The
+    /// move is saved in card_order.json only for a tab that already has a saved order (cards were
+    /// dragged there); otherwise it is kept in memory only and a later reload puts the card at its
+    /// default slot (saving would freeze the recency / usage order for good). Returns true in that
+    /// last case.
     /// </summary>
     private bool KeepInPlace(TabViewModel tab, string path)
     {
@@ -762,7 +1013,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         var target = new PathSet([path]);
-        var shown = tab.Cards;
+        var shown = tab.OrderedCards;
         int slot = -1;
         for (int i = 0; i < shown.Count; i++)
         {
@@ -778,7 +1029,7 @@ public sealed partial class MainViewModel : ObservableObject
             return false;
         }
 
-        if (tab.Kind != TabKind.Registered && !HasSavedOrder(tab.Kind))
+        if (!HasSavedOrder(tab.Kind))
         {
             return true;
         }
@@ -799,7 +1050,7 @@ public sealed partial class MainViewModel : ObservableObject
         var pins = new PathSet(_services.Stores.Pins.Pins.Select(p => p.Path));
         double offset = View?.GetScrollOffset() ?? 0;
         bool moved = false;
-        foreach (var tab in Tabs)
+        foreach (var tab in AllTabs)
         {
             moved |= tab.ApplyPins(pins) && ReferenceEquals(tab, SelectedTab);
         }
@@ -921,38 +1172,129 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    private void RegisteredChanged()
+    private void RegisteredChanged() => RefreshRegistered();
+
+    /// <summary>
+    /// Brings the sidebar rows in line with registered_folders.json (same order; rows of folders
+    /// that are still registered are kept, with what is known about them) and checks whether the
+    /// new folders exist. <paramref name="recheck"/> (F5) checks every folder again.
+    /// </summary>
+    private void RefreshRegistered(bool recheck = false)
     {
-        RegisteredTab.IsStale = true;
-        if (SelectedTab == RegisteredTab && RegisteredTab.IsTop)
+        var known = new Dictionary<string, SidebarItemViewModel>(StringComparer.Ordinal);
+        foreach (var item in Registered)
         {
-            _ = RegisteredTab.LoadAsync();
+            known.TryAdd(item.Id, item);
+        }
+
+        var items = _services.Stores.Registered.Folders
+            .Select(f => known.TryGetValue(f.Id, out var item) && string.Equals(item.Path, f.Path, StringComparison.Ordinal)
+                ? item
+                : new SidebarItemViewModel(f.Id, f.Path, _services.Icons))
+            .ToList();
+
+        // Minimal changes: the rows that stay keep their elements (an open cascade is anchored to one).
+        for (int i = Registered.Count - 1; i >= 0; i--)
+        {
+            if (!items.Contains(Registered[i]))
+            {
+                Registered.RemoveAt(i);
+            }
+        }
+
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (i < Registered.Count && ReferenceEquals(Registered[i], items[i]))
+            {
+                continue;
+            }
+
+            int at = Registered.IndexOf(items[i]);
+            if (at >= 0)
+            {
+                Registered.Move(at, i);
+            }
+            else
+            {
+                Registered.Insert(i, items[i]);
+            }
+        }
+
+        OnPropertyChanged(nameof(HasNoRegistered));
+        OnPropertyChanged(nameof(RegisteredCountText));
+        foreach (var item in items)
+        {
+            if (recheck || item.State == SidebarItemState.Checking)
+            {
+                _ = CheckRegisteredAsync(item);
+            }
         }
     }
 
-    public void Unregister(CardViewModel card)
+    /// <summary>§6.3: a folder that is gone, or does not answer within 2 s, is shown as such (and opens nothing).</summary>
+    private async Task CheckRegisteredAsync(SidebarItemViewModel item)
     {
-        if (card.RegisteredId is null)
+        try
         {
-            return;
+            var (state, _) = await Existence.ProbeAsync(_services.FileSystem, item.Path, RegisteredCheckTimeout, CancellationToken.None);
+            item.State = state switch
+            {
+                ExistState.Folder => SidebarItemState.Ok,
+                ExistState.Timeout => SidebarItemState.NoResponse,
+                _ => SidebarItemState.Missing,
+            };
         }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"Existence check of {item.Path} failed", ex);
+        }
+    }
 
-        bool ok = View?.Confirm("登録を解除しますか？", "一覧から外すだけで、フォルダやファイルは削除されません。", card.Path, "登録を解除", danger: true) ?? false;
+    /// <summary>A click on a 登録フォルダ of the sidebar: opens it in a folder tab.</summary>
+    public Task OpenRegisteredAsync(SidebarItemViewModel item) =>
+        item.IsDisabled ? Task.CompletedTask : OpenFolderTabAsync(item.Target, recordPath: item.Path);
+
+    /// <summary>The sidebar row of a registered folder, by path (the right-click menu only has the path).</summary>
+    public SidebarItemViewModel? FindRegistered(string path) =>
+        Registered.FirstOrDefault(i => PathTools.PathEquals(PathTools.NormalizeOrSelf(i.Path), PathTools.NormalizeOrSelf(path)));
+
+    public bool IsRegistered(string path) => FindRegistered(path) is not null;
+
+    /// <summary>Takes a folder off the sidebar after a confirmation. Tabs that show it stay open.</summary>
+    public void Unregister(SidebarItemViewModel item)
+    {
+        bool ok = View?.Confirm("登録を解除しますか？", "一覧から外すだけで、フォルダやファイルは削除されません。", item.Path, "登録を解除", danger: true) ?? false;
         if (!ok)
         {
             return;
         }
 
-        if (_services.Stores.Registered.Remove(card.RegisteredId))
+        if (_services.Stores.Registered.Remove(item.Id))
         {
-            Message.Success($"「{card.Name}」の登録を解除しました。");
-            RegisteredTab.RemoveCard(card);
-            RegisteredTab.CountText = $"登録 {RegisteredTab.Cards.Count:N0}";
-            if (RegisteredTab.Cards.Count == 0)
-            {
-                RegisteredChanged();
-            }
+            Message.Success($"「{item.Name}」の登録を解除しました。");
         }
+
+        RefreshRegistered();
+    }
+
+    /// <summary>
+    /// A sidebar row was dropped at <paramref name="insertIndex"/> (0…Count, counted with the row
+    /// still in place): the new order is saved in registered_folders.json.
+    /// </summary>
+    public void MoveRegistered(SidebarItemViewModel item, int insertIndex)
+    {
+        var items = Registered.ToList();
+        int from = items.IndexOf(item);
+        insertIndex = Math.Clamp(insertIndex, 0, items.Count);
+        if (from < 0 || insertIndex == from || insertIndex == from + 1)
+        {
+            return;
+        }
+
+        items.RemoveAt(from);
+        items.Insert(insertIndex > from ? insertIndex - 1 : insertIndex, item);
+        _services.Stores.Registered.Reorder(items.Select(i => i.Id).ToList());
+        RefreshRegistered();
     }
 
     // ---- × on top-level cards (§6.7) --------------------------------------------------------
@@ -960,30 +1302,20 @@ public sealed partial class MainViewModel : ObservableObject
     public void RemoveCard(CardViewModel card)
     {
         View?.CloseCascade();
-        switch (card.OwnerTab)
+        if (card.OwnerTab == TabKind.Recent)
         {
-            case TabKind.Registered:
-                Unregister(card);
-                break;
-            case TabKind.Recent:
-                ExcludeFromRecent(card);
-                break;
-            default:
-                RemoveFromFrequent(card);
-                break;
+            ExcludeFromRecent(card);
+        }
+        else if (card.OwnerTab == TabKind.Frequent)
+        {
+            RemoveFromFrequent(card);
         }
     }
 
     public void ExcludeFromRecent(CardViewModel card)
     {
         _services.Stores.Excluded.Exclude(card.Path);
-        RecentTab.RemoveCard(card);
-        RecentTab.CountText = $"履歴 {RecentTab.Cards.Count:N0}";
-        if (RecentTab.Cards.Count == 0)
-        {
-            RecentTab.EmptyText = "最近の履歴はありません。";
-        }
-
+        RecentTab.RemoveCard(card); // the count and the empty text follow
         Message.Info($"「{card.Name}」を履歴から外しました。");
     }
 
@@ -1043,7 +1375,7 @@ public sealed partial class MainViewModel : ObservableObject
         _services.ShowHidden = after.ShowHidden;
         if (before.ShowHidden != after.ShowHidden)
         {
-            foreach (var tab in Tabs)
+            foreach (var tab in AllTabs)
             {
                 tab.IsStale = true;
             }
