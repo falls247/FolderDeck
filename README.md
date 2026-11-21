@@ -14,7 +14,8 @@
 
 - Windows 10 22H2 / Windows 11（x64）
 - 開発：.NET SDK 10（`dotnet --list-sdks` で 10.0.x が出ること）
-- 配布物（single-file exe）を動かすだけなら .NET のインストールは不要です（self-contained）
+- 配布物（`publish.bat` で作る single-file exe）を動かすだけなら .NET のインストールは不要です（self-contained）
+  - `publish.bat framework` で作る小さい exe だけは、使う PC に .NET 10 デスクトップ ランタイム（x64）が必要です
 
 ## よく使う操作（BAT・ダブルクリック可）
 
@@ -26,11 +27,12 @@
 | `test.bat [追加の引数]` | Core のテスト（例：`test.bat --filter Ranking`） |
 | `run.bat [アプリへの引数]` | Debug ビルドして起動（例：`run.bat --data-dir E:\tmp\data`） |
 | `build-test-run.bat [アプリへの引数]` | ソリューションを Debug ビルド → Core のテスト → 起動 を続けて実行。失敗した段階で止まる（引数は `run.bat` と同じ。例：`build-test-run.bat --data-dir E:\tmp\data`） |
-| `publish.bat` | 配布用の single-file exe を作り、`dist\FolderDeck.exe` にコピー |
+| `publish.bat` | 配布用の single-file exe（.NET 同梱・圧縮、約 65 MB）を作り、`dist\FolderDeck.exe` にコピー |
+| `publish.bat framework` | .NET を同梱しない single-file exe（約 2 MB）を作り、`dist\framework-dependent\FolderDeck.exe` にコピー。使う PC に .NET 10 デスクトップ ランタイム（x64）が必要（入っていないと起動時にダウンロードを促す画面が出て起動しない） |
 
 - ダブルクリックしたときは、最後に「Enter キーで閉じます」で止まるので結果を読めます（`run.bat` / `build-test-run.bat` が成功したときはアプリが出るので止まりません）。ターミナルから実行したときは止まりません。
 - 終了コードを返すので、ほかのスクリプトからも呼べます（成功 0、失敗 1、引数の誤り 2）。
-- これから上書きするフォルダ（`bin\Debug`、`bin\Release`、`publish`、`dist`）から FolderDeck が起動していると exe がロックされてビルドできないため、「閉じて続けますか？ [Y/n]」と聞いてから普通に閉じます（閉じるときに状態は保存されます）。ほかの場所から起動している FolderDeck には触れません。
+- これから上書きするフォルダ（`bin\Debug`、`bin\Release`、`publish`、コピー先の `dist` または `dist\framework-dependent`）から FolderDeck が起動していると exe がロックされてビルドできないため、「閉じて続けますか？ [Y/n]」と聞いてから普通に閉じます（閉じるときに状態は保存されます）。ほかの場所から起動している FolderDeck には触れません。
   - 入力できない実行（ほかのツールから呼んだときなど）では、閉じずに中止します。確認なしで閉じてよいときは、環境変数 `FOLDERDECK_AUTOCLOSE=1` を設定してください。
 - FolderDeck は1つしか起動できません。ほかの場所（`dist\` など）の FolderDeck が起動していると、`run.bat` / `build-test-run.bat` は新しいビルドを起動できない（既存のウィンドウが前に出るだけで `--data-dir` も効かない）ため、ビルドせずにその旨を表示して終了します。そちらを閉じてから実行してください。
 - `test.bat` などへの追加の引数は、`-tl:off` や `-p:Name=Value` のような形もそのまま dotnet に渡ります。
@@ -56,13 +58,19 @@ dotnet run --project src/FolderDeck.App
 ### 配布用の exe を作る
 
 ```powershell
-dotnet publish src/FolderDeck.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+dotnet publish src/FolderDeck.App -c Release -r win-x64 -p:SelfContained=true -p:PublishSingleFile=true
 ```
 
-出力は `src\FolderDeck.App\bin\Release\net10.0-windows\win-x64\publish\FolderDeck.exe` の **1ファイルだけ**です（約 150 MB）。`publish.bat` を使うと、同じものが `dist\FolderDeck.exe` にもコピーされます。
-ReadyToRun（事前コンパイル）を有効にしてあり、起動を速くしています。
+出力は `src\FolderDeck.App\bin\Release\net10.0-windows\win-x64\publish\FolderDeck.exe` の **1ファイルだけ**です（約 65 MB）。`publish.bat` を使うと、同じものが `dist\FolderDeck.exe` にもコピーされます。
+ReadyToRun（事前コンパイル）を有効にしてあり、起動を速くしています。.NET を同梱する（self-contained）ときは exe の中身を圧縮しています（`EnableCompressionInSingleFile`。圧縮しないと約 150 MB）。
 
-> 新しくビルドした exe を初めて起動するときは、ウイルス対策ソフトのスキャンで 30 秒ほどかかることがあります（この環境で計測）。2回目からは約 1.4 秒で最初の画面が出ます。
+.NET を同梱しない小さい exe（約 2 MB）は `-p:SelfContained=false` で作れます（`publish.bat framework` と同じ）。使う PC に .NET 10 デスクトップ ランタイム（x64）が必要です。
+
+- `--self-contained false` ではなく `-p:SelfContained=false` を使ってください。この環境（.NET SDK 10）では `--self-contained false` を付けても .NET が同梱され、約 150 MB になりました。
+- WPF はトリミング（`PublishTrimmed`、使わないコードを削る機能）に対応していないため使っていません。
+
+> 新しくビルドした exe を初めて起動するときは、ウイルス対策ソフトのスキャンで 30〜40 秒ほどかかることがあります（この環境で計測）。2回目からは約 1.4 秒（`publish.bat framework` の exe は約 0.9 秒）で最初の画面が出ます。
+> 圧縮した exe は展開した中身をメモリに置くため、起動直後のメモリ（ワーキングセット）が約 200 MB と、圧縮しない場合・`publish.bat framework` の exe（約 130 MB）より約 70 MB 多くなります。
 
 ## データの置き場所
 

@@ -28,7 +28,7 @@ updated: 2026-11-21
 
 - WPF + .NET 10（`net10.0-windows`、x64）、C#（`LangVersion latest`、`Nullable enable`、`ImplicitUsings enable`。共通設定は `Directory.Build.props`）
 - パッケージ：CommunityToolkit.Mvvm 8.4.2（`[ObservableProperty]` / `[RelayCommand]` のソース生成）、Microsoft.Windows.CsWin32 0.3.371（各プロジェクトの `NativeMethods.txt` から P/Invoke を生成）、テストは xUnit 2.9.3
-- 配布：self-contained の single-file exe（ReadyToRun）。`publish.bat` → `dist\FolderDeck.exe`
+- 配布：single-file exe（ReadyToRun）。`publish.bat` → `dist\FolderDeck.exe`（self-contained・圧縮 `EnableCompressionInSingleFile`、約 65 MB）、`publish.bat framework` → `dist\framework-dependent\FolderDeck.exe`（.NET 10 デスクトップ ランタイムが必要、約 2 MB）。圧縮は csproj で `SelfContained == true` のときだけ有効。WPF はトリミング非対応のため使わない
 
 ### 1.1 プロジェクトと依存方向
 
