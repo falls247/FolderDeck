@@ -13,7 +13,26 @@
 - 開発：.NET SDK 10（`dotnet --list-sdks` で 10.0.x が出ること）
 - 配布物（single-file exe）を動かすだけなら .NET のインストールは不要です（self-contained）
 
-## ビルド・テスト・起動
+## よく使う操作（BAT・ダブルクリック可）
+
+リポジトリのフォルダにある BAT を、エクスプローラーからダブルクリックするか、ターミナルから実行します。
+
+| BAT | 内容 |
+|---|---|
+| `build.bat [Debug\|Release]` | ソリューションをビルド（既定 Debug） |
+| `test.bat [追加の引数]` | Core のテスト（例：`test.bat --filter Ranking`） |
+| `run.bat [アプリへの引数]` | Debug ビルドして起動（例：`run.bat --data-dir E:\tmp\data`） |
+| `publish.bat` | 配布用の single-file exe を作り、`dist\FolderDeck.exe` にコピー |
+
+- ダブルクリックしたときは、最後に「Enter キーで閉じます」で止まるので結果を読めます（`run.bat` が成功したときはアプリが出るので止まりません）。ターミナルから実行したときは止まりません。
+- 終了コードを返すので、ほかのスクリプトからも呼べます（成功 0、失敗 1、引数の誤り 2）。
+- これから上書きするフォルダ（`bin\Debug`、`bin\Release`、`publish`、`dist`）から FolderDeck が起動していると exe がロックされてビルドできないため、「閉じて続けますか？ [Y/n]」と聞いてから普通に閉じます（閉じるときに状態は保存されます）。ほかの場所から起動している FolderDeck には触れません。
+  - 入力できない実行（ほかのツールから呼んだときなど）では、閉じずに中止します。確認なしで閉じてよいときは、環境変数 `FOLDERDECK_AUTOCLOSE=1` を設定してください。
+- FolderDeck は1つしか起動できません。ほかの場所（`dist\` など）の FolderDeck が起動していると、`run.bat` は新しいビルドを起動できない（既存のウィンドウが前に出るだけで `--data-dir` も効かない）ため、ビルドせずにその旨を表示して終了します。そちらを閉じてから実行してください。
+- `test.bat` などへの追加の引数は、`-tl:off` や `-p:Name=Value` のような形もそのまま dotnet に渡ります。
+- 中身は `tools\dev.ps1` にまとめてあります（BAT はそれを呼ぶだけ）。BAT を英数字だけにしてあるのは、文字コード（コードページ 932 / 65001）が違う環境でも文字化けせずに動かすためです。`tools\dev.ps1` を編集したら UTF-8（BOM 付き）で保存してください。
+
+## ビルド・テスト・起動（コマンドで直接）
 
 リポジトリのフォルダ（このファイルがある場所）で実行します。
 
@@ -35,7 +54,7 @@ dotnet run --project src/FolderDeck.App
 dotnet publish src/FolderDeck.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 ```
 
-出力は `src\FolderDeck.App\bin\Release\net10.0-windows\win-x64\publish\FolderDeck.exe` の **1ファイルだけ**です（約 150 MB）。
+出力は `src\FolderDeck.App\bin\Release\net10.0-windows\win-x64\publish\FolderDeck.exe` の **1ファイルだけ**です（約 150 MB）。`publish.bat` を使うと、同じものが `dist\FolderDeck.exe` にもコピーされます。
 ReadyToRun（事前コンパイル）を有効にしてあり、起動を速くしています。
 
 > 新しくビルドした exe を初めて起動するときは、ウイルス対策ソフトのスキャンで 30 秒ほどかかることがあります（この環境で計測）。2回目からは約 1.4 秒で最初の画面が出ます。
@@ -95,7 +114,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-fixture.ps1 -Outp
 src/FolderDeck.Core/   UI に依存しないロジック（パス、列挙、キャッシュ、カバー探索、JSON 保存、順位付け）
 src/FolderDeck.App/    WPF（View / ViewModel、カスケード制御、シェル連携、テーマ）
 tests/FolderDeck.Core.Tests/  xUnit（Core のみ）
+tools/dev.ps1                 build / test / run / publish の中身（各 BAT から呼ばれる）
 tools/make-fixture.ps1        検証用フォルダの作成
+build.bat test.bat run.bat publish.bat   よく使う操作（ダブルクリック可）
+dist/                         publish.bat の出力（git には含めない）
 ```
 
 ホバーの待ち時間（300 / 150 / 300 / 300 ms）は `src/FolderDeck.App/Views/HoverTimings.cs` にまとめてあります。
