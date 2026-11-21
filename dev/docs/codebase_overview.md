@@ -16,11 +16,11 @@ updated: 2026-11-21
 | 文書 | 内容 | 読むとき |
 |---|---|---|
 | 本書 | 開発者向けの地図（どこに何があり、どう流れるか） | 毎回最初 |
-| [README.md](../../README.md) | 利用者向けの挙動、BAT、データファイルの表、「実装メモ」（仕様からの判断・差分） | 挙動の正解を確かめるとき |
-| [SPEC_20261121_native_folder_app.md](SPEC_20261121_native_folder_app.md) | 元の仕様（約 1,100 行）。コードコメントの `§9.6` などはこの節番号 | 根拠を確かめるとき。通読せず [_topics.yml](_topics.yml) の目次から節を選ぶ |
+| [README.md](../../README.md) | 利用者向けの挙動、BAT、データファイルの表、「実装メモ」（実装上の判断） | 挙動の正解を確かめるとき |
+| 旧仕様書 `SPEC_20261121_native_folder_app.md`（削除済み） | 最初の実装の元になった仕様（約 1,100 行）。コードコメントの `§9.6` などはこの節番号 | 根拠を確かめるときだけ `git show 1122384:dev/docs/SPEC_20261121_native_folder_app.md` で出し、`§9.6` などを検索する（通読しない） |
 | [_topics.yml](_topics.yml) | `dev/docs` の目録と各文書の目次（YAML） | 読む文書・節を選ぶとき |
 
-- SPEC は最初の実装時点の仕様。後から追加した機能（タブごとの並べ替え、ドラッグでの並べ替え、他アプリへのドラッグ、Office・テキストのプレビュー、エクスプローラーの新しいタブで開く）は SPEC になく、README と実装が正。
+- 旧仕様書は最初の実装時点のもの。後から追加・変更した機能（タブごとの並べ替え、ドラッグでの並べ替え、他アプリへのドラッグ、Office・テキストのプレビュー、エクスプローラーの新しいタブで開く、カードの形、📌 のクリックでの解除、ごみ箱への削除、「エクスプローラーで開く」の廃止）は載っていない。挙動は README と実装が正。
 - 行番号は書かない（すぐずれるため）。ファイル名とメンバー名で示す。
 - 本書と実装が食い違ったら実装が正。気づいたら本書を直す（[§9](#9-本書の更新ルール)）。
 
@@ -42,7 +42,7 @@ tests/FolderDeck.Core.Tests  xUnit。Core のみ。App 層の自動テストは�
 ```
 
 - ロジックは Core に置き、純粋関数にしてテストする方針（並べ替え・ランキング・パス・保存・プレビュー用の読み取りなど）。App は WPF とシェル連携に限る。
-- 大きいファイル（全文を読まず `// ---- 見出し ----` の区切りで目的の節だけ読む）：`Views/CascadeController.cs`（約 1,400 行）、`ViewModels/MainViewModel.cs`（約 990 行）、`Core/Listing/SheetReader.cs`（約 820 行）、`Shell/ExplorerTabs.cs`（約 750 行）、`ViewModels/TabViewModel.cs`（約 630 行）、`Views/CardGrid.xaml.cs`（約 570 行）
+- 大きいファイル（全文を読まず `// ---- 見出し ----` の区切りで目的の節だけ読む）：`Views/CascadeController.cs`（約 1,400 行）、`ViewModels/MainViewModel.cs`（約 1,090 行）、`Core/Listing/SheetReader.cs`（約 820 行）、`Shell/ExplorerTabs.cs`（約 750 行）、`ViewModels/TabViewModel.cs`（約 630 行）、`Views/CardGrid.xaml.cs`（約 590 行）
 
 ### 1.2 起動と終了（`App.xaml.cs`）
 
@@ -81,7 +81,7 @@ App
         └─ Preview（最大 1 つ）: Popup + PreviewView + PreviewViewModel
 ```
 
-- ViewModel から View への依存は `IMainView`（ダイアログ、スクロール位置、カスケードを閉じる）だけ。View からの通知は `ICardHost`（カードのホバー・クリック・右クリック・× ・ドラッグ）を `MainWindow` が受ける。
+- ViewModel から View への依存は `IMainView`（ダイアログ、スクロール位置、カスケードを閉じる、シェルのダイアログの親にするウィンドウハンドル `WindowHandle`）だけ。View からの通知は `ICardHost`（カードのホバー・クリック・右クリック・× ・📌（`CardUnpin`）・ドラッグ）を `MainWindow` が受ける。
 
 ## 2. ファイルマップ
 
@@ -93,6 +93,7 @@ App
 | | `RealFileSystem.cs` | `IFileSystem` の実装 |
 | | `AppLog.cs` | `logs\app.log`（5 MB で `app.log.1` へ）。例外を投げない。**ファイルの中身は書かず、パスと例外だけ**。行形式は `tools/analyze-log.ps1` が解析する |
 | | `SessionMarker.cs` | `logs\session.json`（起動中だけある記録）の読み書き |
+| Layout | `CardShape.cs` | カードの形（`Portrait` = サムネイル 3:4 / `Square` = 1:1）、`settings.json` の値（`portrait` / `square`）との変換、`ThumbHeight`（幅からサムネイルの高さ） |
 | Listing | `FolderListing.cs` | `FolderLister.List`：直下の列挙と並び（フォルダ→ファイル、自然順）、`ListingStatus` |
 | | `FolderListingCache.cs` | パス単位の TTL キャッシュ。同じパスの同時要求は 1 回の列挙を共有し、待つ側が全員キャンセルすると列挙も止める。`Clear` / `Invalidate` |
 | | `VolumeThrottle.cs` | ボリュームごとに同時 I/O を制限（ハングした共有がローカルドライブを巻き込まない） |
@@ -122,7 +123,7 @@ App
 | | `HistoryStore.cs` | `history.json`（利用記録）。`Record` / `Remove` / `Clear` |
 | | `PinStore.cs` | `pins.json`。`Pin` / `Unpin` / `IsPinned`、`Changed` イベント |
 | | `ExcludedStore.cs` | `excluded.json`（最近の履歴から外した項目） |
-| | `SettingsStore.cs` | `settings.json`。`AppSettings`（既定値・`Normalize`・`Clone`） |
+| | `SettingsStore.cs` | `settings.json`。`AppSettings`（既定値・`Normalize`・`Clone`）。カードの形は文字列の `CardShape`（`card_shape`） |
 | | `CardOrderStore.cs` | `card_order.json`（最近の履歴・よく使う項目のドラッグ順、各 1,000 件まで） |
 | Text | `Formatting.cs` | 相対時刻、日時、ファイルサイズの表示 |
 | Transfer | `FileDrag.cs` | 他アプリへのドラッグの規則：可否、`DropList`（260 文字以上→8.3）、自アプリ由来の判定、`IsDragGesture` |
@@ -142,12 +143,13 @@ App
 | | `IconCache.cs` | 一覧の行のアイコン（拡張子ごとに共有できるものは共有） |
 | | `OfficeCover.cs` | `OfficeThumbnail.ReadEmbedded` を WPF の画像にする |
 | | `ShellPreviewSupport.cs` | 「Windows がサムネイルを作れるか」を拡張子ごとに 1 回だけ確認（`AssocQueryString`）。`IsPreviewable` |
-| | `ShellActions.cs` | 既定のアプリで開く、エクスプローラーで表示 / 開く、パスをコピー、実行形式の判定 |
-| | `ExplorerTabs.cs` | エクスプローラーの新しいタブで開く（Windows 11 22H2+、非公開の `WM_COMMAND 0xA21B`。失敗時は `ShellActions` の新しいウィンドウへ） |
+| | `ShellActions.cs` | 既定のアプリで開く、エクスプローラーで表示（`ShowInExplorer`）/ 開く（`OpenInExplorer`、いまはデータフォルダを開くときだけ）、パスをコピー、実行形式の判定 |
+| | `RecycleBin.cs` | ごみ箱への移動（`MoveAsync`）。`IFileOperation` を操作ごとの専用 STA スレッドで実行し、進行状況シンクの `PreDeleteItem` で「ごみ箱に入らない（完全に削除される）」項目を止める。結果は `RecycleOutcome`（`Recycled` / `Canceled` / `NotRecyclable` / `Failed`） |
+| | `ExplorerTabs.cs` | エクスプローラーの新しいタブで「表示」（`ShowAsync`。Windows 11 22H2+、非公開の `WM_COMMAND 0xA21B`。失敗時は `ShellActions` の新しいウィンドウへ）。`RunAsync` の `select: false` の経路は呼び出し元がなくなった |
 | | `WindowsRecent.cs` | `%APPDATA%\Microsoft\Windows\Recent\*.lnk` の読み取り、記録が有効かの確認 |
 | | `FileDragOut.cs` | ドラッグ用 `DataObject` の作成、`DoDragDrop` の実行、`IsDragging` |
 | | `SingleInstance.cs` / `ThemeManager.cs` | 単一インスタンス / Windows のライト・ダーク追従 |
-| ViewModels | `MainViewModel.cs` | タブ切り替え、移動と履歴（戻る・進む、最大 100）、開く、右クリックの各操作、登録、並べ替え・ドラッグ順の保存、ピン、設定ダイアログ |
+| ViewModels | `MainViewModel.cs` | タブ切り替え、移動と履歴（戻る・進む、最大 100）、開く、右クリックの各操作（ごみ箱への削除 `CanDelete` / `DeleteAsync` を含む）、登録、並べ替え・ドラッグ順の保存、ピン、カードの大きさと形（`CardSize` / `CardShape`）、設定ダイアログ |
 | | `TabViewModel.cs` | 1 タブの現在地・カード・読み込み・並び（[§3.1](#31-タブの読み込み)） |
 | | `CardViewModel.cs` | 1 枚のカード。`CardKind`、`BadgeMode`、段階読み込み（`Realize` / `Unrealize`） |
 | | `EntryListViewModel.cs` | カスケード 1 階層（`EntryListViewModel`）と行（`EntryRowViewModel`、`ListState`） |
@@ -156,12 +158,12 @@ App
 | | `MessageBarViewModel.cs` | メッセージ行（`Info` / `Success` / `Warning` / `Error`、`ClearPersistent`） |
 | | `SettingsViewModel.cs` | 設定ダイアログ。OK のときだけ `ApplyTo` で反映 |
 | | `SortModeLabels.cs` | 並べ替えメニューの文言 |
-| Views | `MainWindow.xaml(.cs)` | キー・マウス（`OnPreviewKeyDown` / `OnPreviewMouseDown`）、エクスプローラーからのドロップ登録、並べ替えメニューの組み立て、`ICardHost` / `IMainView` の実装 |
-| | `CardGrid.xaml(.cs)` | カードを「列数ぶんの行」にまとめて `VirtualizingStackPanel` で仮想化、列数とサイズ（`GridMetrics`、§6.1）、並べ替えドラッグ（`RunReorderDrag`、自動スクロール、`DropMarkerAdorner`） |
-| | `CardView.xaml(.cs)` | 1 枚のカード。ホバー・クリック・ドラッグ開始を検出して `ICardHost` へ。表示されたら `Realize` |
+| Views | `MainWindow.xaml(.cs)` | キー・マウス（`OnPreviewKeyDown` / `OnPreviewMouseDown`）、エクスプローラーからのドロップ登録、並べ替えメニューの組み立て、ツールバーのカードの形の切り替え（`RadioButton` 2 つ → `SetCardShapeCommand`）、`ICardHost` / `IMainView` の実装 |
+| | `CardGrid.xaml(.cs)` | カードを「列数ぶんの行」にまとめて `VirtualizingStackPanel` で仮想化、列数とサイズ（`GridMetrics`、§6.1。サムネイルの高さは `CardShape` 依存プロパティから `CardShapes.ThumbHeight`）、並べ替えドラッグ（`RunReorderDrag`、自動スクロール、`DropMarkerAdorner`） |
+| | `CardView.xaml(.cs)` | 1 枚のカード。ホバー・クリック・ドラッグ開始を検出して `ICardHost` へ。表示されたら `Realize`。📌 はフッターのバッジ行の左（`PinButton`、クリックで解除）、バッジは幅が足りなければ `Viewbox` で縮める |
 | | `CascadeController.cs` | ホバー一覧とカスケード全体（[§3.3](#33-カスケードcascadecontroller9)） |
 | | `EntryListView` / `OverlayView` / `FlyoutView` / `PreviewView` | 行の一覧（どの行にポインターがあるかを通知）/ オーバーレイ / フライアウト / プレビューの表示 |
-| | `ContextMenuFactory.cs` | 右クリックメニュー（カード・行・フライアウト見出しで共通、`ItemRef.Context` で出し分け） |
+| | `ContextMenuFactory.cs` | 右クリックメニュー（カード・行・フライアウト見出しで共通、`ItemRef.Context` で出し分け。「削除（ごみ箱へ移動）」は `MainViewModel.CanDelete` のときだけ） |
 | | `ConfirmDialog` / `SettingsWindow` / `Converters.cs` | 確認ダイアログ / 設定画面 / 値コンバーター |
 | | `HoverTimings.cs` | ホバーの待ち時間とアニメーション時間（**調整はここだけ**） |
 | Themes | `Light.xaml` / `Dark.xaml` | 色トークン（同じキーを両方に定義） |
@@ -229,13 +231,15 @@ App
 - カードのクリック → `MainViewModel.ActivateCardAsync`、行のクリック → `OpenItemAsync`
 - フォルダ：`NavigateAsync(Target, NavMode.New, recordPath: …)`（移動も利用として `RecordUse`）
 - ファイル：`OpenFileAsync`：実行形式の確認（`ConfirmExecutables` && `ShellActions.IsExecutable`）→ `Task.Run(ShellActions.Open)` → `RecordUse`（`History.Record` → 最近の履歴・よく使う項目を更新）→ 設定によって `SHAddToRecentDocs`
-- 右クリック：`ContextMenuFactory.Show(ItemRef, target)` → `MainViewModel` の `ShowInExplorerAsync` / `OpenInExplorerAsync`（設定で `ExplorerTabs`）/ `CopyPath` / `TogglePin` / `AddToRegisteredAsync` / `Unregister` / `ExcludeFromRecent` / `RemoveFromFrequent`
+- 右クリック：`ContextMenuFactory.Show(ItemRef, target)` → `MainViewModel` の `ShowInExplorerAsync`（設定で `ExplorerTabs`）/ `CopyPath` / `TogglePin` / `AddToRegisteredAsync` / `DeleteAsync` / `Unregister` / `ExcludeFromRecent` / `RemoveFromFrequent`
+- ごみ箱への削除：`CanDelete`（`ItemContext.InnerCard` か `Row`、かつ見つからない・応答なしでない。最上位のカードとフライアウトの見出しは対象外）→ メニューで `BeforeNavigate`（カスケードを閉じる）→ `DeleteAsync`：`IMainView.Confirm`（危険操作。既定は「キャンセル」）→ `RecycleBin.MoveAsync(path, IMainView.WindowHandle)` → 結果をメッセージ行へ → `ReloadAfterDeleteAsync`（`ClearCaches`、全タブを `IsStale`、表示中のタブをスクロール位置を保って読み直す。中止・失敗でも読み直す）
 
 ### 3.6 並べ替え・ピン留め
 
 - 並び方の変更：並べ替えメニュー（`MainWindow` が `CardSortModes.All` から組み立てる）→ `MainViewModel.SetSortMode` → `SaveSortMode`（`settings.json` の `sort_modes`）→ `TabViewModel.ApplyOrder`
 - ドラッグで並べ替え：`MainWindow.CardDrag` → `FileDragOut.CreateData(reorder: true)` → `CardGrid.RunReorderDrag` → `MainViewModel.MoveCard` → `TabViewModel.SetBaseOrder` → `SaveManualOrder`（登録フォルダは `RegisteredFoldersStore.Reorder`、ほかは `CardOrderStore.Set`）。名前順・更新日順のときは「手動」に切り替える
-- ピン：`TogglePin` → `PinStore.Pin` / `Unpin` → `PinStore.Changed` → `OnPinsChanged` → 各タブの `ApplyPins`。名前順・更新日順でピン留めするときは `KeepInPlace` → `PlaceInBase` で表示中の位置に固定
+- ピン：`TogglePin` → `PinStore.Pin` / `Unpin` → `PinStore.Changed` → `OnPinsChanged` → 各タブの `ApplyPins`。名前順・更新日順でピン留めするときは `KeepInPlace` → `PlaceInBase` で表示中の位置に固定。カードの 📌 のクリックは `CardView.OnPinClick` → `ICardHost.CardUnpin`（`MainWindow`：カスケードを閉じて `TogglePin`。見つからない・応答なしのカードでは無効）
+- カードの形（全タブ共通）：ツールバーの `RadioButton` → `SetCardShapeCommand` → `MainViewModel.CardShape` → `OnCardShapeChanged`（カスケードを閉じ、`settings.json` の `card_shape` に保存）→ バインドで `CardGrid.CardShape` → `Rebuild` → `GridMetrics.ThumbHeight`
 - 規則（ピン留めは位置固定、新規項目の挿入位置）は Core の `Ordering/` にある。App 側で再実装しない
 
 ### 3.7 他アプリへのドラッグ
@@ -260,6 +264,7 @@ App
 
 - **UI スレッドでブロッキング I/O をしない**。列挙・存在確認・JSON 読み込みは `Task.Run` か `FolderListingCache` の中で行う。
 - シェル / COM の呼び出しは `StaWorkerPool` 上でタイムアウトつき（`ThumbnailService` は 4 本・5 秒、`AppServices.Shell` は 1 本）。タイムアウトしたワーカーは放棄して作り直す（最大 16 本）。
+  - 例外：ごみ箱への移動（`RecycleBin`）は操作ごとに専用の STA スレッドを作り、タイムアウトをつけない（シェルの進行状況・「使用中」などのダイアログが利用者の操作を待つため）。UI スレッドは `await` で待つだけで止まらない。
 - 遅い・切断されたネットワークドライブ対策：`Existence` のタイムアウト（登録フォルダ 2 秒、履歴 1 秒）、`VolumeThrottle`、5 秒で「応答がありません」（`HoverTimings.Slow`、`TabViewModel.IsSlow`）。
 - キャンセル：タブは `TabViewModel._loadCts`、カードは `Realize` / `Unrealize` の CTS、プレビューは `Preview.Cts`。`OperationCanceledException` は握りつぶして終わる。
 - ストアは内部でロックしてスレッドセーフ。`SaveFailed` はワーカースレッドで発火するので、UI へは `Dispatcher.BeginInvoke`。
@@ -272,6 +277,7 @@ App
 | プレビュー対象の拡張子を追加 | `Core/Listing/PreviewKinds.cs` の拡張子集合 | `PreviewTests`。シェルのサムネイルで足りる形式なら追加不要（`ShellPreviewSupport` が自動判定） |
 | 新しい種類のプレビュー | `PreviewKind` に追加 → 読み取りを `Core/Listing/` に → `PreviewTextCache.GetAsync` の分岐 → `CascadeController.ShowExcerpt` / `LoadPreviewAsync` → `PreviewViewModel` / `PreviewView` | 読み取りは共有モード・上限つき・キャンセル可能に。オンラインのみのファイルは開かない（`FileContent.IsCloudOnly`） |
 | 右クリックメニューの項目 | `Views/ContextMenuFactory.cs`（`ItemRef.Context` / カードの種類で出し分け）→ 処理は `MainViewModel` の public メソッドに | カスケードを離れる操作は `BeforeNavigate`（= `CloseAll`）を先に通す |
+| ファイルを変更する操作（削除など） | `Shell/RecycleBin.cs`（ごみ箱への移動だけ）→ `MainViewModel.CanDelete` / `DeleteAsync` → `ContextMenuFactory` | **完全削除の経路を作らない**、必ず確認ダイアログを出す。App 層なので自動テストなし → ローカルのパス（ごみ箱へ入る）と `\\wsl.localhost\…` などのパス（中止されて残る）で手動確認。終わったら `ReloadAfterDeleteAsync` で読み直す。README の「削除（ごみ箱へ移動）」も更新 |
 | ホバーの待ち時間・アニメーション | `Views/HoverTimings.cs` のみ | |
 | 並び方を追加 | `Core/Ordering/CardSortMode.cs`（enum、`All`、`ToSetting` / `FromSetting`、`IsByModified`）→ `CardOrdering.ComparerFor` → `App/ViewModels/SortModeLabels.cs` | メニューは `CardSortModes.All` から自動で作られる。`OrderingTests`、`OrderStoreTests`（`SortModeSettingsTests`） |
 | データファイルを追加 | `StoreBase` を継承（`Load` / `Serialize`、変更後に `RequestSave`）→ `DataStores` のコンストラクタ・プロパティ・`All` に追加 | `All` に入れると `LoadAll` / `FlushAll` / 保存失敗の通知 / 読み込み問題の報告に自動で乗る。README のデータ表も更新。`StoreTests` |
@@ -279,8 +285,9 @@ App
 | 最近の履歴・よく使う項目の規則 | `Core/Ranking/`（`RecentMerger`、`FrequentRanker`） | `RankingTests` |
 | フォルダ列挙の規則（並び・隠し・フィルタ） | `Core/Listing/FolderListing.cs`（`FolderLister`） | `ListingTests`（`FolderListerTests`） |
 | カバー画像の選び方 | `Core/Listing/CoverFinder.cs` | `ListingTests`（`CoverFinderTests`） |
-| カードの見た目・バッジ | `Views/CardView.xaml` + `CardViewModel`（`BadgeMode` など） | 色は `Themes/` のトークンを使う |
+| カードの見た目・バッジ | `Views/CardView.xaml` + `CardViewModel`（`BadgeMode` など） | 色は `Themes/` のトークンを使う。バッジ行は左が 📌（ピン留め時だけ）、右がバッジ（`Viewbox` で縮む）。最小サイズ 120 で切れないか確認 |
 | カードグリッドの列数・サイズ | `Views/CardGrid.xaml.cs`（`GridMetrics`、§6.1）、サイズの範囲は `AppSettings.CardSizeMin` / `Max` / `Step` | |
+| カードの形を追加・変更 | `Core/Layout/CardShape.cs`（enum、`ToSetting` / `FromSetting`、`ThumbHeight`）→ `Views/MainWindow.xaml` のツールバーの `RadioButton` | `CardShapeTests`。ツールバーの幅を増やしたら `MainWindow` の `MinWidth`（いまは 660）で更新ボタンまで収まるか確認 |
 | 色・スタイル | `Themes/Light.xaml` と `Dark.xaml` の**両方**に同じキー、スタイルは `Styles.xaml` | |
 | キー・マウス操作 | `MainWindow.OnPreviewKeyDown` / `OnPreviewMouseDown`、カスケード中は `CascadeController.HandleKey` | |
 | 開く・エクスプローラー連携 | `Shell/ShellActions.cs`、`Shell/ExplorerTabs.cs`、`MainViewModel.OpenFileAsync` / `ShowInExplorerAsync` | `ExplorerTabs` は非公開コマンド依存。1 回のクリックでタブとウィンドウの両方を開かない |
@@ -308,11 +315,12 @@ App
 | `TextPreviewTests.cs` | `TextPreviewTests` | 文字コード判定、行・バイト上限、バイナリ |
 | `OfficeTextTests.cs` | `OfficeTextTests` | Word の段落・見出し・上限・壊れた / ロック中のファイル・キャンセル、Excel のセル・日付書式（1904 年基準を含む）・上限、オンラインのみは開かない |
 | `FileDragTests.cs` | `FileDragTests` | ドラッグ可否、DropList、自アプリ判定、しきい値 |
+| `CardShapeTests.cs` | `CardShapeTests` | `card_shape` の正規化（未設定・不正値は `portrait`）と保存キー、サムネイルの高さ（3:4 / 1:1） |
 | `TestHelpers.cs` | `FakeClock` `FakeFileSystem` `TempDir` | テスト用の部品（新しいテストはまずこれを使う） |
 
 ## 7. 守ること・落とし穴
 
-- **ファイルの削除・移動・上書きをしない**（自分のデータファイルを除く）。ドラッグも Copy | Link のみ。
+- **ファイルを完全に削除しない・移動しない・上書きしない**（自分のデータファイルを除く）。消すのは右クリックの「削除（ごみ箱へ移動）」だけで、確認ダイアログのあと `RecycleBin` でごみ箱へ移す（ごみ箱に入らない項目は中止）。ドラッグも Copy | Link のみ。
 - **UI スレッドで待たない**（[§4](#4-スレッドと非同期の規約)）。シェル呼び出しは必ず STA ワーカー経由でタイムアウトをつける。
 - パスの比較は `PathTools.PathEquals` / `PathSet`（大文字小文字を区別せず正規化）。`==` で比べない。長いパスをシェルに渡すときは `PathTools.ForShell`。
 - `SettingsStore.Current` を書き換えても保存されない（コピーのため）。`Update` を使う。
@@ -321,18 +329,18 @@ App
 - シェルが返すビットマップの上下と非乗算アルファの扱いは `ShellInterop` に閉じている（README「実装メモ」）。安易に反転しない。
 - `tools/dev.ps1` は UTF-8（BOM 付き）、BAT は ASCII のみ。
 - コード中のコメントは英語、UI 文言は日本語の直書き。
-- コメントの記号：`§n.n` = SPEC の節、`R1`〜 = SPEC §20 のリスク、`P0` / `P1` / `P2` = 優先度、`AC-nn` = SPEC §18 の受け入れ基準。
+- コメントの記号：`§n.n` = 旧仕様書の節、`R1`〜 = 旧仕様書 §20 のリスク、`P0` / `P1` / `P2` = 優先度、`AC-nn` = 旧仕様書 §18 の受け入れ基準。旧仕様書は削除済みで、読むときは [§0](#0-このドキュメントの位置づけ) の `git show` を使う。
 
 ## 8. 調べ方のショートカット
 
 | 知りたいこと | 方法 |
 |---|---|
-| 仕様の節に対応するコード | `rg "§9\.6" src` |
+| 旧仕様書の節に対応するコード | `rg "§9\.6" src` |
 | 画面の文言を出しているコード | UI 文言は直書きなので文言で検索（例：`rg "並び順を「手動」" src`） |
 | 大きいファイルの節の位置 | `rg -n "// ----" src/FolderDeck.App/Views/CascadeController.cs` |
 | 型・メンバーの定義 | `rg -n "class TabViewModel\|LoadRecentAsync" src` |
 | 実行時の挙動・異常終了 | `%LOCALAPPDATA%\FolderDeck\logs\app.log`、`tools\analyze-log.ps1 -Events` |
-| SPEC のどの節を読むか | [_topics.yml](_topics.yml) の `SPEC_20261121_native_folder_app` の `sections` |
+| 旧仕様書の節の中身 | `git show 1122384:dev/docs/SPEC_20261121_native_folder_app.md` を出して `§9.6` などで検索（削除済みのため） |
 
 ## 9. 本書の更新ルール
 

@@ -3,7 +3,8 @@
 # 使い方
 #   1. まず topics の summary / read_when を見て、読む文書を選ぶ。
 #   2. sections（目次）で必要な節を選び、その節だけ読む（文書を通読しない）。
-#      SPEC の id は節番号（§n.n）で、コードコメントの「§9.6」などと一致する。
+#   3. コードコメントの「§9.6」などは、削除済みの旧仕様書（SPEC_20261121_native_folder_app.md）の節番号。
+#      根拠を確かめるときだけ `git show 1122384:dev/docs/SPEC_20261121_native_folder_app.md` で読む。
 #      コードの対応箇所は `rg "§9\.6" src` で引ける。
 #
 # 同期ルール
@@ -27,7 +28,7 @@ topics:
     sections:
       - id: "0"
         heading: このドキュメントの位置づけ
-        about: 本書・README・SPEC の役割分担と読み分け
+        about: 本書と README の役割分担、旧仕様書（削除済み）の読み方
       - id: "1"
         heading: 全体像
         about: 技術スタック、プロジェクトの依存方向、大きいファイル
@@ -39,7 +40,7 @@ topics:
         heading: ファイルマップ
         about: ファイルごとの責務の一覧
         children:
-          - { id: "2.1", heading: Core, about: Infrastructure / Listing / Ordering / Paths / Ranking / Stores / Text / Transfer }
+          - { id: "2.1", heading: Core, about: Infrastructure / Layout / Listing / Ordering / Paths / Ranking / Stores / Text / Transfer }
           - { id: "2.2", heading: App, about: Services / Shell / ViewModels / Views / Themes }
           - { id: "2.3", heading: その他, about: tools と BAT（文字コードの注意） }
       - id: "3"
@@ -50,8 +51,8 @@ topics:
           - { id: "3.2", heading: カードの段階読み込み, about: Realize / Unrealize、DetailGate、ThumbnailService }
           - { id: "3.3", heading: カスケード（CascadeController、§9）, about: オーバーレイ・フライアウト・タイマー・開閉の判断 }
           - { id: "3.4", heading: プレビュー, about: PreviewTextCache → Office / テキスト抜粋 → サムネイル }
-          - { id: "3.5", heading: 開く・移動する, about: OpenFileAsync、利用記録、右クリックの操作 }
-          - { id: "3.6", heading: 並べ替え・ピン留め, about: SetSortMode、MoveCard、ApplyPins、PlaceInBase }
+          - { id: "3.5", heading: 開く・移動する, about: OpenFileAsync、利用記録、右クリックの操作、ごみ箱への削除（DeleteAsync / RecycleBin） }
+          - { id: "3.6", heading: 並べ替え・ピン留め, about: SetSortMode、MoveCard、ApplyPins、PlaceInBase、📌 のクリック、カードの形 }
           - { id: "3.7", heading: 他アプリへのドラッグ, about: FileDragOut、BeginDrag / EndDrag、Copy | Link のみ }
           - { id: "3.8", heading: 永続化, about: StoreBase の保存予約、原子的書き込み、壊れたファイルの退避 }
           - { id: "3.9", heading: テーマ, about: ThemeManager と Light / Dark の差し替え }
@@ -66,139 +67,10 @@ topics:
         about: 関連テストだけ流すコマンド、テストファイルと対象の対応表
       - id: "7"
         heading: 守ること・落とし穴
-        about: 削除・移動をしない、パス比較、設定のコピー、コメント記号（§ / R / P / AC）
+        about: 削除はごみ箱へだけ（完全削除・移動・上書きをしない）、パス比較、設定のコピー、コメント記号（§ / R / P / AC）
       - id: "8"
         heading: 調べ方のショートカット
         about: rg での引き方、ログの見方
       - id: "9"
         heading: 本書の更新ルール
         about: どの変更で本書と目録を更新するか
-
-  - id: spec_native_folder_app
-    file: SPEC_20261121_native_folder_app.md
-    title: FolderDeck（仮称）仕様書：登録フォルダ機能の Windows ネイティブアプリ化
-    summary: 最初の実装の元になった仕様（要件・画面・カスケード・データ形式・非機能要件・受け入れ基準）。コードコメントの §番号の出典
-    tags: [spec, requirements, acceptance-criteria, ui, data-format]
-    status: 作成時点の仕様（後から追加した機能と仕様からの判断は README が正）
-    updated: 2026-11-21
-    read_when: 挙動の根拠（§番号）を確かめるとき。受け入れ基準・非機能要件を確かめるとき
-    not_covered: >-
-      後から追加した機能は載っていない：タブごとの並べ替え（sort_modes）、ドラッグでの並べ替え（card_order.json）、
-      他アプリへのドラッグ、PowerPoint / Word / Excel / テキストのプレビュー、エクスプローラーの新しいタブで開く。
-      これらは README の該当節と実装を正とする。
-    sections:
-      - { id: "0", heading: この文書の読み方, about: 決まりの強さ（必須 / 推奨 / 任意）、優先度 P0〜P2、未確認の扱い、報告の形式 }
-      - { id: "1", heading: 目的と背景, about: imgtool の登録フォルダタブをネイティブアプリにする理由 }
-      - { id: "2", heading: 用語, about: カード、オーバーレイ、フライアウト、カスケードなどの定義 }
-      - { id: "3", heading: スコープ, about: 作るもの（3.1）と作らないもの（3.2） }
-      - id: "4"
-        heading: 技術スタックとプロジェクト構成
-        about: WPF + .NET 10 とソリューション構成
-        children:
-          - { id: "4.1", heading: 技術スタック }
-          - { id: "4.2", heading: プロジェクト構成 }
-          - { id: "4.3", heading: アプリのマニフェスト }
-          - { id: "4.4", heading: 単一インスタンス }
-          - { id: "4.5", heading: 配布 }
-      - id: "5"
-        heading: 画面構成
-        about: ウィンドウのレイアウトと記憶する状態
-        children:
-          - { id: "5.1", heading: レイアウト }
-          - { id: "5.2", heading: タブ }
-          - { id: "5.3", heading: ツールバー }
-          - { id: "5.4", heading: メッセージ行 }
-          - { id: "5.5", heading: 記憶する状態, about: ウィンドウ位置、各タブの現在地 }
-      - id: "6"
-        heading: カード（全タブ共通）
-        about: グリッドとカード 1 枚の見た目・動作
-        children:
-          - { id: "6.1", heading: グリッド, about: 列数と幅の式 }
-          - { id: "6.2", heading: カードの構成 }
-          - { id: "6.3", heading: カードの種類, about: 確認中・見つからない・応答なし }
-          - { id: "6.4", heading: サムネイル, about: カバー画像の探索、シェルのサムネイル }
-          - { id: "6.5", heading: 件数バッジ }
-          - { id: "6.6", heading: ホバー時の見た目 }
-          - { id: "6.7", heading: × ボタン }
-          - { id: "6.8", heading: クリック動作 }
-          - { id: "6.9", heading: カードサイズ }
-      - id: "7"
-        heading: フォルダ内容の列挙規則（全機能共通）
-        about: 並び・フィルタ・非同期・遅いドライブ・長いパス
-        children:
-          - { id: "7.1", heading: 並べ方 }
-          - { id: "7.2", heading: フィルタ, about: 隠し・システム属性 }
-          - { id: "7.3", heading: 種類の判定 }
-          - { id: "7.4", heading: 非同期処理とキャッシュ, about: "7.4.1 段階的な読み込みを含む" }
-          - { id: "7.5", heading: 遅いドライブやエラー }
-          - { id: "7.6", heading: 長いパス }
-      - id: "8"
-        heading: ナビゲーション
-        about: 現在地の表し方、操作、移動の履歴、移動先がなくなっていたとき
-        children:
-          - { id: "8.1", heading: 現在地の表し方 }
-          - { id: "8.2", heading: 操作 }
-          - { id: "8.3", heading: 移動の履歴 }
-          - { id: "8.4", heading: 移動先がなくなっていたとき }
-      - id: "9"
-        heading: ホバー一覧とカスケード（新規・最重要）
-        about: オーバーレイ・フライアウトの表示・配置・開閉タイミング・キーボード
-        children:
-          - { id: "9.1", heading: 全体像 }
-          - { id: "9.2", heading: 第1階層：オーバーレイ }
-          - { id: "9.3", heading: 第2階層以降：フライアウト }
-          - { id: "9.4", heading: 一覧の行 }
-          - { id: "9.5", heading: フライアウトの配置 }
-          - { id: "9.6", heading: 開閉のタイミング（ホバーインテント）, about: 規則 1〜8 とタイマー }
-          - { id: "9.7", heading: クリック }
-          - { id: "9.8", heading: 状態の表示 }
-          - { id: "9.9", heading: キーボード操作 }
-      - id: "10"
-        heading: タブごとの仕様
-        children:
-          - { id: "10.1", heading: 登録フォルダ, about: 登録・解除・存在確認・ドロップでの登録 }
-          - { id: "10.2", heading: 最近の履歴, about: Windows の最近使った項目との統合、除外、クリア }
-          - { id: "10.3", heading: よく使う項目, about: スコアとピン留め }
-          - { id: "10.4", heading: 利用記録, about: 何を「使った」と数えるか }
-      - { id: "11", heading: 右クリックメニュー }
-      - id: "12"
-        heading: ファイルを開く・安全策
-        children:
-          - { id: "12.1", heading: 開く処理 }
-          - { id: "12.2", heading: 実行形式の確認 }
-      - id: "13"
-        heading: データの保存
-        about: 保存場所・JSON 形式・書き込み方式
-        children:
-          - { id: "13.1", heading: 保存場所 }
-          - { id: "13.2", heading: 形式, about: 各ファイルの JSON の形 }
-          - { id: "13.3", heading: 書き込み方式 }
-          - { id: "13.4", heading: imgtool からの取り込み, about: 実装後に削除済み（README の設定節） }
-      - { id: "14", heading: 設定ダイアログ }
-      - id: "15"
-        heading: テーマと見た目
-        children:
-          - { id: "15.1", heading: ライトとダーク }
-          - { id: "15.2", heading: 色, about: 元アプリの CSS トークン }
-      - { id: "16", heading: 非機能要件, about: UI スレッドを 50ms 以上止めない、起動 1.5 秒、メモリ、耐障害性、ログ、対応 OS }
-      - { id: "17", heading: 実装フェーズ, about: Phase 1〜4 と完了条件 }
-      - id: "18"
-        heading: 受け入れ基準
-        about: AC-nn（コードコメントの AC 番号）
-        children:
-          - { id: "18.1", heading: 登録フォルダとカード（Phase 1） }
-          - { id: "18.2", heading: オーバーレイとカスケード（Phase 2） }
-          - { id: "18.3", heading: 最近の履歴とよく使う項目（Phase 3） }
-          - { id: "18.4", heading: 共通・非機能 }
-          - { id: "18.5", heading: 仕上げ（Phase 4） }
-      - id: "19"
-        heading: ビルド・テスト・検証の手順
-        children:
-          - { id: "19.1", heading: 前提となる環境 }
-          - { id: "19.2", heading: コマンド }
-          - { id: "19.3", heading: 検証用のフォルダツリー, about: tools/make-fixture.ps1 }
-          - { id: "19.4", heading: ユニットテスト }
-          - { id: "19.5", heading: GUI の検証 }
-      - { id: "20", heading: 未確認事項とリスク, about: R1〜（コードコメントの R 番号） }
-      - { id: A, heading: 付録A　元アプリ（imgtool）のコードとの対応表 }
-      - { id: B, heading: 付録B　元アプリからの変更点 }
