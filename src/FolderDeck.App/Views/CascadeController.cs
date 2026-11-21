@@ -46,6 +46,21 @@ public sealed class CascadeController
     private readonly PreviewTextCache _previewTexts = new();
 
     private CardView? _card;
+
+    /// <summary>
+    /// The sidebar row the cascade was (or is about to be) opened from, and its 登録フォルダ. Then
+    /// level 0 is a flyout beside that row (not an overlay on a card) and folders open in a folder
+    /// tab of their own. Never set together with <see cref="_card"/>.
+    /// </summary>
+    private FrameworkElement? _anchor;
+    private SidebarItemViewModel? _anchorItem;
+
+    /// <summary>
+    /// Another sidebar row the pointer is on while a list is open: the cascade moves there only when
+    /// the pointer rests on it (it may just be crossing the row on its way to the list).
+    /// </summary>
+    private FrameworkElement? _pendingAnchor;
+    private SidebarItemViewModel? _pendingAnchorItem;
     private CardViewModel? _waitingFor;
     private PendingOpen? _pendingOpen;
     private PendingPreview? _pendingPreview;
@@ -168,6 +183,67 @@ public sealed class CascadeController
         }
     }
 
+    // ---- sidebar events -----------------------------------------------------------------------
+
+    /// <summary>
+    /// The pointer entered a 登録フォルダ row of the sidebar: resting there opens the folder's list
+    /// beside the row (the same hover intent as a card's overlay).
+    /// </summary>
+    public void SidebarMouseEnter(FrameworkElement row, SidebarItemViewModel item)
+    {
+        _exitTimer.Stop();
+        if (_suspended || !_window.IsActive)
+        {
+            return; // dragging; rule 7: nothing opens over an inactive window
+        }
+
+        if (ReferenceEquals(row, _anchor))
+        {
+            // Back on the row the list belongs to: it stays (a switch that was pending is off).
+            if (_pendingAnchor is not null)
+            {
+                _pendingAnchor = null;
+                _pendingAnchorItem = null;
+                _overlayTimer.Stop();
+            }
+        }
+        else if (_anchor is not null && _levels.Count > 0)
+        {
+            // Another row while a list is open: the rows are stacked, so the pointer crosses the
+            // neighbours on its way to the list. Switch only when it rests here.
+            _pendingAnchor = row;
+            _pendingAnchorItem = item;
+            Restart(_overlayTimer);
+            return;
+        }
+        else
+        {
+            CloseAll(); // rule 4
+            _anchor = row;
+            _anchorItem = item;
+        }
+
+        if (_levels.Count == 0 && !item.IsDisabled)
+        {
+            Restart(_overlayTimer);
+        }
+    }
+
+    public void SidebarMouseLeave(FrameworkElement row)
+    {
+        if (ReferenceEquals(row, _pendingAnchor))
+        {
+            _pendingAnchor = null;
+            _pendingAnchorItem = null;
+            _overlayTimer.Stop();
+            Restart(_exitTimer);
+        }
+        else if (ReferenceEquals(row, _anchor))
+        {
+            Restart(_exitTimer);
+        }
+    }
+
     // ---- closing ------------------------------------------------------------------------------
 
     /// <summary>
@@ -189,7 +265,14 @@ public sealed class CascadeController
             vm.IsHoverHeld = false;
         }
 
+        if (_anchorItem is { } item)
+        {
+            item.IsHoverHeld = false;
+        }
+
         _card = null;
+        _anchor = null;
+        _anchorItem = null;
         _generation++;
     }
 
@@ -204,6 +287,8 @@ public sealed class CascadeController
         _previewCloseTimer.Stop();
         _pendingOpen = null;
         _pendingPreview = null;
+        _pendingAnchor = null;
+        _pendingAnchorItem = null;
         _graceLevel = -1;
         StopWaiting();
     }
@@ -263,6 +348,11 @@ public sealed class CascadeController
                     cvm.IsHoverHeld = false;
                 }
             }
+
+            if (i == 0 && level.Flyout is not null && _anchorItem is { } anchorItem)
+            {
+                anchorItem.IsHoverHeld = false; // the list beside a sidebar row closed
+            }
         }
 
         if (index > 0 && index - 1 < _levels.Count)
@@ -293,6 +383,37 @@ public sealed class CascadeController
     private void OnOverlayTimer()
     {
         _overlayTimer.Stop();
+        if (_pendingAnchor is { } pending && _pendingAnchorItem is { } pendingItem)
+        {
+            // The pointer rested on another sidebar row: the cascade moves there.
+            _pendingAnchor = null;
+            _pendingAnchorItem = null;
+            if (_suspended || !_window.IsActive || !pending.IsMouseOver)
+            {
+                return;
+            }
+
+            CloseAll();
+            _anchor = pending;
+            _anchorItem = pendingItem;
+            if (!pendingItem.IsDisabled)
+            {
+                OpenRoot(pending, pendingItem);
+            }
+
+            return;
+        }
+
+        if (_anchor is { } anchor && _anchorItem is { } item)
+        {
+            if (!_suspended && _levels.Count == 0 && _window.IsActive && anchor.IsMouseOver && !item.IsDisabled)
+            {
+                OpenRoot(anchor, item);
+            }
+
+            return;
+        }
+
         var card = _card;
         var vm = card?.ViewModel;
         if (card is null || vm is null || _suspended || _levels.Count > 0 || !_window.IsActive || !card.IsMouseOver)
@@ -395,7 +516,8 @@ public sealed class CascadeController
     {
         level.List.RowHovered += (_, row, _) => OnRowHovered(level, row);
         level.List.RowClicked += (_, row) => OnRowClicked(row);
-        level.List.RowContextMenu += (_, row, element) => _menus.Show(row.ToItemRef(), element);
+        level.List.RowContextMenu += (_, row, element) => _menus.Show(ItemOf(row), element);
+        level.List.RowExplorerRequested += (_, row) => OnRowExplorer(row);
         level.List.RowDragRequested += (_, row) => DragOut(row, "row");
 
         // Anything opened from this list is anchored to a row that just moved.
@@ -411,7 +533,7 @@ public sealed class CascadeController
             flyout.MouseEnter += (_, _) => OnFlyoutEnter(level);
             flyout.MouseLeave += (_, _) => Restart(_exitTimer);
             flyout.HeaderClicked += _ => OnHeaderClicked(level);
-            flyout.HeaderContextMenu += _ => _menus.Show(new ItemRef(level.Model.Path, true, level.Model.Location, ItemContext.FlyoutHeader), flyout.HeaderElement);
+            flyout.HeaderContextMenu += _ => _menus.Show(HeaderOf(level), flyout.HeaderElement);
             flyout.CardElement.SizeChanged += (_, _) => Position(level, reveal: false);
         }
     }
@@ -451,6 +573,14 @@ public sealed class CascadeController
     private void OnFlyoutEnter(Level level)
     {
         _exitTimer.Stop();
+        if (_pendingAnchor is not null)
+        {
+            // Reached the list: the sidebar row crossed on the way does not take the cascade.
+            _pendingAnchor = null;
+            _pendingAnchorItem = null;
+            _overlayTimer.Stop();
+        }
+
         if (_graceTimer.IsEnabled && _graceLevel < level.Index)
         {
             StopGrace(); // reached the child: keep it open
@@ -534,7 +664,7 @@ public sealed class CascadeController
 
     private bool IsPointerInside()
     {
-        if (_card?.IsMouseOver == true)
+        if (_card?.IsMouseOver == true || _anchor?.IsMouseOver == true)
         {
             return true;
         }
@@ -573,17 +703,31 @@ public sealed class CascadeController
 
     private void OnRowClicked(EntryRowViewModel row)
     {
-        var item = row.ToItemRef();
+        var item = ItemOf(row);
         CloseAll();
         _ = _vm.OpenItemAsync(item);
     }
 
     private void OnHeaderClicked(Level level)
     {
-        var item = new ItemRef(level.Model.Path, true, level.Model.Location, ItemContext.FlyoutHeader);
+        var item = HeaderOf(level);
         CloseAll();
         _ = _vm.OpenItemAsync(item);
     }
+
+    /// <summary>Right button held + left click on a row, then released: the row is shown in Explorer.</summary>
+    private void OnRowExplorer(EntryRowViewModel row)
+    {
+        var item = ItemOf(row);
+        CloseAll();
+        _ = _vm.ShowInExplorerAsync(item);
+    }
+
+    /// <summary>A row as an item. In the cascade of a sidebar row, folders open in a folder tab of their own.</summary>
+    private ItemRef ItemOf(EntryRowViewModel row) => row.ToItemRef() with { NewTab = _anchor is not null };
+
+    private ItemRef HeaderOf(Level level) =>
+        new(level.Model.Path, true, level.Model.Location, ItemContext.FlyoutHeader) { NewTab = _anchor is not null };
 
     // ---- dragging out to other apps -----------------------------------------------------------
 
@@ -622,9 +766,34 @@ public sealed class CascadeController
 
         Rect rowRect = ScreenRect(container);
         Rect anchor = parent.Flyout is { } pf ? ScreenRect(pf.CardElement) : ScreenRect(parent.Card!);
+        bool preferLeft = parent.Flyout is not null && parent.DirectionLeft; // keep going left once we went left
+        OpenFlyout(parent.Index + 1, row.Path, row.Target, rowRect, anchor, preferLeft, row);
+        parent.ActiveRow = row;
+        row.IsActive = true;
+    }
+
+    /// <summary>
+    /// Level 0 of a cascade opened from the sidebar: the list of a 登録フォルダ, in a flyout beside
+    /// its row (the row is both the "row" and the "parent card" of the placement).
+    /// </summary>
+    private void OpenRoot(FrameworkElement anchor, SidebarItemViewModel item)
+    {
+        if (!anchor.IsVisible)
+        {
+            return;
+        }
+
+        Rect rowRect = ScreenRect(anchor);
+        OpenFlyout(0, item.Path, item.Target, rowRect, rowRect, preferLeft: false, parentRow: null);
+        item.IsHoverHeld = true;
+    }
+
+    /// <summary>Opens the flyout of level <paramref name="index"/> next to <paramref name="anchor"/>, at the height of <paramref name="rowRect"/>.</summary>
+    private void OpenFlyout(int index, string path, NavLocation target, Rect rowRect, Rect anchor, bool preferLeft, EntryRowViewModel? parentRow)
+    {
         var monitor = ShellInterop.GetMonitorArea(new Point(rowRect.Left + (rowRect.Width / 2), rowRect.Top + (rowRect.Height / 2)));
 
-        var model = new EntryListViewModel(row.Path, row.Target, _services.Icons);
+        var model = new EntryListViewModel(path, target, _services.Icons);
         var view = new FlyoutView { DataContext = model };
         view.CardMaxHeight = Math.Max(120, (monitor.Work.Height / monitor.Scale) - WorkMargin);
         var popup = new Popup
@@ -637,18 +806,16 @@ public sealed class CascadeController
             Child = view,
         };
 
-        var level = new Level(parent.Index + 1, model, view.List)
+        var level = new Level(index, model, view.List)
         {
             Flyout = view,
             Popup = popup,
-            ParentRow = row,
+            ParentRow = parentRow,
             RowRect = rowRect,
             AnchorRect = anchor,
-            PreferLeft = parent.Index > 0 && parent.DirectionLeft, // keep going left once we went left
+            PreferLeft = preferLeft,
         };
         _levels.Add(level);
-        parent.ActiveRow = row;
-        row.IsActive = true;
         Wire(level);
 
         // Rough position first (main window DPI), exact position once the popup has a size.
@@ -931,7 +1098,7 @@ public sealed class CascadeController
         {
             RowRect = rowRect,
             AnchorRect = anchor,
-            PreferLeft = parent.Index > 0 && parent.DirectionLeft,
+            PreferLeft = parent.Flyout is not null && parent.DirectionLeft,
 
             // Nothing of its own to show (audio, video, PDF…), only maybe a shell thumbnail: it
             // appears once a picture has come, and without one nothing appears at all.

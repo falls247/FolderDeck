@@ -19,6 +19,12 @@ public static class FileDrag
     public const string ReorderFormat = "FolderDeck.CardReorder";
 
     /// <summary>
+    /// Private format of a 登録フォルダ row of the sidebar: dropped back on the sidebar it changes the
+    /// row's position (the same drag carries the file drop for other apps when the folder exists).
+    /// </summary>
+    public const string SidebarReorderFormat = "FolderDeck.SidebarReorder";
+
+    /// <summary>
     /// Only real file system paths are dragged (<c>E:\…</c>, <c>\\server\share\…</c>); anything
     /// else would mean nothing to the app that receives it.
     /// </summary>
@@ -51,7 +57,7 @@ public static class FileDrag
     /// drag is never a folder registration, even when it is dropped back onto the window.
     /// </summary>
     public static bool IsFromThisApp(Func<string, bool> hasFormat) =>
-        hasFormat(SourceFormat) || hasFormat(ReorderFormat);
+        hasFormat(SourceFormat) || hasFormat(ReorderFormat) || hasFormat(SidebarReorderFormat);
 
     /// <summary>
     /// The pointer moved, with the button held, further than the system drag distance

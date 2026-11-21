@@ -1,0 +1,59 @@
+<UserControl x:Class="FolderDeck.Views.SidebarView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:FolderDeck.ViewModels"
+             Focusable="False" AllowDrop="True" Background="Transparent">
+    <!-- 登録フォルダ: one row per folder (name only). Resting on a row opens the cascade beside it,
+         a click opens the folder in a new tab, a drag moves the row (or hands the folder to another app). -->
+    <Grid>
+        <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <ItemsControl x:Name="Rows" ItemsSource="{Binding Registered}" Focusable="False" Margin="6,2,6,8">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type vm:SidebarItemViewModel}">
+                        <Border x:Name="Row" Height="30" CornerRadius="6" Padding="8,0,6,0" Background="Transparent" Cursor="Hand"
+                                ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="900" ToolTipService.Placement="Mouse"
+                                MouseEnter="OnRowEnter" MouseLeave="OnRowLeave" MouseMove="OnRowMove"
+                                MouseLeftButtonDown="OnRowLeftDown" MouseLeftButtonUp="OnRowLeftUp"
+                                MouseRightButtonUp="OnRowRightUp" LostMouseCapture="OnRowLostCapture">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="24" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Image Source="{Binding Icon}" Width="16" Height="16" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                       RenderOptions.BitmapScalingMode="HighQuality" />
+                                <TextBlock x:Name="NameText" Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center" />
+                                <TextBlock x:Name="Warn" Grid.Column="2" Text="&#xE7BA;" FontFamily="{StaticResource Font.Icons}" FontSize="12"
+                                           Margin="6,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Warn}"
+                                           Visibility="Collapsed" />
+                            </Grid>
+                        </Border>
+                        <DataTemplate.Triggers>
+                            <Trigger SourceName="Row" Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource Brush.Surface3}" />
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsHoverHeld}" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource Brush.FolderSoft}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsDisabled}" Value="True">
+                                <Setter TargetName="Warn" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="NameText" Property="Foreground" Value="{DynamicResource Brush.Muted}" />
+                                <Setter TargetName="NameText" Property="TextDecorations" Value="Strikethrough" />
+                                <Setter TargetName="Row" Property="Cursor" Value="Arrow" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsDragged}" Value="True">
+                                <Setter TargetName="Row" Property="Opacity" Value="0.4" />
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <!-- where a dragged row lands -->
+        <Border x:Name="DropLine" Height="2" CornerRadius="1" Margin="8,0" VerticalAlignment="Top" Background="{DynamicResource Brush.Accent}"
+                Visibility="Collapsed" IsHitTestVisible="False" />
+    </Grid>
+</UserControl>

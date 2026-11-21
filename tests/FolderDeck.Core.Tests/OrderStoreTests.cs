@@ -190,10 +190,13 @@ public class SortModeSettingsTests
         store.Load();
         var s = store.Current;
         Assert.Equal(LoadStatus.Loaded, store.LoadStatus);
-        Assert.Equal("name_desc", s.SortModes![AppSettings.TabRegistered]);
+
+        // "registered" (the former 登録フォルダ tab) is carried over to the folder tabs.
+        Assert.Equal("name_desc", s.SortModes![AppSettings.TabFolder]);
+        Assert.False(s.SortModes.ContainsKey("registered"));
         Assert.Equal("manual", s.SortModes[AppSettings.TabRecent]);
         Assert.Equal("manual", s.SortModes[AppSettings.TabFrequent]);
-        Assert.Equal(CardSortMode.NameDesc, s.SortModeOf(AppSettings.TabRegistered));
+        Assert.Equal(CardSortMode.NameDesc, s.SortModeOf(AppSettings.TabFolder));
 
         var missing = new AppSettings { SortModes = null };
         missing.Normalize();
@@ -209,20 +212,20 @@ public class SortModeSettingsTests
         store.Load();
         store.Update(s =>
         {
-            s.SetSortMode(AppSettings.TabRegistered, CardSortMode.ModifiedDesc);
+            s.SetSortMode(AppSettings.TabFolder, CardSortMode.ModifiedDesc);
             s.SetSortMode(AppSettings.TabFrequent, CardSortMode.NameAsc);
         });
         store.Flush();
 
         string text = File.ReadAllText(file);
         Assert.Contains("\"sort_modes\"", text);
-        Assert.Contains("\"registered\": \"modified_desc\"", text);
+        Assert.Contains("\"folder\": \"modified_desc\"", text);
         Assert.Contains("\"frequent\": \"name_asc\"", text);
 
         var reloaded = new SettingsStore(file, FakeClock.Fixed());
         reloaded.Load();
         var s = reloaded.Current;
-        Assert.Equal(CardSortMode.ModifiedDesc, s.SortModeOf(AppSettings.TabRegistered));
+        Assert.Equal(CardSortMode.ModifiedDesc, s.SortModeOf(AppSettings.TabFolder));
         Assert.Equal(CardSortMode.Manual, s.SortModeOf(AppSettings.TabRecent));
         Assert.Equal(CardSortMode.NameAsc, s.SortModeOf(AppSettings.TabFrequent));
     }

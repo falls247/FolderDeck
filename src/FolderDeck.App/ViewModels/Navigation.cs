@@ -2,14 +2,20 @@ namespace FolderDeck.ViewModels;
 
 public enum TabKind
 {
-    Registered,
+    /// <summary>最近の履歴 (fixed tab).</summary>
     Recent,
+
+    /// <summary>よく使う項目 (fixed tab).</summary>
     Frequent,
+
+    /// <summary>A folder tab: opened from the 登録フォルダ sidebar, any number of them, closable and movable.</summary>
+    Folder,
 }
 
 /// <summary>
-/// Where a tab is (§8.1): the tab, its root item (registration id for 登録フォルダ, normalized path
-/// otherwise; "" = the tab's top level) and the relative path below that root ("" = the root).
+/// Where a tab is (§8.1): the kind of tab, its root item (a normalized path; "" = the top level of
+/// 最近の履歴 / よく使う項目, a folder tab always has a root) and the relative path below that root
+/// ("" = the root).
 /// </summary>
 public sealed record NavLocation(TabKind Tab, string Root, string Rel)
 {
@@ -26,15 +32,24 @@ public enum ItemContext
     InnerCard,
     Row,
     FlyoutHeader,
+
+    /// <summary>A 登録フォルダ row of the sidebar.</summary>
+    Sidebar,
 }
 
 /// <summary>
 /// Anything the user can open, navigate to or right-click: a card, an overlay/flyout row, a
-/// flyout header. <see cref="Target"/> is where a folder leads inside the app.
+/// flyout header, a sidebar row. <see cref="Target"/> is where a folder leads inside the app.
 /// </summary>
 public sealed record ItemRef(string Path, bool IsFolder, NavLocation? Target, ItemContext Context, CardViewModel? Card = null)
 {
     public string Name => FolderDeck.Core.Paths.PathTools.DisplayName(Path);
+
+    /// <summary>
+    /// A folder that opens in a folder tab of its own rather than in the shown tab: a sidebar row
+    /// and everything in the cascade opened from it.
+    /// </summary>
+    public bool NewTab { get; init; }
 }
 
 public sealed class BreadcrumbItem
@@ -62,24 +77,26 @@ public sealed class BreadcrumbItem
 
 public static class TabKinds
 {
+    /// <summary>Title of a fixed tab (a folder tab shows the name of its folder).</summary>
     public static string Title(TabKind kind) => kind switch
     {
-        TabKind.Registered => "登録フォルダ",
         TabKind.Recent => "最近の履歴",
-        _ => "よく使う項目",
+        TabKind.Frequent => "よく使う項目",
+        _ => "フォルダ",
     };
 
+    /// <summary>Key in settings.json (sort mode, filter, location, last tab). Every folder tab shares one.</summary>
     public static string ToSetting(TabKind kind) => kind switch
     {
-        TabKind.Registered => Core.Stores.AppSettings.TabRegistered,
         TabKind.Recent => Core.Stores.AppSettings.TabRecent,
-        _ => Core.Stores.AppSettings.TabFrequent,
+        TabKind.Frequent => Core.Stores.AppSettings.TabFrequent,
+        _ => Core.Stores.AppSettings.TabFolder,
     };
 
     public static TabKind FromSetting(string? value) => value switch
     {
-        Core.Stores.AppSettings.TabRecent => TabKind.Recent,
         Core.Stores.AppSettings.TabFrequent => TabKind.Frequent,
-        _ => TabKind.Registered,
+        Core.Stores.AppSettings.TabFolder => TabKind.Folder,
+        _ => TabKind.Recent,
     };
 }

@@ -14,6 +14,9 @@ namespace FolderDeck.Views;
 
 public partial class MainWindow : Window, IMainView, ICardHost
 {
+    /// <summary>Check mark of the selected menu item (Segoe Fluent Icons).</summary>
+    private const string CheckGlyph = "";
+
     private readonly MainViewModel _vm;
     private readonly ThemeManager _theme;
     private readonly CascadeController _cascade;
@@ -30,8 +33,20 @@ public partial class MainWindow : Window, IMainView, ICardHost
         vm.View = this;
         CardView.Host = this;
 
+        // The stores are loaded before the window is created: the sidebar opens at its saved width.
+        SidebarColumn.Width = new GridLength(AppSettings.ClampSidebarWidth(vm.Services.Stores.Settings.Current.SidebarWidth));
+
         Grid.Scrolled += (_, _) => _cascade.CloseAll();
         Grid.CardSizeStepRequested += step => vm.StepCardSize(step);
+
+        Sidebar.ItemEntered += (row, item) => _cascade.SidebarMouseEnter(row, item);
+        Sidebar.ItemLeft += row => _cascade.SidebarMouseLeave(row);
+        Sidebar.ItemClicked += OnSidebarClicked;
+        Sidebar.ItemContextMenu += (item, row) => _menus.Show(item.ToItemRef(), row);
+        Sidebar.ItemExplorerRequested += OnSidebarExplorer;
+        Sidebar.ItemDragRequested += OnSidebarDrag;
+        Sidebar.Scrolled += () => _cascade.CloseAll();
+        TabStrip.Interacted += () => _cascade.CloseAll();
 
         // §9.6 rule 5: these close every flyout at once (Popups are topmost windows).
         Deactivated += (_, _) => _cascade.CloseAll();
@@ -149,6 +164,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 e.Handled = true;
                 _vm.GoUpCommand.Execute(null);
                 break;
+            case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.SelectedTab.IsFolderTab:
+                e.Handled = true; // like Explorer: closes the shown folder tab
+                _vm.CloseTabCommand.Execute(_vm.SelectedTab);
+                break;
             case Key.Left when Keyboard.Modifiers == ModifierKeys.Alt:
             case Key.BrowserBack:
                 e.Handled = true;
@@ -186,6 +205,41 @@ public partial class MainWindow : Window, IMainView, ICardHost
     }
 
     private void OnHideMessage(object sender, RoutedEventArgs e) => _vm.Message.Hide();
+
+    // The popups of the cascade are placed in screen coordinates: they close before the sidebar moves.
+    private void OnSplitterDragStarted(object sender, DragStartedEventArgs e) => _cascade.CloseAll();
+
+    private void OnSplitterDragCompleted(object sender, DragCompletedEventArgs e) => _vm.SidebarWidth = SidebarColumn.ActualWidth;
+
+    /// <summary>
+    /// Toolbar filter button (top level of 最近の履歴 / よく使う項目): everything, folders only or
+    /// files only, the current one checked.
+    /// </summary>
+    private void OnFilterClick(object sender, RoutedEventArgs e)
+    {
+        _cascade.CloseAll();
+        var current = _vm.SelectedTab.Filter;
+        var menu = new ContextMenu
+        {
+            PlacementTarget = (UIElement)sender,
+            Placement = PlacementMode.Bottom,
+        };
+        foreach (var filter in ItemFilters.Values)
+        {
+            bool selected = filter == current;
+            var item = new MenuItem
+            {
+                Header = FilterLabels.Long(filter),
+                Tag = selected ? CheckGlyph : string.Empty, // the menu style draws Tag as a glyph
+                IsCheckable = true,
+                IsChecked = selected,
+            };
+            item.Click += (_, _) => _vm.SetFilter(filter);
+            menu.Items.Add(item);
+        }
+
+        menu.IsOpen = true;
+    }
 
     /// <summary>
     /// Toolbar sort button: a menu of the five modes, the current one checked, and on 最近の履歴 /
@@ -234,10 +288,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     // ---- drag & drop registration (§10.1, P1) -----------------------------------------------
 
-    // Drags the app started itself (cards, rows, previews) carry a file drop too, for other apps:
-    // released over the window they are never a folder registration.
-    private bool CanDrop(DragEventArgs e) =>
-        _vm.SelectedTab.ShowRegisterBar && e.Data.GetDataPresent(DataFormats.FileDrop) && !IsOwnDrag(e.Data);
+    // Folders dropped from Explorer anywhere on the window are registered (the hint shows over the
+    // sidebar, where they land). Drags the app started itself (cards, rows, previews, sidebar rows)
+    // carry a file drop too, for other apps: released over the window they are never a registration.
+    private static bool CanDrop(DragEventArgs e) =>
+        e.Data.GetDataPresent(DataFormats.FileDrop) && !IsOwnDrag(e.Data);
 
     private static bool IsOwnDrag(IDataObject data) => FileDragOut.IsDragging || FileDrag.IsFromThisApp(data.GetDataPresent);
 
@@ -300,6 +355,63 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             _cascade.CloseAll(); // the card may move to its sorted place
             _vm.TogglePin(vm.ToItemRef());
+        }
+    }
+
+    public void CardShowInExplorer(CardView card)
+    {
+        if (card.ViewModel is { IsDisabled: false } vm)
+        {
+            _cascade.CloseAll();
+            _ = _vm.ShowInExplorerAsync(vm.ToItemRef());
+        }
+    }
+
+    // ---- sidebar (登録フォルダ) ----------------------------------------------------------------
+
+    private void OnSidebarClicked(SidebarItemViewModel item)
+    {
+        _cascade.CloseAll();
+        _ = _vm.OpenRegisteredAsync(item);
+    }
+
+    private void OnSidebarExplorer(SidebarItemViewModel item)
+    {
+        if (!item.IsDisabled)
+        {
+            _cascade.CloseAll();
+            _ = _vm.ShowInExplorerAsync(item.ToItemRef());
+        }
+    }
+
+    /// <summary>
+    /// A sidebar row is dragged: released over the sidebar it moves the row, released over another
+    /// app that app gets the folder (a missing folder can only be moved).
+    /// </summary>
+    private void OnSidebarDrag(SidebarItemViewModel item)
+    {
+        DataObject? data = item.IsDisabled ? null : FileDragOut.CreateData([item.Path], reorder: false);
+        if (data is null)
+        {
+            data = new DataObject();
+            data.SetData(FileDrag.SourceFormat, FileDrag.SourceFormat);
+        }
+
+        data.SetData(FileDrag.SidebarReorderFormat, FileDrag.SidebarReorderFormat);
+        int? index;
+        _cascade.BeginDrag();
+        try
+        {
+            index = Sidebar.RunReorderDrag(item, source => FileDragOut.Run(source, data, "sidebar row"));
+        }
+        finally
+        {
+            _cascade.EndDrag();
+        }
+
+        if (index is { } i)
+        {
+            _vm.MoveRegistered(item, i);
         }
     }
 

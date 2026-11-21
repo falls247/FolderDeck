@@ -12,15 +12,17 @@ namespace FolderDeck.ViewModels;
 
 public enum CardKind
 {
-    /// <summary>Registered folder whose existence check is still running (looks like a folder).</summary>
-    Checking,
     Folder,
     File,
 
-    /// <summary>Registered folder that no longer exists (§6.3).</summary>
+    /// <summary>
+    /// An item that no longer exists (§6.3). No list makes such a card today (missing history items
+    /// are left out; a missing 登録フォルダ is a sidebar row), but a card of this kind is drawn and
+    /// handled as disabled everywhere.
+    /// </summary>
     Missing,
 
-    /// <summary>Registered folder whose existence check took longer than 2 s (§6.3).</summary>
+    /// <summary>An item whose existence check timed out (§6.3). See <see cref="Missing"/>.</summary>
     NoResponse,
 }
 
@@ -85,7 +87,7 @@ public sealed partial class CardViewModel : ObservableObject
     private int _fileCount;
     private string? _errorBadge;
 
-    public CardViewModel(AppServices services, string path, CardKind kind, NavLocation? target, ItemContext context, string? registeredId = null)
+    public CardViewModel(AppServices services, string path, CardKind kind, NavLocation? target, ItemContext context)
     {
         _services = services;
         Path = path;
@@ -93,7 +95,6 @@ public sealed partial class CardViewModel : ObservableObject
         _kind = kind;
         Target = target;
         Context = context;
-        RegisteredId = registeredId;
         Extension = kind == CardKind.File ? PathTools.ExtensionOf(path) : string.Empty;
     }
 
@@ -111,8 +112,6 @@ public sealed partial class CardViewModel : ObservableObject
 
     public bool IsTopLevel => Context == ItemContext.TopCard;
 
-    public string? RegisteredId { get; }
-
     public TabKind Tab => Target?.Tab ?? OwnerTab;
 
     public TabKind OwnerTab { get; init; }
@@ -125,12 +124,9 @@ public sealed partial class CardViewModel : ObservableObject
 
     public DateTimeOffset? LastUsed { get; init; }
 
-    /// <summary>Existence check of a registered folder (§6.3), if one is running.</summary>
-    public Task? ExistenceTask { get; set; }
-
     public FolderListing? Listing { get; private set; }
 
-    public bool IsFolderLike => Kind is CardKind.Folder or CardKind.Checking;
+    public bool IsFolderLike => Kind == CardKind.Folder;
 
     public bool IsFolder => Kind == CardKind.Folder;
 
@@ -146,7 +142,6 @@ public sealed partial class CardViewModel : ObservableObject
 
     public string RemoveToolTip => OwnerTab switch
     {
-        TabKind.Registered => "登録を解除（フォルダ内のファイルは削除されません）",
         TabKind.Recent => "履歴から外す（ファイルは削除されません）",
         _ => IsPinned ? "ピン留めを外す" : "一覧から外す",
     };
@@ -178,7 +173,7 @@ public sealed partial class CardViewModel : ObservableObject
 
     public string ActionText => Kind switch
     {
-        CardKind.Folder or CardKind.Checking => "クリックでこのフォルダに移動",
+        CardKind.Folder => "クリックでこのフォルダに移動",
         CardKind.File => "クリックで開く",
         CardKind.Missing => "フォルダが見つかりません",
         _ => "応答がありません",
@@ -190,7 +185,7 @@ public sealed partial class CardViewModel : ObservableObject
         {
             var sb = new StringBuilder();
             sb.Append(Path).Append('\n').Append(ActionText);
-            if (LastUsed is { } used && OwnerTab != TabKind.Registered && IsTopLevel)
+            if (LastUsed is { } used && IsTopLevel)
             {
                 sb.Append('\n').Append("最終利用: ").Append(Formatting.DateTimeText(used));
             }
@@ -275,11 +270,6 @@ public sealed partial class CardViewModel : ObservableObject
     {
         try
         {
-            if (Kind == CardKind.Checking && ExistenceTask is { } existence)
-            {
-                await existence.WaitAsync(ct);
-            }
-
             if (IsDisabled)
             {
                 return;

@@ -20,7 +20,8 @@ updated: 2026-11-21
 | 旧仕様書 `SPEC_20261121_native_folder_app.md`（削除済み） | 最初の実装の元になった仕様（約 1,100 行）。コードコメントの `§9.6` などはこの節番号 | 根拠を確かめるときだけ `git show 1122384:dev/docs/SPEC_20261121_native_folder_app.md` で出し、`§9.6` などを検索する（通読しない） |
 | [_topics.yml](_topics.yml) | `dev/docs` の目録と各文書の目次（YAML） | 読む文書・節を選ぶとき |
 
-- 旧仕様書は最初の実装時点のもの。後から追加・変更した機能（タブごとの並べ替え、ドラッグでの並べ替え、他アプリへのドラッグ、Office・テキストのプレビュー、エクスプローラーの新しいタブで開く、カードの形、📌 のクリックでの解除、ごみ箱への削除、「エクスプローラーで開く」の廃止）は載っていない。挙動は README と実装が正。
+- 旧仕様書は最初の実装時点のもの。後から追加・変更した機能（タブごとの並べ替え、ドラッグでの並べ替え、他アプリへのドラッグ、Office・テキストのプレビュー、エクスプローラーの新しいタブで開く、カードの形、📌 のクリックでの解除、ごみ箱への削除、「エクスプローラーで開く」の廃止、登録フォルダのサイドバー化とフォルダのタブ、表示する項目の切り替え（フィルター）、右ボタンを押したまま左クリックでの「エクスプローラーで表示」）は載っていない。挙動は README と実装が正。
+- **旧仕様書の「登録フォルダ」タブはもうない**。登録フォルダはサイドバー（`SidebarView`）の行になり、そこから開いたフォルダは「フォルダのタブ」（`TabKind.Folder`、何個でも開ける）に出る。固定のタブは「最近の履歴」「よく使う項目」の 2 つ（[§3.10](#310-サイドバー登録フォルダとフォルダのタブ)）。
 - 行番号は書かない（すぐずれるため）。ファイル名とメンバー名で示す。
 - 本書と実装が食い違ったら実装が正。気づいたら本書を直す（[§9](#9-本書の更新ルール)）。
 
@@ -42,7 +43,7 @@ tests/FolderDeck.Core.Tests  xUnit。Core のみ。App 層の自動テストは�
 ```
 
 - ロジックは Core に置き、純粋関数にしてテストする方針（並べ替え・ランキング・パス・保存・プレビュー用の読み取りなど）。App は WPF とシェル連携に限る。
-- 大きいファイル（全文を読まず `// ---- 見出し ----` の区切りで目的の節だけ読む）：`Views/CascadeController.cs`（約 1,400 行）、`ViewModels/MainViewModel.cs`（約 1,090 行）、`Core/Listing/SheetReader.cs`（約 820 行）、`Shell/ExplorerTabs.cs`（約 750 行）、`ViewModels/TabViewModel.cs`（約 630 行）、`Views/CardGrid.xaml.cs`（約 590 行）
+- 大きいファイル（全文を読まず `// ---- 見出し ----` の区切りで目的の節だけ読む）：`Views/CascadeController.cs`（約 1,560 行）、`ViewModels/MainViewModel.cs`（約 1,430 行）、`Core/Listing/SheetReader.cs`（約 820 行）、`Shell/ExplorerTabs.cs`（約 750 行）、`ViewModels/TabViewModel.cs`（約 630 行）、`Views/CardGrid.xaml.cs`（約 590 行）
 
 ### 1.2 起動と終了（`App.xaml.cs`）
 
@@ -52,7 +53,7 @@ tests/FolderDeck.Core.Tests  xUnit。Core のみ。App 層の自動テストは�
 4. `DataStores.LoadAll` を `Task.Run` で実行（UI スレッドで JSON を読まない）
 5. `AppServices` → `MainViewModel` → `MainWindow` → `RestorePlacement` → `Show`
 6. 各ストアの `SaveFailed` をメッセージ行のエラーに接続、`ReportLoadProblems`（`Recovered` は警告、`Failed` はエラー）
-7. `MainViewModel.InitializeAsync`：各タブの現在地を `settings.json` から復元し、最後に開いていたタブを読み込む
+7. `MainViewModel.InitializeAsync`：固定タブの現在地（`locations`）、フォルダのタブ（`open_tabs`）、サイドバーの登録フォルダ（`RefreshRegistered`）を復元し、最後に表示していたタブ（`last_tab` / `selected_folder_tab`）を読み込む。サイドバーの幅（`sidebar_width`）は `MainWindow` のコンストラクタが表示前に列へ設定する
 
 終了（`OnExit`）：`Stores.FlushAll` → 各サービスの `Dispose` → `SessionMonitor.MarkCleanExit`。
 未処理例外：UI スレッドと未監視タスクはログ＋ダイアログ（5 秒に 1 回まで）で継続、`AppDomain` の例外はログを書いて終了。
@@ -71,18 +72,23 @@ App
 │   ├─ Shell: StaWorkerPool(1)（.lnk の読み取りなど、その他のシェル呼び出し）
 │   └─ DetailGate: SemaphoreSlim(8)（カード詳細の同時読み込み数）
 ├─ MainViewModel
-│   ├─ Tabs: TabViewModel × 3（Registered / Recent / Frequent）→ Cards: CardViewModel[]
+│   ├─ RecentTab / FrequentTab: TabViewModel（固定タブ）→ Cards: CardViewModel[]
+│   ├─ FolderTabs: ObservableCollection<TabViewModel>（フォルダのタブ、Kind = Folder）→ Cards
+│   ├─ SelectedTab（表示中のタブ。固定タブかフォルダのタブ）
+│   ├─ Registered: ObservableCollection<SidebarItemViewModel>（サイドバーの登録フォルダ）
 │   └─ Message: MessageBarViewModel
 └─ MainWindow（IMainView, ICardHost を実装）
+    ├─ SidebarView（登録フォルダの行）
+    ├─ FolderTabStrip（フォルダのタブの列。固定タブの RadioButton は MainWindow.xaml）
     ├─ CardGrid → CardRow（列数ぶんのカード）→ CardView（DataContext = CardViewModel）
     ├─ ContextMenuFactory
     └─ CascadeController
-        ├─ Level 0: OverlayView（カードのサムネイル部分に重ねる）+ EntryListViewModel
+        ├─ Level 0: カードから開いたとき OverlayView（サムネイル部分に重ねる）、サイドバーの行から開いたとき Popup + FlyoutView（行の右）。どちらも EntryListViewModel
         ├─ Level 1…: Popup + FlyoutView + EntryListViewModel
         └─ Preview（最大 1 つ）: Popup + PreviewView + PreviewViewModel
 ```
 
-- ViewModel から View への依存は `IMainView`（ダイアログ、スクロール位置、カスケードを閉じる、シェルのダイアログの親にするウィンドウハンドル `WindowHandle`）だけ。View からの通知は `ICardHost`（カードのホバー・クリック・右クリック・× ・📌（`CardUnpin`）・ドラッグ）を `MainWindow` が受ける。
+- ViewModel から View への依存は `IMainView`（ダイアログ、スクロール位置、カスケードを閉じる、シェルのダイアログの親にするウィンドウハンドル `WindowHandle`）だけ。View からの通知は `ICardHost`（カードのホバー・クリック・右クリック・× ・📌（`CardUnpin`）・ドラッグ・右ボタンを押したままの左クリック（`CardShowInExplorer`））と、`SidebarView` / `FolderTabStrip` のイベントを `MainWindow` が受ける。
 
 ## 2. ファイルマップ
 
@@ -113,6 +119,7 @@ App
 | Ordering | `CardSortMode.cs` | 5 つの並び方と `settings.json` の値（`manual` / `name_asc` …）の変換、`CardSortModes.All` |
 | | `CardOrdering.cs` | `ComparerFor`、`FoldersFirst`、`SortKeepingPinned`（ピン留めは位置を固定）、`KnownTime` |
 | | `ManualOrder.cs` | 保存済みのドラッグ順を新しいリストへ適用（新規項目は元の並びで直前の項目の後ろ） |
+| | `ItemFilter.cs` | 最近の履歴・よく使う項目の一覧に出す項目（`All` / `Folders` / `Files`）と `settings.json` の値（`all` / `folders` / `files`）の変換、`Matches` / `Apply`、絞り込み中のドラッグ順を全体の並びへ戻す `MergeShownOrder`（隠れている項目は位置を保つ） |
 | Paths | `PathTools.cs` | 入力の整形、正規化、比較（`PathEquals`）、表示名、`JoinRel` / `IsSafeRel`、`ForShell`（長いパス→8.3） |
 | | `PathSet.cs` | 大文字小文字を区別しない正規化パスの集合（ピン判定など） |
 | | `NaturalComparer.cs` | エクスプローラーと同じ自然順（`StrCmpLogicalW`） |
@@ -122,14 +129,14 @@ App
 | | `JsonFile.cs` | JSON の読み書き（snake_case、原子的な書き込み、壊れたファイルの退避、時刻の寛容な読み取り） |
 | | `DataStores.cs` | 6 つのストアの束。`All` / `LoadAll` / `FlushAll` |
 | | `Models.cs` | ドメインの record と JSON の DTO |
-| | `RegisteredFoldersStore.cs` | `registered_folders.json`（imgtool と同じ形式）。`Register` / `RegisterMany` / `Remove` / `Reorder` |
+| | `RegisteredFoldersStore.cs` | `registered_folders.json`（imgtool と同じ形式）。`Register` / `RegisterMany` / `Remove` / `Reorder`。配列の順がサイドバーの並び |
 | | `HistoryStore.cs` | `history.json`（利用記録）。`Record` / `Remove` / `Clear` |
 | | `PinStore.cs` | `pins.json`。`Pin` / `Unpin` / `IsPinned`、`Changed` イベント |
 | | `ExcludedStore.cs` | `excluded.json`（最近の履歴から外した項目） |
-| | `SettingsStore.cs` | `settings.json`。`AppSettings`（既定値・`Normalize`・`Clone`）。カードの形は文字列の `CardShape`（`card_shape`）、画像サムネイルのディスクキャッシュの上限は `ThumbCacheMb`（`thumb_cache_mb`、MB、0 で無効、起動時に読む） |
+| | `SettingsStore.cs` | `settings.json`。`AppSettings`（既定値・`Normalize`・`Clone`）。カードの形は文字列の `CardShape`（`card_shape`）、画像サムネイルのディスクキャッシュの上限は `ThumbCacheMb`（`thumb_cache_mb`、MB、0 で無効、起動時に読む）。タブまわり：`LastTab`（`recent` / `frequent` / `folder`）、`Locations`（固定タブの現在地）、`OpenTabs` + `SelectedFolderTab`（フォルダのタブ、50 個まで）、`SidebarWidth`（140〜480）、`SortModes`（キーは `recent` / `frequent` / `folder`）、`FilterModes`（`recent` / `frequent`）。旧「登録フォルダ」タブのキー `registered` は `Normalize` が片づける（並び方は `folder` へ引き継ぎ、現在地は捨てる） |
 | | `CardOrderStore.cs` | `card_order.json`（最近の履歴・よく使う項目のドラッグ順、各 1,000 件まで） |
 | Text | `Formatting.cs` | 相対時刻、日時、ファイルサイズの表示 |
-| Transfer | `FileDrag.cs` | 他アプリへのドラッグの規則：可否、`DropList`（260 文字以上→8.3）、自アプリ由来の判定、`IsDragGesture` |
+| Transfer | `FileDrag.cs` | 他アプリへのドラッグの規則：可否、`DropList`（260 文字以上→8.3）、自アプリ由来の判定、`IsDragGesture`。内部形式の名前（`SourceFormat`、カードの並べ替え `ReorderFormat`、サイドバーの並べ替え `SidebarReorderFormat`） |
 
 ### 2.2 App（`src/FolderDeck.App/`）
 
@@ -154,24 +161,27 @@ App
 | | `WindowsRecent.cs` | `%APPDATA%\Microsoft\Windows\Recent\*.lnk` の読み取り、記録が有効かの確認 |
 | | `FileDragOut.cs` | ドラッグ用 `DataObject` の作成、`DoDragDrop` の実行、`IsDragging` |
 | | `SingleInstance.cs` / `ThemeManager.cs` | 単一インスタンス / Windows のライト・ダーク追従 |
-| ViewModels | `MainViewModel.cs` | タブ切り替え、移動と履歴（戻る・進む、最大 100）、開く、右クリックの各操作（ごみ箱への削除 `CanDelete` / `DeleteAsync` を含む）、登録、並べ替え・ドラッグ順の保存、ピン、カードの大きさと形（`CardSize` / `CardShape`）、設定ダイアログ |
-| | `TabViewModel.cs` | 1 タブの現在地・カード・読み込み・並び（[§3.1](#31-タブの読み込み)） |
-| | `CardViewModel.cs` | 1 枚のカード。`CardKind`、`BadgeMode`、段階読み込み（`Realize` / `Unrealize`） |
+| ViewModels | `MainViewModel.cs` | 固定タブ（`RecentTab` / `FrequentTab`）とフォルダのタブ（`FolderTabs`：開く `OpenFolderTabAsync`・閉じる `CloseTab`・並べ替え `MoveFolderTab`）、タブ切り替え（`ShowTabAsync`）、移動と履歴（戻る・進む、タブごとに最大 100）、開く、右クリックの各操作（ごみ箱への削除 `CanDelete` / `DeleteAsync` を含む）、サイドバーの登録フォルダ（`Registered`、`RefreshRegistered`、登録・解除 `Unregister`・並べ替え `MoveRegistered`、幅 `SidebarWidth`）、並べ替え・フィルター（`SetSortMode` / `SetFilter`）・ドラッグ順の保存、ピン、カードの大きさと形（`CardSize` / `CardShape`）、設定ダイアログ |
+| | `TabViewModel.cs` | 1 タブの現在地・カード・読み込み・並び・フィルター・戻る／進むの履歴（`BackStack` / `ForwardStack`）・離れたときのスクロール位置（[§3.1](#31-タブの読み込み)）。固定タブ（`Recent` / `Frequent`）とフォルダのタブ（`Folder`、`IsFolderTab`）で共通 |
+| | `CardViewModel.cs` | 1 枚のカード。`CardKind`（`Folder` / `File`。`Missing` / `NoResponse` は表示の仕組みだけ残っていて、今はどの一覧も作らない）、`BadgeMode`、段階読み込み（`Realize` / `Unrealize`） |
+| | `SidebarItemViewModel.cs` | サイドバーの登録フォルダ 1 行（`Id` / `Path` / `Name`、存在確認の結果 `SidebarItemState`、`IsDisabled`、開く先 `Target`、`ToItemRef`） |
 | | `EntryListViewModel.cs` | カスケード 1 階層（`EntryListViewModel`）と行（`EntryRowViewModel`、`ListState`） |
 | | `PreviewViewModel.cs` | プレビューの内容（`PreviewContent`：画像 / 行 / 段落 / シート） |
-| | `Navigation.cs` | `TabKind`、`NavLocation`、`NavEntry`、`ItemContext`、`ItemRef`、`BreadcrumbItem`、`TabKinds` |
+| | `Navigation.cs` | `TabKind`（`Recent` / `Frequent` / `Folder`）、`NavLocation`、`NavEntry`、`ItemContext`（`Sidebar` を含む）、`ItemRef`（`NewTab`：フォルダを新しいタブで開く）、`BreadcrumbItem`、`TabKinds` |
 | | `MessageBarViewModel.cs` | メッセージ行（`Info` / `Success` / `Warning` / `Error`、`ClearPersistent`） |
 | | `SettingsViewModel.cs` | 設定ダイアログ。OK のときだけ `ApplyTo` で反映 |
-| | `SortModeLabels.cs` | 並べ替えメニューの文言 |
-| Views | `MainWindow.xaml(.cs)` | キー・マウス（`OnPreviewKeyDown` / `OnPreviewMouseDown`）、エクスプローラーからのドロップ登録、並べ替えメニューの組み立て、ツールバーのカードの形の切り替え（`RadioButton` 2 つ → `SetCardShapeCommand`）、`ICardHost` / `IMainView` の実装 |
+| | `SortModeLabels.cs` | 並べ替えメニューの文言（`SortModeLabels`）とフィルターの文言（`FilterLabels`） |
+| Views | `MainWindow.xaml(.cs)` | 全体のレイアウト（左：サイドバー、`GridSplitter`、右：タブ列・ツールバー・メッセージ・カード）、キー・マウス（`OnPreviewKeyDown` / `OnPreviewMouseDown`、Ctrl + W でタブを閉じる）、エクスプローラーからのドロップ登録（ウィンドウ全体）、並べ替え・フィルターのメニューの組み立て（`OnSortClick` / `OnFilterClick`）、ツールバーのカードの形の切り替え（`RadioButton` 2 つ → `SetCardShapeCommand`）、サイドバーの幅（`SidebarColumn`、`OnSplitterDragCompleted`）、サイドバーのイベントの受け口（`OnSidebarClicked` / `OnSidebarDrag` など）、`ICardHost` / `IMainView` の実装 |
+| | `SidebarView.xaml(.cs)` | サイドバーの登録フォルダの行。ホバー・クリック・右クリック・右ボタンを押したままの左クリック・ドラッグ開始をイベントで通知（`ItemEntered` / `ItemClicked` / `ItemContextMenu` / `ItemExplorerRequested` / `ItemDragRequested`）。行の並べ替えドラッグ（`RunReorderDrag`、入る位置の横線 `DropLine`） |
+| | `FolderTabStrip.xaml(.cs)` | フォルダのタブの列（`FolderTabs` を横に並べる）。押すと表示、左右にドラッグで並べ替え（`MoveTowards`：隣のタブの中央を越えたら入れ替え）、× ・中クリックで閉じる、右クリックのメニュー、ホイールで横スクロール |
 | | `CardGrid.xaml(.cs)` | カードを「列数ぶんの行」にまとめて `VirtualizingStackPanel` で仮想化、列数とサイズ（`GridMetrics`、§6.1。サムネイルの高さは `CardShape` 依存プロパティから `CardShapes.ThumbHeight`）、並べ替えドラッグ（`RunReorderDrag`、自動スクロール、`DropMarkerAdorner`） |
-| | `CardView.xaml(.cs)` | 1 枚のカード。ホバー・クリック・ドラッグ開始を検出して `ICardHost` へ。表示されたら `Realize`。📌 はフッターのバッジ行の左（`PinButton`、クリックで解除）、バッジは幅が足りなければ `Viewbox` で縮める |
-| | `CascadeController.cs` | ホバー一覧とカスケード全体（[§3.3](#33-カスケードcascadecontroller9)） |
-| | `EntryListView` / `OverlayView` / `FlyoutView` / `PreviewView` | 行の一覧（どの行にポインターがあるかを通知）/ オーバーレイ / フライアウト / プレビューの表示 |
-| | `ContextMenuFactory.cs` | 右クリックメニュー（カード・行・フライアウト見出しで共通、`ItemRef.Context` で出し分け。「削除（ごみ箱へ移動）」は `MainViewModel.CanDelete` のときだけ） |
+| | `CardView.xaml(.cs)` | 1 枚のカード。ホバー・クリック・ドラッグ開始・右ボタンを押したままの左クリック（`_rocker`）を検出して `ICardHost` へ。表示されたら `Realize`。📌 はフッターのバッジ行の左（`PinButton`、クリックで解除）、バッジは幅が足りなければ `Viewbox` で縮める |
+| | `CascadeController.cs` | ホバー一覧とカスケード全体（[§3.3](#33-カスケードcascadecontroller9)）。カードから（`CardMouseEnter`）とサイドバーの行から（`SidebarMouseEnter`）の両方 |
+| | `EntryListView` / `OverlayView` / `FlyoutView` / `PreviewView` | 行の一覧（どの行にポインターがあるか、クリック、右クリック、右ボタンを押したままの左クリック `RowExplorerRequested` を通知）/ オーバーレイ / フライアウト / プレビューの表示 |
+| | `ContextMenuFactory.cs` | 右クリックメニュー（カード・行・フライアウト見出し・サイドバーの行で共通、`ItemRef.Context` で出し分け。「削除（ごみ箱へ移動）」は `MainViewModel.CanDelete` のときだけ、「登録フォルダに追加」は未登録のフォルダだけ、「登録を解除」はサイドバーの行だけ） |
 | | `ConfirmDialog` / `SettingsWindow` / `Converters.cs` | 確認ダイアログ / 設定画面 / 値コンバーター |
 | | `HoverTimings.cs` | ホバーの待ち時間とアニメーション時間（**調整はここだけ**） |
-| Themes | `Light.xaml` / `Dark.xaml` | 色トークン（同じキーを両方に定義） |
+| Themes | `Light.xaml` / `Dark.xaml` | 色トークン（同じキーを両方に定義）。固定タブは `Brush.Accent`、登録フォルダとフォルダのタブは `Brush.Folder` / `Brush.FolderSoft` |
 | | `Styles.xaml` | 共通スタイル（色は `DynamicResource` で参照） |
 
 ### 2.3 その他
@@ -187,26 +197,24 @@ App
 
 ### 3.1 タブの読み込み
 
-`MainViewModel.NavigateAsync(target, mode)` → `LoadTabAsync` → `TabViewModel.LoadAsync`
+`MainViewModel.NavigateAsync(target, mode)`（表示中のタブの中の移動）/ `ShowTabAsync(tab)`（タブの切り替え）→ `LoadTabAsync` → `TabViewModel.LoadAsync`
 
 - 前回の読み込みを `_loadCts` でキャンセルしてから始める。5 秒を超えると `IsSlow`。
-- 最上位（`Location.IsTop`）は `LoadTopAsync` でタブごとに分岐：
-  - **登録フォルダ** `LoadRegisteredAsync`：`RegisteredFoldersStore.Folders` の順がそのまま「手動」の並び。カードは `CardKind.Checking` で作り、`Existence.ProbeAsync`（2 秒）を `ExistenceTask` に持たせる
+- 最上位（`Location.IsTop`。固定タブだけにある）は `LoadTopAsync` でタブごとに分岐：
   - **最近の履歴** `LoadRecentAsync`：`WindowsRecent.Read`（`AppServices.Shell`、20 秒）+ `RecentMerger.Merge` → `Existence.FilterProbedAsync`（1 秒、`RecentLimit` 件）→ `ManualOrder.Apply`（`CardOrderList.Recent`）
   - **よく使う項目** `LoadFrequentAsync`：`FrequentRanker.Rank` → ピン留め・ランキングをそれぞれ存在確認 → `ManualOrder.Apply`（`CardOrderList.Frequent`）
-- フォルダの中は `LoadFolderAsync`：`Listings.GetAsync` → `ItemContext.InnerCard` のカードを作る
-- `ShowCards(baseOrder, isTop)` → `Ordered`：`CardOrdering.ComparerFor(SortMode)` →（フォルダの中は `FoldersFirst`）→ `SortKeepingPinned`
-  - 登録フォルダを更新日順で表示するときは、存在確認（更新日時の取得を兼ねる）がすべて終わってから 1 回だけ並べ替える（`WaitsForChecks` / `ApplyWhenCheckedAsync`）
-- **`_baseCards`（並べ替え前の基準順）と `Cards`（表示順）の 2 本立て**。表示順を直接いじらず、`SetBaseOrder` / `ApplyOrder` / `PlaceInBase` / `RemoveCard` / `ApplyPins` を通す。
+- フォルダの中は `LoadFolderAsync`：`Listings.GetAsync` → `ItemContext.InnerCard` のカードを作る。フォルダのタブ（`TabKind.Folder`）は常にこれ（最上位がない）
+- `ShowCards(baseOrder, isTop)` → `Ordered`：`CardOrdering.ComparerFor(SortMode)` →（フォルダの中は `FoldersFirst`）→ `SortKeepingPinned` → `Show`：フィルター（`ItemFilters.Apply`、固定タブの最上位だけ `FilterApplies`）→ `UpdateTopSummary`（件数と空のときの文言）
+- **`_baseCards`（並べ替え前の基準順）、`_orderedCards`（並べ替え後・フィルター前の全カード、`OrderedCards`）、`Cards`（表示するカード）の 3 本立て**。表示順を直接いじらず、`SetBaseOrder` / `ApplyOrder` / `PlaceInBase` / `RemoveCard` / `ApplyPins` を通す。「ピン留めは基準順と同じ位置」という前提が成り立つのは `OrderedCards` に対して（`Cards` はフィルターで詰まる）。
 
-現在地 `NavLocation(Tab, Root, Rel)`：`Root` は登録フォルダなら**登録 ID**、ほかのタブは正規化したパス。`Root == ""` がタブの最上位。`Rel` はルートからの相対パスで、`ResolvePath` が `PathTools.IsSafeRel` で検証してから結合する。
+現在地 `NavLocation(Tab, Root, Rel)`：`Tab` はタブの種類（`Recent` / `Frequent` / `Folder`）、`Root` は正規化したパス。`Root == ""` が固定タブの最上位（フォルダのタブは必ず `Root` を持つ）。`Rel` はルートからの相対パスで、`ResolvePath` が `PathTools.IsSafeRel` で検証してから結合する。フォルダのタブの `Root` は開いたときの登録フォルダのパス（登録 ID ではないので、登録を解除してもタブは生きる）。
 
 ### 3.2 カードの段階読み込み（§7.4.1）
 
 `CardView` が表示されると `CardViewModel.Realize(thumbPx, iconPx)`、外れると `Unrealize`（CTS をキャンセルし、画像と一覧を手放す）。
 
 `CardViewModel.LoadAsync`：
-1. 登録フォルダは `ExistenceTask` の完了を待つ。無効（見つからない・応答なし）なら終わり
+1. 無効（見つからない・応答なし）なら終わり
 2. フォルダ：`DetailGate`（同時 8 件）の中で `Listings.GetAsync` → `ApplyListing`（件数バッジ、`DetailsLoaded` を発火）→ `CoverFinder.Find`（結果は `Covers` に保存）
 3. 画像：カバー画像があれば `ThumbnailService.GetAsync(CoverImage)`、なければ `GetAsync(Folder)`。ファイルは `GetEntry` で大きさと日時を取ってから `GetAsync(File)`
 
@@ -220,10 +228,11 @@ App
 
 ### 3.3 カスケード（`CascadeController`、§9）
 
-- 状態：`_levels`（0 = オーバーレイ、1 以降 = フライアウト）、`_preview`（最大 1 つ、常にいちばん深い位置）、タイマー 6 つ（`HoverTimings`：overlay 300 / open 150 / grace 300 / exit 300 / preview 150 ms、プレビューを閉じるタイマーは grace と同じ）
-- 開く：`MainWindow.CardMouseEnter` → `CardMouseEnter` → overlay タイマー → `OpenOverlayAsync`（`CardViewModel.EnsureListingAsync`）。行に止まる → `OnRowHovered` → open タイマー → `OpenChild` → `LoadLevelAsync` → `Position` / `Place`（行が載っているモニターの作業領域と DPI から物理ピクセルで配置し、Popup のウィンドウを直接動かす）
+- 状態：`_levels`（0 = カードのオーバーレイ、またはサイドバーの行の横のフライアウト。1 以降 = フライアウト）、起点（`_card`：カード、`_anchor` / `_anchorItem`：サイドバーの行。どちらか一方）、`_preview`（最大 1 つ、常にいちばん深い位置）、タイマー 6 つ（`HoverTimings`：overlay 300 / open 150 / grace 300 / exit 300 / preview 150 ms、プレビューを閉じるタイマーは grace と同じ）
+- 開く（カード）：`MainWindow.CardMouseEnter` → `CardMouseEnter` → overlay タイマー → `OpenOverlayAsync`（`CardViewModel.EnsureListingAsync`）。行に止まる → `OnRowHovered` → open タイマー → `OpenChild` → `OpenFlyout` → `LoadLevelAsync` → `Position` / `Place`（行が載っているモニターの作業領域と DPI から物理ピクセルで配置し、Popup のウィンドウを直接動かす）
+- 開く（サイドバー）：`SidebarView.ItemEntered` → `SidebarMouseEnter` → overlay タイマー → `OpenRoot` → `OpenFlyout(0, …)`（行そのものを「行」と「親カード」の両方の矩形として渡すので、行の右に出る）。一覧を開いている間に別の行へ入ったときは、すぐには切り替えず `_pendingAnchor` に置いて overlay タイマーを回し、そこで止まったときだけ切り替える（行が縦に並んでいて、一覧へ斜めに移動すると隣の行を横切るため。一覧に入れば `OnFlyoutEnter` が取り消す）
 - 閉じる：**開閉はすべてここで決める**（Popup は `StaysOpen=True`）。`CloseAll` / `CloseFrom(index)` / `CloseDeepest`（Esc）。右クリックメニュー表示中は閉じない（`ContextMenuFactory.MenuOpened` / `MenuClosed`）
-- クリック：`OnRowClicked` / `OnHeaderClicked` → `MainViewModel.OpenItemAsync`
+- クリック：`OnRowClicked` / `OnHeaderClicked` → `MainViewModel.OpenItemAsync`。サイドバー起点のカスケードでは `ItemOf` / `HeaderOf` が `ItemRef.NewTab` を立てるので、フォルダは新しいフォルダのタブで開く（カード起点は表示中のタブの中で移動）
 - キーボード：`MainWindow.OnPreviewKeyDown` が、カスケード表示中は先に `HandleKey`（↑ ↓ → ← Enter Esc）へ渡す
 - ドラッグ：`BeginDrag` で全階層を非表示にしてタイマーを止め、`EndDrag` で本当に閉じる。ドラッグ中の `CloseAll` は無視する（理由は `BeginDrag` の XML コメント）
 - 非同期の結果は、完了時に対象（`_preview` や階層）が差し替わっていないかを確かめてから反映する
@@ -238,24 +247,27 @@ App
 
 ### 3.5 開く・移動する
 
-- カードのクリック → `MainViewModel.ActivateCardAsync`、行のクリック → `OpenItemAsync`
-- フォルダ：`NavigateAsync(Target, NavMode.New, recordPath: …)`（移動も利用として `RecordUse`）
+- カードのクリック → `MainViewModel.ActivateCardAsync`、行のクリック → `OpenItemAsync`、サイドバーの行のクリック → `OpenRegisteredAsync`
+- フォルダ：`ItemRef.NewTab`（サイドバーの行と、そこから出したカスケード）なら `OpenFolderTabAsync`（新しいフォルダのタブ）、それ以外は `NavigateAsync(Target, NavMode.New, recordPath: …)`（表示中のタブの中で移動）。どちらも利用として `RecordUse`
 - ファイル：`OpenFileAsync`：実行形式の確認（`ConfirmExecutables` && `ShellActions.IsExecutable`）→ `Task.Run(ShellActions.Open)` → `RecordUse`（`History.Record` → 最近の履歴・よく使う項目を更新）→ 設定によって `SHAddToRecentDocs`
-- 右クリック：`ContextMenuFactory.Show(ItemRef, target)` → `MainViewModel` の `ShowInExplorerAsync`（`ItemRef.IsFolder` ならフォルダ自体を開く `OpenInExplorer` / `ExplorerTabs.OpenAsync`、ファイルなら親フォルダで選択 `ShowInExplorer` / `ExplorerTabs.ShowAsync`。どのタブ・どの位置の項目でも同じ。設定で `ExplorerTabs`）/ `CopyPath` / `TogglePin` / `AddToRegisteredAsync` / `DeleteAsync` / `Unregister` / `ExcludeFromRecent` / `RemoveFromFrequent`
+- 右クリック：`ContextMenuFactory.Show(ItemRef, target)` → `MainViewModel` の `ShowInExplorerAsync`（`ItemRef.IsFolder` ならフォルダ自体を開く `OpenInExplorer` / `ExplorerTabs.OpenAsync`、ファイルなら親フォルダで選択 `ShowInExplorer` / `ExplorerTabs.ShowAsync`。どのタブ・どの位置の項目でも同じ。設定で `ExplorerTabs`）/ `CopyPath` / `TogglePin` / `AddToRegisteredAsync`（未登録のフォルダ → サイドバーに追加）/ `DeleteAsync` / `Unregister`（サイドバーの行）/ `ExcludeFromRecent` / `RemoveFromFrequent`
+- 右ボタンを押したまま左クリック（「エクスプローラーで表示」の近道）：`CardView` / `EntryListView` / `SidebarView` が左ボタンの押下時に `e.RightButton == Pressed` を見て、その要素でマウスをキャプチャして待ち（左クリックは開く動作にもドラッグにもならない）、**右ボタンを離したとき**に `ICardHost.CardShowInExplorer` / `RowExplorerRequested` / `ItemExplorerRequested` → `ShowInExplorerAsync`。右クリックメニューは出さない。離したときに実行するのは、ボタンを押したまま別のウィンドウ（エクスプローラー）が前面に来ると、右ボタンを離した通知がそのウィンドウへ行ってしまうため。キャプチャを失ったら取り消し
 - ごみ箱への削除：`CanDelete`（`ItemContext.InnerCard` か `Row`、かつ見つからない・応答なしでない。最上位のカードとフライアウトの見出しは対象外）→ メニューで `BeforeNavigate`（カスケードを閉じる）→ `DeleteAsync`：`IMainView.Confirm`（危険操作。既定は「キャンセル」）→ `RecycleBin.MoveAsync(path, IMainView.WindowHandle)` → 結果をメッセージ行へ → `ReloadAfterDeleteAsync`（`ClearCaches`、全タブを `IsStale`、表示中のタブをスクロール位置を保って読み直す。中止・失敗でも読み直す）
 
 ### 3.6 並べ替え・ピン留め
 
-- 並び方の変更：並べ替えメニュー（`MainWindow` が `CardSortModes.All` から組み立てる）→ `MainViewModel.SetSortMode` → `SaveSortMode`（`settings.json` の `sort_modes`）→ `TabViewModel.ApplyOrder`
-- ドラッグで並べ替え：`MainWindow.CardDrag` → `FileDragOut.CreateData(reorder: true)` → `CardGrid.RunReorderDrag` → `MainViewModel.MoveCard` → `TabViewModel.SetBaseOrder` → `SaveManualOrder`（登録フォルダは `RegisteredFoldersStore.Reorder`、ほかは `CardOrderStore.Set`）。名前順・更新日順のときは「手動」に切り替える
-- ピン：`TogglePin` → `PinStore.Pin` / `Unpin` → `PinStore.Changed` → `OnPinsChanged` → 各タブの `ApplyPins`。名前順・更新日順でピン留めするときは `KeepInPlace` → `PlaceInBase` で表示中の位置に固定。カードの 📌 のクリックは `CardView.OnPinClick` → `ICardHost.CardUnpin`（`MainWindow`：カスケードを閉じて `TogglePin`。見つからない・応答なしのカードでは無効）
+- 並び方の変更：並べ替えメニュー（`MainWindow` が `CardSortModes.All` から組み立てる）→ `MainViewModel.SetSortMode` → `SaveSortMode`（`settings.json` の `sort_modes`。キーは `TabKinds.ToSetting`：`recent` / `frequent` / `folder`）→ `TabViewModel.ApplyOrder`。フォルダのタブは 1 つのキーを共有するので、開いているほかのフォルダのタブにも同じ並び方を適用する
+- フィルター（固定タブの最上位）：`MainWindow.OnFilterClick`（`ItemFilters.Values` からメニュー）→ `MainViewModel.SetFilter` → `settings.json` の `filter_modes` → `TabViewModel.Filter` → `OnFilterChanged` → `Show`（`_orderedCards` を絞り込んで `Cards` へ）
+- ドラッグで並べ替え（固定タブの最上位）：`MainWindow.CardDrag` → `FileDragOut.CreateData(reorder: true)` → `CardGrid.RunReorderDrag` → `MainViewModel.MoveCard` →（フィルター中は `ItemFilters.MergeShownOrder` で、隠れているカードの位置を保ったまま全体の並びに戻す）→ `TabViewModel.SetBaseOrder` → `SaveManualOrder`（`CardOrderStore.Set`）。名前順・更新日順のときは「手動」に切り替える
+- サイドバーの並べ替え：`SidebarView.ItemDragRequested` → `MainWindow.OnSidebarDrag` → `SidebarView.RunReorderDrag` → `MainViewModel.MoveRegistered` → `RegisteredFoldersStore.Reorder` → `RefreshRegistered`
+- ピン：`TogglePin` → `PinStore.Pin` / `Unpin` → `PinStore.Changed` → `OnPinsChanged` → 各タブ（固定タブとフォルダのタブ全部）の `ApplyPins`。名前順・更新日順でピン留めするときは `KeepInPlace` → `PlaceInBase` で表示中の位置（`OrderedCards` での位置）に固定。カードの 📌 のクリックは `CardView.OnPinClick` → `ICardHost.CardUnpin`（`MainWindow`：カスケードを閉じて `TogglePin`。見つからない・応答なしのカードでは無効）
 - カードの形（全タブ共通）：ツールバーの `RadioButton` → `SetCardShapeCommand` → `MainViewModel.CardShape` → `OnCardShapeChanged`（カスケードを閉じ、`settings.json` の `card_shape` に保存）→ バインドで `CardGrid.CardShape` → `Rebuild` → `GridMetrics.ThumbHeight`
 - 規則（ピン留めは位置固定、新規項目の挿入位置）は Core の `Ordering/` にある。App 側で再実装しない
 
 ### 3.7 他アプリへのドラッグ
 
-カード・行・プレビューで、押したまま `FileDrag.IsDragGesture` のしきい値を超えたら開始 → `FileDragOut.CreateData`（`DataFormats.FileDrop` + 内部形式 `FolderDeck.DragSource`、最上位カードは `FolderDeck.CardReorder` も）→ `CascadeController.BeginDrag` → `FileDragOut.Run`（`DoDragDrop`、許可する効果は **Copy | Link のみ**）→ `EndDrag`。
-ドラッグ元はメインウィンドウか `CardGrid`（ドラッグ中に破棄されない要素）。`MainViewModel.RegisterDroppedAsync` は自アプリ由来のドロップを受け付けない。
+カード・行・プレビュー・サイドバーの行で、押したまま `FileDrag.IsDragGesture` のしきい値を超えたら開始 → `FileDragOut.CreateData`（`DataFormats.FileDrop` + 内部形式 `FolderDeck.DragSource`、最上位カードは `FolderDeck.CardReorder` も、サイドバーの行は `FolderDeck.SidebarReorder` も。見つからない登録フォルダの行は FileDrop なしで並べ替えだけ）→ `CascadeController.BeginDrag` → `FileDragOut.Run`（`DoDragDrop`、許可する効果は **Copy | Link のみ**）→ `EndDrag`。
+ドラッグ元はメインウィンドウか `CardGrid` / `SidebarView`（ドラッグ中に破棄されない要素）。エクスプローラーからのドロップ登録（`MainWindow.OnDrop` → `MainViewModel.RegisterDroppedAsync`）はウィンドウ全体で受けるが、自アプリ由来のドラッグ（`IsOwnDrag`）は受け付けない。
 
 ### 3.8 永続化
 
@@ -270,6 +282,17 @@ App
 ### 3.9 テーマ
 
 `ThemeManager` が Windows のアプリモード（ライト / ダーク）を監視し、`App.xaml` の MergedDictionaries の 0 番を `Themes/Light.xaml` ↔ `Dark.xaml` に差し替える。色は `DynamicResource` で参照する。
+
+### 3.10 サイドバー（登録フォルダ）とフォルダのタブ
+
+- **サイドバー**：`MainViewModel.Registered`（`SidebarItemViewModel`）を `SidebarView` が 1 行ずつ表示。`RefreshRegistered` が `RegisteredFoldersStore.Folders` と同じ順に揃える（残る行のインスタンスと要素は保つ：開いているカスケードがその要素に付いているため、`Clear` して作り直さない）。新しい行は `CheckRegisteredAsync`（`Existence.ProbeAsync`、2 秒）で `SidebarItemState` を決める。F5（`Refresh`）は全部の行を確認し直す。
+- **登録・解除**：サイドバー上部の入力欄（`RegisterInput` / `RegisterCommand`）、フォルダのボタン（`BrowseCommand`）、ウィンドウへのドロップ（`RegisterDroppedAsync`）、右クリックの「登録フォルダに追加」（`AddToRegisteredAsync`）→ どれも `RegisteredChanged` → `RefreshRegistered`。解除は行の右クリック →`Unregister`（確認あり）。
+- **タブを開く**：行のクリック（`OpenRegisteredAsync`）と、サイドバー起点のカスケードの行・見出し（`ItemRef.NewTab`）→ `OpenFolderTabAsync(target)`：同じ場所（`SameLocation`）を表示しているフォルダのタブがあればそれを選び、なければ `AddFolderTab` で作って `ShowTabAsync`。フォルダのタブの中のカード・パンくず・戻る／進むは `NavigateAsync`（そのタブの中で移動。`target.Tab == Folder` で表示中がフォルダのタブならそのタブ）。
+- **タブの切り替え** `ShowTabAsync`：離れるタブのスクロール位置を `SavedScrollOffset` に保存 → `SelectedTab` を替える（`OnSelectedTabChanged` が `IsSelected` を更新）→ 固定タブの最上位は毎回読み直し、フォルダは `IsStale` のときだけ読み直す → スクロール位置を戻す。
+- **閉じる・並べ替え**：`CloseTabCommand`（× ・中クリック・Ctrl + W・エラー表示の「タブを閉じる」= `BackToTopCommand`）は右隣（なければ左隣、フォルダのタブが無くなれば最後に表示していた固定タブ `_lastFixedTab`）を表示。`CloseOtherTabsAsync`、`MoveFolderTab`（`FolderTabStrip` のドラッグ）。
+- **履歴**：戻る・進むはタブごと（`TabViewModel.BackStack` / `ForwardStack`）。タブをまたいでは戻らない。
+- **保存**：`SaveState` が `open_tabs`（各タブの `Root` + `Rel`）・`selected_folder_tab`・`last_tab`・`sidebar_width` を書く。起動時に復元したフォルダのタブは、フォルダが無くなっていてもタブを残してエラー表示にする（固定タブは最上位へ戻す：`_restoring`）。
+- **表示**：固定タブは `MainWindow.xaml` の `RadioButton`（`TabButton`、`Brush.Accent`）、フォルダのタブは `FolderTabStrip`（`Brush.Folder`）。ツールバーのボタンは `SelectedTab` の `ShowFilter` / `ShowClearHistory` / `CanGoUp` / `BackText` で出し分ける。
 
 ## 4. スレッドと非同期の規約
 
@@ -290,19 +313,22 @@ App
 | 新しい種類のプレビュー | `PreviewKind` に追加 → 読み取りを `Core/Listing/` に → `PreviewTextCache.GetAsync` の分岐 → `CascadeController.ShowExcerpt` / `LoadPreviewAsync` → `PreviewViewModel` / `PreviewView` | 読み取りは共有モード・上限つき・キャンセル可能に。オンラインのみのファイルは開かない（`FileContent.IsCloudOnly`） |
 | 右クリックメニューの項目 | `Views/ContextMenuFactory.cs`（`ItemRef.Context` / カードの種類で出し分け）→ 処理は `MainViewModel` の public メソッドに | カスケードを離れる操作は `BeforeNavigate`（= `CloseAll`）を先に通す |
 | ファイルを変更する操作（削除など） | `Shell/RecycleBin.cs`（ごみ箱への移動だけ）→ `MainViewModel.CanDelete` / `DeleteAsync` → `ContextMenuFactory` | **完全削除の経路を作らない**、必ず確認ダイアログを出す。App 層なので自動テストなし → ローカルのパス（ごみ箱へ入る）と `\\wsl.localhost\…` などのパス（中止されて残る）で手動確認。終わったら `ReloadAfterDeleteAsync` で読み直す。README の「削除（ごみ箱へ移動）」も更新 |
+| サイドバーの行（登録フォルダ）の見た目・操作 | 見た目：`Views/SidebarView.xaml`（行のテンプレート）+ `SidebarItemViewModel` → 操作：`SidebarView.xaml.cs` がイベントで通知 → `MainWindow` の `OnSidebar…` → `MainViewModel`（`OpenRegisteredAsync` / `Unregister` / `MoveRegistered`） | 行の一覧を変えるときは `RefreshRegistered` を通す（`Registered` を `Clear` しない）。ホバーの一覧は `CascadeController.SidebarMouseEnter`。App 層なので手動確認 |
+| フォルダのタブ（開き方・閉じ方・見た目） | `MainViewModel` の `OpenFolderTabAsync` / `ShowTabAsync` / `CloseTab` / `MoveFolderTab` → 見た目と操作：`Views/FolderTabStrip.xaml(.cs)` → 保存：`SaveState` と `AppSettings.OpenTabs` | 固定タブとの違いは `TabViewModel.IsFolderTab` で分ける。保存する項目を足したら `AppSettings.Normalize` / `Clone` と `SettingsStoreTests` |
+| 表示する項目（フィルター）を追加・変更 | `Core/Ordering/ItemFilter.cs`（enum、`Values`、`ToSetting` / `FromSetting`、`Matches`）→ `App/ViewModels/SortModeLabels.cs` の `FilterLabels` | メニューは `ItemFilters.Values` から自動で作られる。`ItemFilterTests`。フィルターを効かせる範囲は `TabViewModel.FilterApplies` / `ShowFilter` |
 | ホバーの待ち時間・アニメーション | `Views/HoverTimings.cs` のみ | |
 | 並び方を追加 | `Core/Ordering/CardSortMode.cs`（enum、`All`、`ToSetting` / `FromSetting`、`IsByModified`）→ `CardOrdering.ComparerFor` → `App/ViewModels/SortModeLabels.cs` | メニューは `CardSortModes.All` から自動で作られる。`OrderingTests`、`OrderStoreTests`（`SortModeSettingsTests`） |
 | データファイルを追加 | `StoreBase` を継承（`Load` / `Serialize`、変更後に `RequestSave`）→ `DataStores` のコンストラクタ・プロパティ・`All` に追加 | `All` に入れると `LoadAll` / `FlushAll` / 保存失敗の通知 / 読み込み問題の報告に自動で乗る。README のデータ表も更新。`StoreTests` |
-| タブの中身・件数・空のときの文言 | `TabViewModel` の `LoadRegisteredAsync` / `LoadRecentAsync` / `LoadFrequentAsync` / `LoadFolderAsync` | UI 文言は日本語でコードに直書き（リソース化していない） |
+| タブの中身・件数・空のときの文言 | `TabViewModel` の `LoadRecentAsync` / `LoadFrequentAsync` / `LoadFolderAsync`、最上位の件数と空のときの文言は `UpdateTopSummary`（フィルターで変わるため 1 か所） | UI 文言は日本語でコードに直書き（リソース化していない） |
 | 最近の履歴・よく使う項目の規則 | `Core/Ranking/`（`RecentMerger`、`FrequentRanker`） | `RankingTests` |
 | フォルダ列挙の規則（並び・隠し・フィルタ） | `Core/Listing/FolderListing.cs`（`FolderLister`） | `ListingTests`（`FolderListerTests`） |
 | カバー画像の選び方 | `Core/Listing/CoverFinder.cs` | `ListingTests`（`CoverFinderTests`） |
 | 画像サムネイルの作り方・速さ | アプリがデコードする形式：`Shell/ImageDecoder.cs` の `Extensions` → 大きさの規則：`Core/Listing/ThumbSizing.cs` → ディスクキャッシュ：`Shell/ThumbDiskCache.cs`（規則は `Core/Infrastructure/DiskCacheRules.cs`）→ 振り分けとワーカー数：`ThumbnailService.GetAsync` / `DecodePicture` | `ThumbCacheTests`。保存する画像が変わる変更は `ThumbDiskCache.Version` を上げる。App 層は自動テストなし → 画像の多いフォルダで手動確認（向きつきの JPEG、透過 PNG、壊れた画像、シェルに回る HEIC など）。刈り込みが消すのは `DiskCacheRules.IsCacheFileName` に合うファイルだけ、という条件を外さない |
 | カードの見た目・バッジ | `Views/CardView.xaml` + `CardViewModel`（`BadgeMode` など） | 色は `Themes/` のトークンを使う。バッジ行は左が 📌（ピン留め時だけ）、右がバッジ（`Viewbox` で縮む）。最小サイズ 120 で切れないか確認 |
 | カードグリッドの列数・サイズ | `Views/CardGrid.xaml.cs`（`GridMetrics`、§6.1）、サイズの範囲は `AppSettings.CardSizeMin` / `Max` / `Step` | |
-| カードの形を追加・変更 | `Core/Layout/CardShape.cs`（enum、`ToSetting` / `FromSetting`、`ThumbHeight`）→ `Views/MainWindow.xaml` のツールバーの `RadioButton` | `CardShapeTests`。ツールバーの幅を増やしたら `MainWindow` の `MinWidth`（いまは 660）で更新ボタンまで収まるか確認 |
+| カードの形を追加・変更 | `Core/Layout/CardShape.cs`（enum、`ToSetting` / `FromSetting`、`ThumbHeight`）→ `Views/MainWindow.xaml` のツールバーの `RadioButton` | `CardShapeTests`。ツールバーの幅を増やしたら、`MainWindow.xaml` の右の列の `MinWidth`（いまは 690）とウィンドウの `MinWidth`（いまは 960）で、最近の履歴の最上位（ボタンがいちばん多い）でも更新ボタンまで収まるか確認 |
 | 色・スタイル | `Themes/Light.xaml` と `Dark.xaml` の**両方**に同じキー、スタイルは `Styles.xaml` | |
-| キー・マウス操作 | `MainWindow.OnPreviewKeyDown` / `OnPreviewMouseDown`、カスケード中は `CascadeController.HandleKey` | |
+| キー・マウス操作 | `MainWindow.OnPreviewKeyDown` / `OnPreviewMouseDown`、カスケード中は `CascadeController.HandleKey`。右ボタンを押したままの左クリックは `CardView` / `EntryListView` / `SidebarView` の `_rocker`（[§3.5](#35-開く移動する)） | 右ボタンを離したときに実行する（押している間に別ウィンドウを前面に出さない） |
 | 開く・エクスプローラー連携 | `Shell/ShellActions.cs`、`Shell/ExplorerTabs.cs`、`MainViewModel.OpenFileAsync` / `ShowInExplorerAsync` | `ExplorerTabs` は非公開コマンド依存。1 回のクリックでタブとウィンドウの両方を開かない |
 | 他アプリへのドラッグの規則 | `Core/Transfer/FileDrag.cs`（規則）、`Shell/FileDragOut.cs`（実行） | Move を許可しない。`FileDragTests` |
 | Win32 API を使う | 該当プロジェクトの `NativeMethods.txt` に名前を追加（CsWin32 が生成）→ App は `Shell/ShellInterop.cs` に集約 | |
@@ -321,7 +347,8 @@ App
 | `ListingTests.cs` | `NaturalComparerTests` `FolderListerTests` `CoverFinderTests` `FolderListingCacheTests` `ExistenceTests` | 自然順、列挙（隠し・システム属性、循環ジャンクション）、カバー探索（深さ・フォルダ数の上限、リパースポイント）、列挙キャッシュ、存在確認 |
 | `OrderingTests.cs` | `CardOrderingTests` `ManualOrderTests` `PathSetTests` `ExistenceProbeTests` | ピン固定の並べ替え、ドラッグ順の適用、パス集合、存在確認と更新日時 |
 | `OrderStoreTests.cs` | `CardOrderStoreTests` `RegisteredFoldersReorderTests` `SortModeSettingsTests` | `card_order.json`、登録順の並べ替え、`sort_modes` |
-| `StoreTests.cs` | `JsonFileTests` `RegisteredFoldersStoreTests` `HistoryStoreTests` `PinAndExcludedStoreTests` `SettingsStoreTests` | 原子的書き込み・退避、各ストア、設定の既定値と正規化 |
+| `StoreTests.cs` | `JsonFileTests` `RegisteredFoldersStoreTests` `HistoryStoreTests` `PinAndExcludedStoreTests` `SettingsStoreTests` | 原子的書き込み・退避、各ストア、設定の既定値と正規化（フォルダのタブ `open_tabs`・サイドバーの幅・旧 `registered` キーの片づけを含む） |
+| `ItemFilterTests.cs` | `ItemFilterTests` | フィルターの設定値の変換、絞り込み、絞り込み中のドラッグ順を全体へ戻す `MergeShownOrder`、`filter_modes` の正規化と保存 |
 | `RankingTests.cs` | `RecentMergerTests` `FrequentRankerTests` `FormattingTests` | 最近の履歴の統合、スコア、表示用の書式 |
 | `PathToolsTests.cs` | `PathToolsTests` | 入力の整形、正規化、相対パス、比較 |
 | `PreviewTests.cs` | `PreviewTests` | 埋め込み縮小版（`OfficeThumbnail`）、オンラインのみの判定、`SessionMarker` |
@@ -338,7 +365,8 @@ App
 - **UI スレッドで待たない**（[§4](#4-スレッドと非同期の規約)）。シェル呼び出しは必ず STA ワーカー経由でタイムアウトをつける。
 - パスの比較は `PathTools.PathEquals` / `PathSet`（大文字小文字を区別せず正規化）。`==` で比べない。長いパスをシェルに渡すときは `PathTools.ForShell`。
 - `SettingsStore.Current` を書き換えても保存されない（コピーのため）。`Update` を使う。
-- 並び順は `_baseCards` を基準に `Ordered` で作る。`Cards` を直接並べ替えない。ピン・ドラッグ順の規則は Core の関数を使う。
+- 並び順は `_baseCards` を基準に `Ordered` で作る。`Cards` を直接並べ替えない。ピン・ドラッグ順の規則は Core の関数を使う。`Cards` はフィルターで項目が減っていることがあるので、位置（何番目か）を基準順と突き合わせる処理は `OrderedCards` を使う。
+- タブは 1 つの種類に 1 つとは限らない（フォルダのタブは何個でも）。`TabKind` からタブを引かず、`TabViewModel` の参照（`SelectedTab`、`FolderTabs`）で扱う。全タブに効かせる処理は `MainViewModel.AllTabs`。
 - カスケードの開閉判断を `CascadeController` の外に書かない。ドラッグ中にポップアップを破棄しない（`DoDragDrop` がボタンを離したことに気づかなくなる）。
 - シェルが返すビットマップの上下と非乗算アルファの扱いは `ShellInterop` に閉じている（README「実装メモ」）。安易に反転しない。
 - `tools/dev.ps1` は UTF-8（BOM 付き）、BAT は ASCII のみ。

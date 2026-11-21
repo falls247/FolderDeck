@@ -4,7 +4,7 @@
         xmlns:views="clr-namespace:FolderDeck.Views"
         xmlns:vm="clr-namespace:FolderDeck.ViewModels"
         xmlns:layout="clr-namespace:FolderDeck.Core.Layout;assembly=FolderDeck.Core"
-        Title="FolderDeck" Width="1280" Height="800" MinWidth="660" MinHeight="420"
+        Title="FolderDeck" Width="1280" Height="800" MinWidth="960" MinHeight="420"
         Background="{DynamicResource Brush.Bg}" Foreground="{DynamicResource Brush.Text}"
         FontFamily="{StaticResource Font.UI}" FontSize="13"
         UseLayoutRounding="True" SnapsToDevicePixels="True" AllowDrop="True"
@@ -38,30 +38,83 @@
     </Window.Resources>
 
     <Grid>
+      <Grid.ColumnDefinitions>
+          <!-- the width is set from settings.json in code (sidebar_width) and changed with the splitter -->
+          <ColumnDefinition x:Name="SidebarColumn" Width="220" MinWidth="140" MaxWidth="480" />
+          <ColumnDefinition Width="Auto" />
+          <!-- 690: the toolbar of 最近の履歴 (count, clear, filter, sort, shape, size, refresh) without clipping -->
+          <ColumnDefinition Width="*" MinWidth="690" />
+      </Grid.ColumnDefinitions>
+
+      <!-- Sidebar: 登録フォルダ (§10.1). One row per folder; resting on a row opens the cascade. -->
+      <Border Grid.Column="0" Background="{DynamicResource Brush.Surface}">
+          <Grid>
+              <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="*" />
+              </Grid.RowDefinitions>
+              <DockPanel Grid.Row="0" Margin="14,6,6,2" Height="32">
+                  <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="30" Height="28" FontSize="14" Content="&#xE8F4;"
+                          ToolTip="フォルダを選んで登録…" Command="{Binding BrowseCommand}" />
+                  <TextBlock Text="登録フォルダ" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Folder}" />
+                  <TextBlock Text="{Binding RegisteredCountText}" Margin="8,0,0,0" VerticalAlignment="Center"
+                             Foreground="{DynamicResource Brush.Muted}" Typography.NumeralAlignment="Tabular" />
+              </DockPanel>
+              <Grid Grid.Row="1" Margin="8,2,8,6">
+                  <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <TextBox x:Name="RegisterBox" Style="{StaticResource Input}" Tag="登録するパス" Padding="6,4" FontSize="12"
+                           ToolTip="登録するフォルダのパス（例: E:\写真\画像）を入力して Enter。エクスプローラーからフォルダをドロップしても登録できます。"
+                           Text="{Binding RegisterInput, UpdateSourceTrigger=PropertyChanged}" KeyDown="OnRegisterKeyDown" />
+                  <Button Grid.Column="1" Style="{StaticResource Btn}" Content="登録" Margin="6,0,0,0" Padding="9,3" FontSize="12"
+                          Command="{Binding RegisterCommand}" />
+              </Grid>
+              <views:SidebarView x:Name="Sidebar" Grid.Row="2" />
+              <TextBlock Grid.Row="2" Margin="14,10,12,0" VerticalAlignment="Top" TextWrapping="Wrap" FontSize="12"
+                         Foreground="{DynamicResource Brush.Muted}" IsHitTestVisible="False"
+                         Text="登録フォルダはまだありません。上の欄にパスを貼り付けるか、右上のボタンで追加してください。フォルダのドロップでも登録できます。"
+                         Visibility="{Binding HasNoRegistered, Converter={StaticResource BoolToVis}}" />
+
+              <!-- drop hint while dragging folders from Explorer over the window -->
+              <Border x:Name="DropHint" Grid.RowSpan="3" Margin="6" CornerRadius="10" BorderThickness="2" BorderBrush="{DynamicResource Brush.Folder}"
+                      Background="{DynamicResource Brush.FolderSoft}" Opacity="0.94" Visibility="Collapsed" IsHitTestVisible="False">
+                  <TextBlock Text="ドロップして登録" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Folder}"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" Margin="8" />
+              </Border>
+          </Grid>
+      </Border>
+
+      <GridSplitter x:Name="SidebarSplitter" Grid.Column="1" Width="5" HorizontalAlignment="Center" VerticalAlignment="Stretch"
+                    ResizeBehavior="PreviousAndNext" ResizeDirection="Columns" Focusable="False" Cursor="SizeWE"
+                    Background="{DynamicResource Brush.Border}" ToolTip="ドラッグで登録フォルダの幅を変更"
+                    DragStarted="OnSplitterDragStarted" DragCompleted="OnSplitterDragCompleted" />
+
+      <Grid Grid.Column="2">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Tabs + settings (§5.1) -->
+        <!-- Tabs + settings (§5.1): the two fixed tabs (accent colour), then the folder tabs (folder colour) -->
         <Border Grid.Row="0" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
             <DockPanel Margin="8,0,8,0">
                 <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Content="&#xE713;" ToolTip="設定"
                         Command="{Binding OpenSettingsCommand}" VerticalAlignment="Center" />
-                <StackPanel Orientation="Horizontal">
-                    <RadioButton Style="{StaticResource TabButton}" GroupName="Tabs" Content="登録フォルダ"
-                                 IsChecked="{Binding SelectedKind, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Registered}"
-                                 Command="{Binding SelectTabCommand}" CommandParameter="{x:Static vm:TabKind.Registered}" />
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
                     <RadioButton Style="{StaticResource TabButton}" GroupName="Tabs" Content="最近の履歴"
-                                 IsChecked="{Binding SelectedKind, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Recent}"
-                                 Command="{Binding SelectTabCommand}" CommandParameter="{x:Static vm:TabKind.Recent}" />
+                                 IsChecked="{Binding RecentTab.IsSelected, Mode=OneWay}"
+                                 Command="{Binding SelectTabCommand}" CommandParameter="{Binding RecentTab}" />
                     <RadioButton Style="{StaticResource TabButton}" GroupName="Tabs" Content="よく使う項目"
-                                 IsChecked="{Binding SelectedKind, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Frequent}"
-                                 Command="{Binding SelectTabCommand}" CommandParameter="{x:Static vm:TabKind.Frequent}" />
+                                 IsChecked="{Binding FrequentTab.IsSelected, Mode=OneWay}"
+                                 Command="{Binding SelectTabCommand}" CommandParameter="{Binding FrequentTab}" />
+                    <Border Width="1" Margin="6,10,8,10" Background="{DynamicResource Brush.Border}" />
                 </StackPanel>
+                <views:FolderTabStrip x:Name="TabStrip" />
             </DockPanel>
         </Border>
 
@@ -72,6 +125,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
@@ -119,13 +173,25 @@
                 <TextBlock Grid.Column="2" Text="{Binding SelectedTab.CountText}" Foreground="{DynamicResource Brush.Muted}"
                            VerticalAlignment="Center" Margin="8,0,12,0" Typography.NumeralAlignment="Tabular" />
 
-                <Button Grid.Column="3" Style="{StaticResource Btn}" Content="履歴をクリア" Margin="0,0,12,0" Padding="10,4"
+                <Button Grid.Column="3" Style="{StaticResource Btn}" Content="履歴をクリア" Margin="0,0,8,0" Padding="10,4"
                         Command="{Binding ClearHistoryCommand}"
                         Visibility="{Binding SelectedTab.ShowClearHistory, Converter={StaticResource BoolToVis}}" />
 
+                <!-- what the list of 最近の履歴 / よく使う項目 shows: everything, folders only, files only -->
+                <Button Grid.Column="4" Style="{StaticResource Btn}" Margin="0,0,8,0" Padding="10,4" Click="OnFilterClick"
+                        ToolTip="表示する項目（タブごと）：すべて / フォルダのみ / ファイルのみ"
+                        Visibility="{Binding SelectedTab.ShowFilter, Converter={StaticResource BoolToVis}}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE71C;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
+                        <TextBlock Text="{Binding SelectedTab.FilterText}" VerticalAlignment="Center" />
+                        <TextBlock Text="&#xE70D;" FontFamily="{StaticResource Font.Icons}" FontSize="9" VerticalAlignment="Center" Margin="6,1,0,0"
+                                   Foreground="{DynamicResource Brush.Muted}" />
+                    </StackPanel>
+                </Button>
+
                 <!-- sort mode of the selected tab -->
-                <Button Grid.Column="4" Style="{StaticResource Btn}" Margin="0,0,12,0" Padding="10,4" Click="OnSortClick"
-                        ToolTip="並べ替え（タブごと）。最上位はドラッグで並べた順、フォルダの中は既定の順（フォルダ→ファイル、名前順）が「手動」です。ピン留めした項目は位置が固定されます。">
+                <Button Grid.Column="5" Style="{StaticResource Btn}" Margin="0,0,10,0" Padding="10,4" Click="OnSortClick"
+                        ToolTip="並べ替え（最近の履歴・よく使う項目はタブごと、フォルダのタブは共通）。一覧はドラッグで並べた順、フォルダの中は既定の順（フォルダ→ファイル、名前順）が「手動」です。ピン留めした項目は位置が固定されます。">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8CB;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
                         <TextBlock Text="{Binding SelectedTab.SortModeText}" VerticalAlignment="Center" />
@@ -135,7 +201,7 @@
                 </Button>
 
                 <!-- card shape (every tab): tall rectangle or square -->
-                <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
+                <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
                     <RadioButton Style="{StaticResource Toggle.Segment}" GroupName="CardShape" ToolTip="カードの形：縦長"
                                  IsChecked="{Binding CardShape, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Portrait}"
                                  Command="{Binding SetCardShapeCommand}" CommandParameter="{x:Static layout:CardShape.Portrait}">
@@ -150,16 +216,16 @@
                     </RadioButton>
                 </StackPanel>
 
-                <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0"
+                <StackPanel Grid.Column="7" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0"
                             ToolTip="カードの大きさ（Ctrl + ホイールでも変更できます）">
                     <TextBlock Text="&#xE71E;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center"
                                Foreground="{DynamicResource Brush.Muted}" Margin="0,0,6,0" />
-                    <Slider x:Name="SizeSlider" Width="140" Minimum="120" Maximum="400" TickFrequency="20" SmallChange="20" LargeChange="40"
+                    <Slider x:Name="SizeSlider" Width="110" Minimum="120" Maximum="400" TickFrequency="20" SmallChange="20" LargeChange="40"
                             IsSnapToTickEnabled="True" VerticalAlignment="Center" Focusable="False"
                             Value="{Binding CardSize, Mode=TwoWay}" />
                 </StackPanel>
 
-                <Grid Grid.Column="7">
+                <Grid Grid.Column="8">
                     <Button Style="{StaticResource Btn.Icon}" Content="&#xE72C;" ToolTip="更新（F5）"
                             Command="{Binding RefreshCommand}"
                             IsEnabled="{Binding SelectedTab.IsLoading, Converter={StaticResource Not}}" />
@@ -169,23 +235,8 @@
             </Grid>
         </Border>
 
-        <!-- Register bar: top level of 登録フォルダ only (§10.1) -->
-        <Grid Grid.Row="2" Margin="16,10,16,0" Visibility="{Binding SelectedTab.ShowRegisterBar, Converter={StaticResource BoolToVis}}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBox x:Name="RegisterBox" Style="{StaticResource Input}" Tag="登録するフォルダのパス（例: E:\写真\画像）"
-                     Text="{Binding RegisterInput, UpdateSourceTrigger=PropertyChanged}" KeyDown="OnRegisterKeyDown" />
-            <Button Grid.Column="1" Style="{StaticResource Btn.Primary}" Content="登録" Margin="8,0,0,0" MinWidth="72"
-                    Command="{Binding RegisterCommand}" />
-            <Button Grid.Column="2" Style="{StaticResource Btn}" Content="参照…" Margin="8,0,0,0" MinWidth="72"
-                    Command="{Binding BrowseCommand}" />
-        </Grid>
-
         <!-- Messages, notice, error banner (§5.4, §8.4, §10.2) -->
-        <StackPanel Grid.Row="3">
+        <StackPanel Grid.Row="2">
             <Border Style="{StaticResource MessageBar}" Visibility="{Binding Message.IsVisible, Converter={StaticResource BoolToVis}}">
                 <DockPanel>
                     <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="24" Height="22" FontSize="10" Content="&#xE711;"
@@ -201,11 +252,7 @@
                     Visibility="{Binding SelectedTab.BannerText, Converter={StaticResource NotEmptyToVis}}">
                 <DockPanel>
                     <Button DockPanel.Dock="Right" Style="{StaticResource Btn}" Padding="10,3" Margin="12,0,0,0"
-                            Command="{Binding BackToTopCommand}">
-                        <TextBlock>
-                            <Run Text="{Binding SelectedTab.Title, Mode=OneWay}" /><Run Text="の一覧に戻る" />
-                        </TextBlock>
-                    </Button>
+                            Command="{Binding BackToTopCommand}" Content="{Binding SelectedTab.BackText}" />
                     <TextBlock Text="{Binding SelectedTab.BannerText}" TextWrapping="Wrap" VerticalAlignment="Center"
                                Foreground="{DynamicResource Brush.Danger}" />
                 </DockPanel>
@@ -213,7 +260,7 @@
         </StackPanel>
 
         <!-- Card grid (§6) -->
-        <Grid Grid.Row="4">
+        <Grid Grid.Row="3">
             <views:CardGrid x:Name="Grid" Items="{Binding SelectedTab.Cards}" CardSize="{Binding CardSize}" CardShape="{Binding CardShape}">
                 <views:CardGrid.Style>
                     <Style TargetType="{x:Type views:CardGrid}">
@@ -240,12 +287,7 @@
                 </StackPanel>
             </Border>
 
-            <!-- drop hint while dragging folders over the register screen -->
-            <Border x:Name="DropHint" Margin="16" CornerRadius="12" BorderThickness="2" BorderBrush="{DynamicResource Brush.Accent}"
-                    Background="{DynamicResource Brush.AccentSoft}" Opacity="0.92" Visibility="Collapsed" IsHitTestVisible="False">
-                <TextBlock Text="ここにドロップして登録" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Accent}"
-                           HorizontalAlignment="Center" VerticalAlignment="Center" />
-            </Border>
         </Grid>
+      </Grid>
     </Grid>
 </Window>
