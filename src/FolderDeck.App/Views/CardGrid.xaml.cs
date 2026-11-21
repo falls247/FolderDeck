@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using FolderDeck.Core.Layout;
 using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
 using FolderDeck.ViewModels;
@@ -57,6 +58,10 @@ public partial class CardGrid : UserControl
         nameof(CardSize), typeof(int), typeof(CardGrid),
         new PropertyMetadata(200, (d, _) => ((CardGrid)d).Rebuild(force: false)));
 
+    public static readonly DependencyProperty CardShapeProperty = DependencyProperty.Register(
+        nameof(CardShape), typeof(CardShape), typeof(CardGrid),
+        new PropertyMetadata(CardShape.Portrait, (d, _) => ((CardGrid)d).Rebuild(force: false)));
+
     private readonly DispatcherTimer _autoScrollTimer;
     private ScrollViewer? _scroll;
     private int _columns;
@@ -95,6 +100,13 @@ public partial class CardGrid : UserControl
     {
         get => (int)GetValue(CardSizeProperty);
         set => SetValue(CardSizeProperty, value);
+    }
+
+    /// <summary>Portrait (3:4 thumbnail) or square (1:1) cards; the width rule (§6.1) is the same.</summary>
+    public CardShape CardShape
+    {
+        get => (CardShape)GetValue(CardShapeProperty);
+        set => SetValue(CardShapeProperty, value);
     }
 
     public GridMetrics Metrics { get; } = new();
@@ -195,7 +207,7 @@ public partial class CardGrid : UserControl
         width = Math.Max(40, width);
 
         Metrics.CardWidth = width;
-        Metrics.ThumbHeight = Math.Round(width * 4 / 3, 2);
+        Metrics.ThumbHeight = CardShapes.ThumbHeight(width, CardShape);
         Metrics.IconSize = Math.Clamp(Math.Round(width * 0.4), 48, 96);
 
         if (!force && columns == _columns)

@@ -54,7 +54,7 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <!-- Thumbnail (3:4) -->
+                <!-- Thumbnail: 3:4 (portrait) or 1:1 (square), height from CardGrid.Metrics.ThumbHeight -->
                 <Grid x:Name="ThumbArea" Grid.Row="0" Background="{DynamicResource Brush.Surface3}" ClipToBounds="True">
                     <Image x:Name="ThumbImage" Source="{Binding Thumbnail}" Stretch="UniformToFill"
                            HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="Collapsed"
@@ -93,77 +93,74 @@
                     </TextBlock>
 
                     <Grid Margin="0,6,0,0" Height="20">
-                        <!-- pending -->
-                        <StackPanel x:Name="BadgePending" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
-                            <Border Style="{StaticResource Pill}">
-                                <TextBlock Text="…" Style="{StaticResource PillText}" />
-                            </Border>
-                        </StackPanel>
-                        <!-- folder counts -->
-                        <StackPanel x:Name="BadgeFolder" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
-                            <Border Style="{StaticResource PillAccent}" Visibility="{Binding ShowFolderCount, Converter={StaticResource BoolToVis}}"
-                                    ToolTip="フォルダ数">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE8B7;" Style="{StaticResource PillGlyph}" />
-                                    <TextBlock Text="{Binding FolderCountText}" Style="{StaticResource PillText}" />
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <!--
+                          📌 on every pinned item (all tabs, inside folders too), bottom-left: the hover
+                          overlay covers only the thumbnail, so it stays visible and clickable (unpins).
+                        -->
+                        <Button x:Name="PinButton" Grid.Column="0" Style="{StaticResource Btn.CardPin}" Margin="0,0,6,0"
+                                Visibility="{Binding IsPinned, Converter={StaticResource BoolToVis}}" Click="OnPinClick" />
+                        <!--
+                          Badges, right-aligned. Too wide for what is left (small cards, beside the 📌,
+                          long counts) they shrink to fit instead of being cut off on the left.
+                        -->
+                        <Viewbox Grid.Column="1" StretchDirection="DownOnly" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <Grid>
+                                <!-- pending -->
+                                <StackPanel x:Name="BadgePending" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
+                                    <Border Style="{StaticResource Pill}">
+                                        <TextBlock Text="…" Style="{StaticResource PillText}" />
+                                    </Border>
                                 </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource PillAccent}" Visibility="{Binding ShowFileCount, Converter={StaticResource BoolToVis}}"
-                                    ToolTip="ファイル数">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE8A5;" Style="{StaticResource PillGlyph}" />
-                                    <TextBlock Text="{Binding FileCountText}" Style="{StaticResource PillText}" />
+                                <!-- folder counts -->
+                                <StackPanel x:Name="BadgeFolder" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
+                                    <Border Style="{StaticResource PillAccent}" Visibility="{Binding ShowFolderCount, Converter={StaticResource BoolToVis}}"
+                                            ToolTip="フォルダ数">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE8B7;" Style="{StaticResource PillGlyph}" />
+                                            <TextBlock Text="{Binding FolderCountText}" Style="{StaticResource PillText}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource PillAccent}" Visibility="{Binding ShowFileCount, Converter={StaticResource BoolToVis}}"
+                                            ToolTip="ファイル数">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE8A5;" Style="{StaticResource PillGlyph}" />
+                                            <TextBlock Text="{Binding FileCountText}" Style="{StaticResource PillText}" />
+                                        </StackPanel>
+                                    </Border>
                                 </StackPanel>
-                            </Border>
-                        </StackPanel>
-                        <!-- file: extension + size -->
-                        <StackPanel x:Name="BadgeFile" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
-                            <Border Style="{StaticResource Pill}">
-                                <TextBlock Text="{Binding ExtensionText}" Style="{StaticResource PillText}" />
-                            </Border>
-                            <Border>
-                                <Border.Style>
-                                    <Style TargetType="{x:Type Border}" BasedOn="{StaticResource Pill}">
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding SizeText}" Value="{x:Null}">
-                                                <Setter Property="Visibility" Value="Collapsed" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                                <TextBlock Text="{Binding SizeText}" Style="{StaticResource PillText}" />
-                            </Border>
-                        </StackPanel>
-                        <!-- missing / no response / error -->
-                        <StackPanel x:Name="BadgeWarn" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
-                            <Border Style="{StaticResource PillWarn}">
-                                <TextBlock x:Name="WarnText" Text="見つかりません" Style="{StaticResource PillText}" />
-                            </Border>
-                        </StackPanel>
+                                <!-- file: extension + size -->
+                                <StackPanel x:Name="BadgeFile" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
+                                    <Border Style="{StaticResource Pill}">
+                                        <TextBlock Text="{Binding ExtensionText}" Style="{StaticResource PillText}" />
+                                    </Border>
+                                    <Border>
+                                        <Border.Style>
+                                            <Style TargetType="{x:Type Border}" BasedOn="{StaticResource Pill}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SizeText}" Value="{x:Null}">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock Text="{Binding SizeText}" Style="{StaticResource PillText}" />
+                                    </Border>
+                                </StackPanel>
+                                <!-- missing / no response / error -->
+                                <StackPanel x:Name="BadgeWarn" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
+                                    <Border Style="{StaticResource PillWarn}">
+                                        <TextBlock x:Name="WarnText" Text="見つかりません" Style="{StaticResource PillText}" />
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
+                        </Viewbox>
                     </Grid>
                 </StackPanel>
             </Grid>
-        </Border>
-
-        <!-- 📌 on every pinned item (all tabs, inside folders too); hidden while the overlay covers the thumbnail -->
-        <Border x:Name="PinBadge" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="6,6,0,0"
-                Width="26" Height="26" CornerRadius="13" Background="{DynamicResource Brush.Surface}"
-                BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1" ToolTip="ピン留め中">
-            <Border.Style>
-                <Style TargetType="{x:Type Border}">
-                    <Setter Property="Visibility" Value="Collapsed" />
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsPinned}" Value="True">
-                            <Setter Property="Visibility" Value="Visible" />
-                        </DataTrigger>
-                        <DataTrigger Binding="{Binding IsHoverHeld}" Value="True">
-                            <Setter Property="Visibility" Value="Collapsed" />
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </Border.Style>
-            <TextBlock Text="&#xE718;" FontFamily="{StaticResource Font.Icons}" FontSize="12"
-                       Foreground="{DynamicResource Brush.Accent}" HorizontalAlignment="Center" VerticalAlignment="Center" />
         </Border>
 
         <!-- × (§6.7) -->

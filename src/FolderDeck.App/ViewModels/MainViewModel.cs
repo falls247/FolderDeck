@@ -2,6 +2,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Layout;
 using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
 using FolderDeck.Core.Stores;
@@ -20,6 +21,9 @@ public interface IMainView
     void ScrollTo(double offset);
 
     bool Confirm(string title, string body, string? path, string primaryText, bool danger);
+
+    /// <summary>The window handle that owns shell dialogs (Recycle Bin progress, "file in use"…).</summary>
+    nint WindowHandle { get; }
 
     IReadOnlyList<string>? PickFolders();
 
@@ -52,6 +56,10 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     private int _cardSize = AppSettings.CardSizeDefault;
+
+    /// <summary>Card shape for every tab (toolbar, right of the sort button).</summary>
+    [ObservableProperty]
+    private CardShape _cardShape = CardShape.Portrait;
 
     [ObservableProperty]
     private string _registerInput = string.Empty;
@@ -118,6 +126,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         var settings = Settings;
         CardSize = settings.CardSize;
+        CardShape = CardShapes.FromSetting(settings.CardShape);
         foreach (var tab in Tabs)
         {
             if (settings.Locations is { } locations && locations.TryGetValue(TabKinds.ToSetting(tab.Kind), out var loc)
@@ -143,6 +152,7 @@ public sealed partial class MainViewModel : ObservableObject
 
             s.LastTab = TabKinds.ToSetting(SelectedTab.Kind);
             s.CardSize = CardSize;
+            s.CardShape = CardShapes.ToSetting(CardShape);
             s.Locations ??= new Dictionary<string, LocationSetting>();
             foreach (var tab in Tabs)
             {
@@ -336,6 +346,15 @@ public sealed partial class MainViewModel : ObservableObject
 
     public void StepCardSize(int direction) =>
         CardSize = AppSettings.ClampCardSize(CardSize + (Math.Sign(direction) * AppSettings.CardSizeStep));
+
+    partial void OnCardShapeChanged(CardShape value)
+    {
+        View?.CloseCascade(); // the overlay covers the thumbnail, whose height changes
+        _services.Stores.Settings.Update(s => s.CardShape = CardShapes.ToSetting(value));
+    }
+
+    [RelayCommand]
+    private void SetCardShape(CardShape shape) => CardShape = shape;
 
     // ---- card order: sort modes and drag & drop ---------------------------------------------
 
@@ -584,18 +603,6 @@ public sealed partial class MainViewModel : ObservableObject
         RecordUse(item.Path, item.IsFolder ? ItemKind.Folder : ItemKind.File);
     }
 
-    /// <summary>The folder itself: in a new Explorer tab when the setting asks for it, else a new window.</summary>
-    public async Task OpenInExplorerAsync(ItemRef item)
-    {
-        var result = Settings.OpenExplorerInNewTab
-            ? await ExplorerTabs.OpenAsync(item.Path)
-            : ShellActions.OpenInExplorer(item.Path);
-        if (!result.Success)
-        {
-            Message.Error(result.Error!);
-        }
-    }
-
     public void CopyPath(ItemRef item)
     {
         if (ShellActions.CopyPath(item.Path))
@@ -605,6 +612,97 @@ public sealed partial class MainViewModel : ObservableObject
         else
         {
             Message.Error("クリップボードにコピーできませんでした。");
+        }
+    }
+
+    /// <summary>
+    /// Items that can be moved to the Recycle Bin from their menu: what lies inside a folder (cards
+    /// below a tab's top level, overlay / flyout rows). Never a tab's top-level card (a registered
+    /// folder, a history entry) nor a flyout header, and not a missing / not responding card.
+    /// </summary>
+    public static bool CanDelete(ItemRef item) =>
+        item.Context is ItemContext.InnerCard or ItemContext.Row && item.Card?.IsDisabled != true;
+
+    /// <summary>
+    /// Moves the item to the Recycle Bin after a confirmation (the cascade closes first). Never
+    /// deletes permanently: an item that cannot be recycled is left as it is (<see cref="RecycleBin"/>).
+    /// </summary>
+    public async Task DeleteAsync(ItemRef item)
+    {
+        if (!CanDelete(item))
+        {
+            return;
+        }
+
+        string name = item.Name;
+        string body = (item.IsFolder
+                ? $"フォルダ「{name}」を、中のファイルやフォルダごとごみ箱に移動します。"
+                : $"「{name}」をごみ箱に移動します。")
+            + "\nごみ箱に移動できない場所（ネットワーク上のフォルダなど）にある項目は削除しません。";
+        bool ok = View?.Confirm("ごみ箱に移動しますか？", body, item.Path, "ごみ箱に移動", danger: true) ?? false;
+        if (!ok)
+        {
+            return;
+        }
+
+        var card = item.Card;
+        if (card is not null)
+        {
+            card.IsBusy = true;
+        }
+
+        RecycleResult result;
+        try
+        {
+            result = await RecycleBin.MoveAsync(item.Path, View?.WindowHandle ?? 0);
+        }
+        finally
+        {
+            if (card is not null)
+            {
+                card.IsBusy = false;
+            }
+        }
+
+        switch (result.Outcome)
+        {
+            case RecycleOutcome.Recycled:
+                Message.Success($"「{name}」をごみ箱に移動しました。");
+                break;
+            case RecycleOutcome.Canceled:
+                Message.Info($"「{name}」の削除を中止しました。");
+                break;
+            case RecycleOutcome.NotRecyclable:
+                Message.Error($"「{name}」はごみ箱に移動できない場所にあるため、削除しませんでした。");
+                break;
+            default:
+                Message.Error($"「{name}」を削除できませんでした：{result.Error ?? "不明なエラー"}");
+                break;
+        }
+
+        // Even a cancelled or failed delete may have moved part of a folder: list again.
+        await ReloadAfterDeleteAsync();
+    }
+
+    /// <summary>
+    /// Drops the cached listings and folder covers (the parent, the overlay's folders, covers that
+    /// showed the item), marks every tab stale and reloads the shown one in place.
+    /// </summary>
+    private async Task ReloadAfterDeleteAsync()
+    {
+        View?.CloseCascade();
+        _services.ClearCaches();
+        foreach (var tab in Tabs)
+        {
+            tab.IsStale = true;
+        }
+
+        var shown = SelectedTab;
+        double offset = View?.GetScrollOffset() ?? 0;
+        var outcome = await shown.LoadAsync();
+        if (outcome == LoadOutcome.Ok && ReferenceEquals(shown, SelectedTab))
+        {
+            View?.ScrollTo(offset);
         }
     }
 

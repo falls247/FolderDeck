@@ -44,3 +44,6 @@ ILCreateFromPath
 ILGetSize
 ILFree
 SendMessageTimeout
+FileOperation
+IFileOperation
+IFileOperationProgressSink
