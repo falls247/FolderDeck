@@ -18,6 +18,19 @@
         </Style>
     </Window.Resources>
     <StackPanel Margin="22,8,22,16">
+        <TextBlock Text="テーマ（配色）" Style="{StaticResource Section}" />
+        <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3" Background="{DynamicResource Brush.Surface2}"
+                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+            <StackPanel Orientation="Horizontal">
+                <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="Theme" Content="システム" IsChecked="{Binding IsThemeSystem}"
+                             ToolTip="Windows の設定（アプリのモード：ライト／ダーク）に合わせます" />
+                <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="Theme" Content="ライト" IsChecked="{Binding IsThemeLight}" Margin="3,0,0,0" />
+                <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="Theme" Content="ダーク" IsChecked="{Binding IsThemeDark}" Margin="3,0,0,0" />
+            </StackPanel>
+        </Border>
+        <TextBlock Text="「システム」は Windows の設定（アプリのモード）に合わせます。OK を押すと切り替わります。"
+                   TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,6,0,0" />
+
         <TextBlock Text="表示" Style="{StaticResource Section}" />
         <CheckBox Content="隠しファイルを表示" IsChecked="{Binding ShowHidden}" />
         <CheckBox Content="実行形式を開く前に確認する" IsChecked="{Binding ConfirmExecutables}" />

@@ -30,6 +30,9 @@ public interface IMainView
     IReadOnlyList<string>? PickFolders();
 
     bool ShowSettings(SettingsViewModel settings);
+
+    /// <summary>Switches the colours to the theme chosen in the settings (system / light / dark).</summary>
+    void ApplyTheme(AppTheme theme);
 }
 
 public enum NavMode
@@ -65,9 +68,6 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Card shape for every tab (toolbar, right of the sort button).</summary>
     [ObservableProperty]
     private CardShape _cardShape = CardShape.Portrait;
-
-    [ObservableProperty]
-    private string _registerInput = string.Empty;
 
     /// <summary>Width of the 登録フォルダ sidebar (DIP), changed with the splitter.</summary>
     [ObservableProperty]
@@ -1070,20 +1070,6 @@ public sealed partial class MainViewModel : ObservableObject
     // ---- 登録フォルダ (§10.1) -----------------------------------------------------------------
 
     [RelayCommand]
-    private async Task Register()
-    {
-        Message.ClearPersistent();
-        string input = RegisterInput;
-        var result = await Task.Run(() => _services.Stores.Registered.Register(input, _services.FileSystem));
-        if (result.Outcome == RegisterOutcome.Added)
-        {
-            RegisterInput = string.Empty;
-        }
-
-        ReportRegisterResult(result);
-    }
-
-    [RelayCommand]
     private async Task Browse()
     {
         Message.ClearPersistent();
@@ -1372,6 +1358,11 @@ public sealed partial class MainViewModel : ObservableObject
 
         _services.Stores.Settings.Update(vm.ApplyTo);
         var after = Settings;
+        if (before.Theme != after.Theme)
+        {
+            View?.ApplyTheme(AppThemes.FromSetting(after.Theme));
+        }
+
         _services.ShowHidden = after.ShowHidden;
         if (before.ShowHidden != after.ShowHidden)
         {

@@ -1,10 +1,14 @@
 using System.Windows;
 using System.Windows.Interop;
+using FolderDeck.Core.Layout;
 using Microsoft.Win32;
 
 namespace FolderDeck.Shell;
 
-/// <summary>Follows Windows' app mode (light / dark) and swaps Themes/Light.xaml ↔ Dark.xaml (§15.1).</summary>
+/// <summary>
+/// Swaps Themes/Light.xaml ↔ Dark.xaml (§15.1) for the theme chosen in the settings: light, dark,
+/// or (<see cref="AppTheme.System"/>) Windows' app mode, which it then keeps following.
+/// </summary>
 public sealed class ThemeManager : IDisposable
 {
     private static readonly Uri LightUri = new("pack://application:,,,/FolderDeck;component/Themes/Light.xaml", UriKind.Absolute);
@@ -30,6 +34,9 @@ public sealed class ThemeManager : IDisposable
 
     public bool IsDark { get; private set; }
 
+    /// <summary>The theme chosen in the settings (<see cref="AppTheme.System"/> until they are loaded).</summary>
+    public AppTheme Mode { get; private set; } = AppTheme.System;
+
     public static bool ReadSystemIsDark()
     {
         try
@@ -43,7 +50,15 @@ public sealed class ThemeManager : IDisposable
         }
     }
 
-    public void Apply() => Apply(ReadSystemIsDark(), force: true);
+    /// <summary>Applies the colours of the current <see cref="Mode"/> (startup: before the settings are read).</summary>
+    public void Apply() => Apply(AppThemes.IsDark(Mode, ReadSystemIsDark()), force: true);
+
+    /// <summary>Switches to <paramref name="mode"/> (the settings were loaded, or changed in the dialog).</summary>
+    public void Apply(AppTheme mode)
+    {
+        Mode = mode;
+        Apply(AppThemes.IsDark(mode, ReadSystemIsDark()), force: false);
+    }
 
     public void ApplyTitleBar(Window window)
     {
@@ -103,7 +118,8 @@ public sealed class ThemeManager : IDisposable
     {
         if (e.Category is UserPreferenceCategory.General or UserPreferenceCategory.Color or UserPreferenceCategory.VisualStyle)
         {
-            _app.Dispatcher.BeginInvoke(() => Apply(ReadSystemIsDark(), force: false));
+            // A fixed light / dark choice ignores Windows' mode (IsDark returns the choice).
+            _app.Dispatcher.BeginInvoke(() => Apply(AppThemes.IsDark(Mode, ReadSystemIsDark()), force: false));
         }
     }
 }

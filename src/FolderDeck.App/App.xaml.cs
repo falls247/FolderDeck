@@ -2,6 +2,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Threading;
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Layout;
 using FolderDeck.Core.Stores;
 using FolderDeck.Services;
 using FolderDeck.Shell;
@@ -51,6 +52,9 @@ public partial class App : Application
         await Task.Run(stores.LoadAll); // JSON I/O off the UI thread (§16)
         _services = new AppServices(stores);
         AppLog.Info($"startup: data loaded at {Since()}");
+
+        // The theme chosen in the settings (until now: Windows' mode), before any window exists.
+        Theme.Apply(AppThemes.FromSetting(stores.Settings.Current.Theme));
 
         var vm = new MainViewModel(_services);
         var window = new MainWindow(vm, Theme);

@@ -14,7 +14,7 @@
                                 ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="900" ToolTipService.Placement="Mouse"
                                 MouseEnter="OnRowEnter" MouseLeave="OnRowLeave" MouseMove="OnRowMove"
                                 MouseLeftButtonDown="OnRowLeftDown" MouseLeftButtonUp="OnRowLeftUp"
-                                MouseRightButtonUp="OnRowRightUp" LostMouseCapture="OnRowLostCapture">
+                                MouseRightButtonUp="OnRowRightUp">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="24" />

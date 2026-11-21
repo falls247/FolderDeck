@@ -4,7 +4,7 @@ title: コードベース概要（改修の入口）
 summary: 層構成・主要クラスの責務・処理の流れ・スレッド規約・改修レシピ・テスト対応表。改修や調査の最初に読む地図
 tags: [architecture, overview, wpf, core, recipe, testing, threading, persistence]
 status: 現行（実装に追従して更新する）
-updated: 2026-11-21
+updated: 2026-11-22
 ---
 
 # コードベース概要（改修の入口）
@@ -88,7 +88,7 @@ App
         └─ Preview（最大 1 つ）: Popup + PreviewView + PreviewViewModel
 ```
 
-- ViewModel から View への依存は `IMainView`（ダイアログ、スクロール位置、カスケードを閉じる、シェルのダイアログの親にするウィンドウハンドル `WindowHandle`）だけ。View からの通知は `ICardHost`（カードのホバー・クリック・右クリック・× ・📌（`CardUnpin`）・ドラッグ・右ボタンを押したままの左クリック（`CardShowInExplorer`））と、`SidebarView` / `FolderTabStrip` のイベントを `MainWindow` が受ける。
+- ViewModel から View への依存は `IMainView`（ダイアログ、スクロール位置、カスケードを閉じる、テーマの切り替え `ApplyTheme`、シェルのダイアログの親にするウィンドウハンドル `WindowHandle`）だけ。View からの通知は `ICardHost`（カードのホバー・クリック・右クリック・× ・📌（`CardUnpin`）・ドラッグ・右ボタンを押したままの左クリック（`CardShowInExplorer`））と、`SidebarView` / `FolderTabStrip` のイベントを `MainWindow` が受ける。
 
 ## 2. ファイルマップ
 
@@ -101,7 +101,9 @@ App
 | | `AppLog.cs` | `logs\app.log`（5 MB で `app.log.1` へ）。例外を投げない。**ファイルの中身は書かず、パスと例外だけ**。行形式は `tools/analyze-log.ps1` が解析する |
 | | `SessionMarker.cs` | `logs\session.json`（起動中だけある記録）の読み書き |
 | | `DiskCacheRules.cs` | 画像サムネイルのディスクキャッシュの規則（I/O なし）：キー → ファイル名（`RelativePathOf`、2 文字のフォルダ + 32 桁の 16 進）、キャッシュが付けた名前かの判定（`IsCacheFileName`）、上限を超えたとき消すファイルの選択（`SelectForRemoval`、使っていない順に上限の 8 割まで）。`CacheFile` |
+| Input | `RockerGesture.cs` | 「右ボタンを押したまま左クリック」の状態機械（`RightDown` / `LeftDown` / `LeftUp` / `RightUp` / `Cancel`）。ビューがボタンのイベントを渡し、右ボタンを離したとき `RightUp` が対象を返す。マウスキャプチャを使わない（[§3.5](#35-開く移動する)） |
 | Layout | `CardShape.cs` | カードの形（`Portrait` = サムネイル 3:4 / `Square` = 1:1）、`settings.json` の値（`portrait` / `square`）との変換、`ThumbHeight`（幅からサムネイルの高さ） |
+| | `AppTheme.cs` | テーマ（`System` / `Light` / `Dark`）、`settings.json` の値（`system` / `light` / `dark`）との変換、`IsDark`（「システム」のときだけ Windows のモードを使う） |
 | Listing | `FolderListing.cs` | `FolderLister.List`：直下の列挙と並び（フォルダ→ファイル、自然順）、`ListingStatus` |
 | | `FolderListingCache.cs` | パス単位の TTL キャッシュ。同じパスの同時要求は 1 回の列挙を共有し、待つ側が全員キャンセルすると列挙も止める。`Clear` / `Invalidate` |
 | | `VolumeThrottle.cs` | ボリュームごとに同時 I/O を制限（ハングした共有がローカルドライブを巻き込まない） |
@@ -133,7 +135,7 @@ App
 | | `HistoryStore.cs` | `history.json`（利用記録）。`Record` / `Remove` / `Clear` |
 | | `PinStore.cs` | `pins.json`。`Pin` / `Unpin` / `IsPinned`、`Changed` イベント |
 | | `ExcludedStore.cs` | `excluded.json`（最近の履歴から外した項目） |
-| | `SettingsStore.cs` | `settings.json`。`AppSettings`（既定値・`Normalize`・`Clone`）。カードの形は文字列の `CardShape`（`card_shape`）、画像サムネイルのディスクキャッシュの上限は `ThumbCacheMb`（`thumb_cache_mb`、MB、0 で無効、起動時に読む）。タブまわり：`LastTab`（`recent` / `frequent` / `folder`）、`Locations`（固定タブの現在地）、`OpenTabs` + `SelectedFolderTab`（フォルダのタブ、50 個まで）、`SidebarWidth`（140〜480）、`SortModes`（キーは `recent` / `frequent` / `folder`）、`FilterModes`（`recent` / `frequent`）。旧「登録フォルダ」タブのキー `registered` は `Normalize` が片づける（並び方は `folder` へ引き継ぎ、現在地は捨てる） |
+| | `SettingsStore.cs` | `settings.json`。`AppSettings`（既定値・`Normalize`・`Clone`）。カードの形は文字列の `CardShape`（`card_shape`）、テーマは文字列の `Theme`（`theme`）、画像サムネイルのディスクキャッシュの上限は `ThumbCacheMb`（`thumb_cache_mb`、MB、0 で無効、起動時に読む）。タブまわり：`LastTab`（`recent` / `frequent` / `folder`）、`Locations`（固定タブの現在地）、`OpenTabs` + `SelectedFolderTab`（フォルダのタブ、50 個まで）、`SidebarWidth`（140〜480）、`SortModes`（キーは `recent` / `frequent` / `folder`）、`FilterModes`（`recent` / `frequent`）。旧「登録フォルダ」タブのキー `registered` は `Normalize` が片づける（並び方は `folder` へ引き継ぎ、現在地は捨てる） |
 | | `CardOrderStore.cs` | `card_order.json`（最近の履歴・よく使う項目のドラッグ順、各 1,000 件まで） |
 | Text | `Formatting.cs` | 相対時刻、日時、ファイルサイズの表示 |
 | Transfer | `FileDrag.cs` | 他アプリへのドラッグの規則：可否、`DropList`（260 文字以上→8.3）、自アプリ由来の判定、`IsDragGesture`。内部形式の名前（`SourceFormat`、カードの並べ替え `ReorderFormat`、サイドバーの並べ替え `SidebarReorderFormat`） |
@@ -160,7 +162,7 @@ App
 | | `ExplorerTabs.cs` | エクスプローラーの新しいタブで「表示」（ファイル：`ShowAsync`＝親フォルダで選択、フォルダ：`OpenAsync`＝そのフォルダ。Windows 11 22H2+、非公開の `WM_COMMAND 0xA21B`。失敗時は `ShellActions` の新しいウィンドウへ） |
 | | `WindowsRecent.cs` | `%APPDATA%\Microsoft\Windows\Recent\*.lnk` の読み取り、記録が有効かの確認 |
 | | `FileDragOut.cs` | ドラッグ用 `DataObject` の作成、`DoDragDrop` の実行、`IsDragging` |
-| | `SingleInstance.cs` / `ThemeManager.cs` | 単一インスタンス / Windows のライト・ダーク追従 |
+| | `SingleInstance.cs` / `ThemeManager.cs` | 単一インスタンス / テーマの適用（`Apply(AppTheme)`：設定のテーマでライト・ダークを差し替える。「システム」のときは Windows のモードに追従） |
 | ViewModels | `MainViewModel.cs` | 固定タブ（`RecentTab` / `FrequentTab`）とフォルダのタブ（`FolderTabs`：開く `OpenFolderTabAsync`・閉じる `CloseTab`・並べ替え `MoveFolderTab`）、タブ切り替え（`ShowTabAsync`）、移動と履歴（戻る・進む、タブごとに最大 100）、開く、右クリックの各操作（ごみ箱への削除 `CanDelete` / `DeleteAsync` を含む）、サイドバーの登録フォルダ（`Registered`、`RefreshRegistered`、登録・解除 `Unregister`・並べ替え `MoveRegistered`、幅 `SidebarWidth`）、並べ替え・フィルター（`SetSortMode` / `SetFilter`）・ドラッグ順の保存、ピン、カードの大きさと形（`CardSize` / `CardShape`）、設定ダイアログ |
 | | `TabViewModel.cs` | 1 タブの現在地・カード・読み込み・並び・フィルター・戻る／進むの履歴（`BackStack` / `ForwardStack`）・離れたときのスクロール位置（[§3.1](#31-タブの読み込み)）。固定タブ（`Recent` / `Frequent`）とフォルダのタブ（`Folder`、`IsFolderTab`）で共通 |
 | | `CardViewModel.cs` | 1 枚のカード。`CardKind`（`Folder` / `File`。`Missing` / `NoResponse` は表示の仕組みだけ残っていて、今はどの一覧も作らない）、`BadgeMode`、段階読み込み（`Realize` / `Unrealize`） |
@@ -169,7 +171,7 @@ App
 | | `PreviewViewModel.cs` | プレビューの内容（`PreviewContent`：画像 / 行 / 段落 / シート） |
 | | `Navigation.cs` | `TabKind`（`Recent` / `Frequent` / `Folder`）、`NavLocation`、`NavEntry`、`ItemContext`（`Sidebar` を含む）、`ItemRef`（`NewTab`：フォルダを新しいタブで開く）、`BreadcrumbItem`、`TabKinds` |
 | | `MessageBarViewModel.cs` | メッセージ行（`Info` / `Success` / `Warning` / `Error`、`ClearPersistent`） |
-| | `SettingsViewModel.cs` | 設定ダイアログ。OK のときだけ `ApplyTo` で反映 |
+| | `SettingsViewModel.cs` | 設定ダイアログ。OK のときだけ `ApplyTo` で反映。テーマは `Theme` と、RadioButton 用の `IsThemeSystem` / `IsThemeLight` / `IsThemeDark` |
 | | `SortModeLabels.cs` | 並べ替えメニューの文言（`SortModeLabels`）とフィルターの文言（`FilterLabels`） |
 | Views | `MainWindow.xaml(.cs)` | 全体のレイアウト（左：サイドバー、`GridSplitter`、右：タブ列・ツールバー・メッセージ・カード）、キー・マウス（`OnPreviewKeyDown` / `OnPreviewMouseDown`、Ctrl + W でタブを閉じる）、エクスプローラーからのドロップ登録（ウィンドウ全体）、並べ替え・フィルターのメニューの組み立て（`OnSortClick` / `OnFilterClick`）、ツールバーのカードの形の切り替え（`RadioButton` 2 つ → `SetCardShapeCommand`）、サイドバーの幅（`SidebarColumn`、`OnSplitterDragCompleted`）、サイドバーのイベントの受け口（`OnSidebarClicked` / `OnSidebarDrag` など）、`ICardHost` / `IMainView` の実装 |
 | | `SidebarView.xaml(.cs)` | サイドバーの登録フォルダの行。ホバー・クリック・右クリック・右ボタンを押したままの左クリック・ドラッグ開始をイベントで通知（`ItemEntered` / `ItemClicked` / `ItemContextMenu` / `ItemExplorerRequested` / `ItemDragRequested`）。行の並べ替えドラッグ（`RunReorderDrag`、入る位置の横線 `DropLine`） |
@@ -251,7 +253,10 @@ App
 - フォルダ：`ItemRef.NewTab`（サイドバーの行と、そこから出したカスケード）なら `OpenFolderTabAsync`（新しいフォルダのタブ）、それ以外は `NavigateAsync(Target, NavMode.New, recordPath: …)`（表示中のタブの中で移動）。どちらも利用として `RecordUse`
 - ファイル：`OpenFileAsync`：実行形式の確認（`ConfirmExecutables` && `ShellActions.IsExecutable`）→ `Task.Run(ShellActions.Open)` → `RecordUse`（`History.Record` → 最近の履歴・よく使う項目を更新）→ 設定によって `SHAddToRecentDocs`
 - 右クリック：`ContextMenuFactory.Show(ItemRef, target)` → `MainViewModel` の `ShowInExplorerAsync`（`ItemRef.IsFolder` ならフォルダ自体を開く `OpenInExplorer` / `ExplorerTabs.OpenAsync`、ファイルなら親フォルダで選択 `ShowInExplorer` / `ExplorerTabs.ShowAsync`。どのタブ・どの位置の項目でも同じ。設定で `ExplorerTabs`）/ `CopyPath` / `TogglePin` / `AddToRegisteredAsync`（未登録のフォルダ → サイドバーに追加）/ `DeleteAsync` / `Unregister`（サイドバーの行）/ `ExcludeFromRecent` / `RemoveFromFrequent`
-- 右ボタンを押したまま左クリック（「エクスプローラーで表示」の近道）：`CardView` / `EntryListView` / `SidebarView` が左ボタンの押下時に `e.RightButton == Pressed` を見て、その要素でマウスをキャプチャして待ち（左クリックは開く動作にもドラッグにもならない）、**右ボタンを離したとき**に `ICardHost.CardShowInExplorer` / `RowExplorerRequested` / `ItemExplorerRequested` → `ShowInExplorerAsync`。右クリックメニューは出さない。離したときに実行するのは、ボタンを押したまま別のウィンドウ（エクスプローラー）が前面に来ると、右ボタンを離した通知がそのウィンドウへ行ってしまうため。キャプチャを失ったら取り消し
+- 右ボタンを押したまま左クリック（「エクスプローラーで表示」の近道）：`CardView` / `EntryListView` / `SidebarView` がそれぞれ Core の `RockerGesture<T>` を 1 つ持ち、見えたボタンのイベントを渡す。左ボタンの押下時に `e.RightButton == Pressed` なら `LeftDown` が対象（カード・行）を覚え（その左クリックは開く動作にもドラッグにもならない）、**右ボタンを離したとき**に `RightUp` が対象を返す → `ICardHost.CardShowInExplorer` / `RowExplorerRequested` / `ItemExplorerRequested` → `ShowInExplorerAsync`。右クリックメニューは出さない。
+  - 離したときに実行するのは、ボタンを押したまま別のウィンドウ（エクスプローラー）が前面に来ると、右ボタンを離した通知がそのウィンドウへ行ってしまうため。
+  - **マウスキャプチャは使わない**。一覧の行（`ListBox`）は左ボタンを離すたびに、処理済みのイベントでも自分のキャプチャを手放す（WPF の `ListBox` のクラスハンドラー）ので、キャプチャで待つ方式だと行の上で待ち状態が消え、右クリックメニューが出ていた。代わりに、古い待ち状態が残りうる場面で取り消す：新しい右ボタンの押下（`PreviewMouseRightButtonDown`、処理済みでも受ける）、右ボタンなしの左クリック、ポインターがビューを出たとき（`Cancel`）。
+  - カードに重なった一覧（オーバーレイ）の行の上では行が対象（行の一覧が先に受ける）。一覧の空白では、下のカードが対象になる。
 - ごみ箱への削除：`CanDelete`（`ItemContext.InnerCard` か `Row`、かつ見つからない・応答なしでない。最上位のカードとフライアウトの見出しは対象外）→ メニューで `BeforeNavigate`（カスケードを閉じる）→ `DeleteAsync`：`IMainView.Confirm`（危険操作。既定は「キャンセル」）→ `RecycleBin.MoveAsync(path, IMainView.WindowHandle)` → 結果をメッセージ行へ → `ReloadAfterDeleteAsync`（`ClearCaches`、全タブを `IsStale`、表示中のタブをスクロール位置を保って読み直す。中止・失敗でも読み直す）
 
 ### 3.6 並べ替え・ピン留め
@@ -281,12 +286,16 @@ App
 
 ### 3.9 テーマ
 
-`ThemeManager` が Windows のアプリモード（ライト / ダーク）を監視し、`App.xaml` の MergedDictionaries の 0 番を `Themes/Light.xaml` ↔ `Dark.xaml` に差し替える。色は `DynamicResource` で参照する。
+`ThemeManager` が `App.xaml` の MergedDictionaries の 0 番を `Themes/Light.xaml` ↔ `Dark.xaml` に差し替える。色は `DynamicResource` で参照する。
+
+- どちらを使うかは設定のテーマ（`AppSettings.Theme`：`system` / `light` / `dark`）で決まる：`AppThemes.IsDark(Mode, Windows のモード)`。「システム」のときだけ Windows のアプリモードを使い、`SystemEvents.UserPreferenceChanged` で追従する（固定のテーマでは変わらない）。
+- 起動時：`App.OnStartup` がまず `Theme.Apply()`（設定を読む前なので Windows のモード）、ストアを読み込んだあとウィンドウを作る前に `Theme.Apply(AppThemes.FromSetting(settings.Theme))`。
+- 設定ダイアログ：`SettingsViewModel.Theme` → OK → `MainViewModel.OpenSettings` が変更を見て `IMainView.ApplyTheme` → `MainWindow` → `ThemeManager.Apply(AppTheme)`（開いているウィンドウのタイトルバーも切り替える）。
 
 ### 3.10 サイドバー（登録フォルダ）とフォルダのタブ
 
 - **サイドバー**：`MainViewModel.Registered`（`SidebarItemViewModel`）を `SidebarView` が 1 行ずつ表示。`RefreshRegistered` が `RegisteredFoldersStore.Folders` と同じ順に揃える（残る行のインスタンスと要素は保つ：開いているカスケードがその要素に付いているため、`Clear` して作り直さない）。新しい行は `CheckRegisteredAsync`（`Existence.ProbeAsync`、2 秒）で `SidebarItemState` を決める。F5（`Refresh`）は全部の行を確認し直す。
-- **登録・解除**：サイドバー上部の入力欄（`RegisterInput` / `RegisterCommand`）、フォルダのボタン（`BrowseCommand`）、ウィンドウへのドロップ（`RegisterDroppedAsync`）、右クリックの「登録フォルダに追加」（`AddToRegisteredAsync`）→ どれも `RegisteredChanged` → `RefreshRegistered`。解除は行の右クリック →`Unregister`（確認あり）。
+- **登録・解除**：サイドバー右上のフォルダのボタン（`BrowseCommand`）、ウィンドウへのドロップ（`RegisterDroppedAsync`）、右クリックの「登録フォルダに追加」（`AddToRegisteredAsync`）→ どれも `RegisteredChanged` → `RefreshRegistered`。解除は行の右クリック →`Unregister`（確認あり）。
 - **タブを開く**：行のクリック（`OpenRegisteredAsync`）と、サイドバー起点のカスケードの行・見出し（`ItemRef.NewTab`）→ `OpenFolderTabAsync(target)`：同じ場所（`SameLocation`）を表示しているフォルダのタブがあればそれを選び、なければ `AddFolderTab` で作って `ShowTabAsync`。フォルダのタブの中のカード・パンくず・戻る／進むは `NavigateAsync`（そのタブの中で移動。`target.Tab == Folder` で表示中がフォルダのタブならそのタブ）。
 - **タブの切り替え** `ShowTabAsync`：離れるタブのスクロール位置を `SavedScrollOffset` に保存 → `SelectedTab` を替える（`OnSelectedTabChanged` が `IsSelected` を更新）→ 固定タブの最上位は毎回読み直し、フォルダは `IsStale` のときだけ読み直す → スクロール位置を戻す。
 - **閉じる・並べ替え**：`CloseTabCommand`（× ・中クリック・Ctrl + W・エラー表示の「タブを閉じる」= `BackToTopCommand`）は右隣（なければ左隣、フォルダのタブが無くなれば最後に表示していた固定タブ `_lastFixedTab`）を表示。`CloseOtherTabsAsync`、`MoveFolderTab`（`FolderTabStrip` のドラッグ）。
@@ -328,7 +337,8 @@ App
 | カードグリッドの列数・サイズ | `Views/CardGrid.xaml.cs`（`GridMetrics`、§6.1）、サイズの範囲は `AppSettings.CardSizeMin` / `Max` / `Step` | |
 | カードの形を追加・変更 | `Core/Layout/CardShape.cs`（enum、`ToSetting` / `FromSetting`、`ThumbHeight`）→ `Views/MainWindow.xaml` のツールバーの `RadioButton` | `CardShapeTests`。ツールバーの幅を増やしたら、`MainWindow.xaml` の右の列の `MinWidth`（いまは 690）とウィンドウの `MinWidth`（いまは 960）で、最近の履歴の最上位（ボタンがいちばん多い）でも更新ボタンまで収まるか確認 |
 | 色・スタイル | `Themes/Light.xaml` と `Dark.xaml` の**両方**に同じキー、スタイルは `Styles.xaml` | |
-| キー・マウス操作 | `MainWindow.OnPreviewKeyDown` / `OnPreviewMouseDown`、カスケード中は `CascadeController.HandleKey`。右ボタンを押したままの左クリックは `CardView` / `EntryListView` / `SidebarView` の `_rocker`（[§3.5](#35-開く移動する)） | 右ボタンを離したときに実行する（押している間に別ウィンドウを前面に出さない） |
+| キー・マウス操作 | `MainWindow.OnPreviewKeyDown` / `OnPreviewMouseDown`、カスケード中は `CascadeController.HandleKey`。右ボタンを押したままの左クリックは `Core/Input/RockerGesture.cs`（規則）と `CardView` / `EntryListView` / `SidebarView` の `_rocker`（[§3.5](#35-開く移動する)） | 右ボタンを離したときに実行する（押している間に別ウィンドウを前面に出さない）。マウスキャプチャで待たない。`RockerGestureTests`。実際のマウス操作は手動確認 |
+| テーマ（配色）の選択肢・適用 | `Core/Layout/AppTheme.cs`（enum、`ToSetting` / `FromSetting`、`IsDark`）→ `Shell/ThemeManager.cs`（`Apply`）→ `SettingsViewModel`（`IsTheme…`）→ `Views/SettingsWindow.xaml`（`Toggle.Choice` の `RadioButton`） | `AppThemeTests`。色そのものは `Themes/Light.xaml` / `Dark.xaml` |
 | 開く・エクスプローラー連携 | `Shell/ShellActions.cs`、`Shell/ExplorerTabs.cs`、`MainViewModel.OpenFileAsync` / `ShowInExplorerAsync` | `ExplorerTabs` は非公開コマンド依存。1 回のクリックでタブとウィンドウの両方を開かない |
 | 他アプリへのドラッグの規則 | `Core/Transfer/FileDrag.cs`（規則）、`Shell/FileDragOut.cs`（実行） | Move を許可しない。`FileDragTests` |
 | Win32 API を使う | 該当プロジェクトの `NativeMethods.txt` に名前を追加（CsWin32 が生成）→ App は `Shell/ShellInterop.cs` に集約 | |
@@ -357,6 +367,8 @@ App
 | `FileDragTests.cs` | `FileDragTests` | ドラッグ可否、DropList、自アプリ判定、しきい値 |
 | `ThumbCacheTests.cs` | `ThumbSizingTests` `DiskCacheRulesTests` | 画像をデコードする大きさ（短い辺・拡大しない・長い辺の上限）、ディスクキャッシュのファイル名、刈り込みで消すファイルの選択 |
 | `CardShapeTests.cs` | `CardShapeTests` | `card_shape` の正規化（未設定・不正値は `portrait`）と保存キー、サムネイルの高さ（3:4 / 1:1） |
+| `AppThemeTests.cs` | `AppThemeTests` | テーマの設定値の変換（未設定・不正値は `system`）、`IsDark`、`theme` の正規化と保存 |
+| `RockerGestureTests.cs` | `RockerGestureTests` | 右ボタンを押したままの左クリック：右ボタンを離したとき 1 回だけ対象を返す、左ボタンを離しても待ち状態が残る、普通のクリックと区別する、古い待ち状態を捨てる |
 | `TestHelpers.cs` | `FakeClock` `FakeFileSystem` `TempDir` | テスト用の部品（新しいテストはまずこれを使う） |
 
 ## 7. 守ること・落とし穴
@@ -367,6 +379,7 @@ App
 - `SettingsStore.Current` を書き換えても保存されない（コピーのため）。`Update` を使う。
 - 並び順は `_baseCards` を基準に `Ordered` で作る。`Cards` を直接並べ替えない。ピン・ドラッグ順の規則は Core の関数を使う。`Cards` はフィルターで項目が減っていることがあるので、位置（何番目か）を基準順と突き合わせる処理は `OrderedCards` を使う。
 - タブは 1 つの種類に 1 つとは限らない（フォルダのタブは何個でも）。`TabKind` からタブを引かず、`TabViewModel` の参照（`SelectedTab`、`FolderTabs`）で扱う。全タブに効かせる処理は `MainViewModel.AllTabs`。
+- 一覧の行（`EntryListView` の `ListBox`）でマウスキャプチャを使って何かを待たない。`ListBox` は左ボタンを離すたびに自分のキャプチャを手放す（処理済みのイベントでも）。待ち状態は `RockerGesture` のようにフラグで持ち、取り消す条件を決める。
 - カスケードの開閉判断を `CascadeController` の外に書かない。ドラッグ中にポップアップを破棄しない（`DoDragDrop` がボタンを離したことに気づかなくなる）。
 - シェルが返すビットマップの上下と非乗算アルファの扱いは `ShellInterop` に閉じている（README「実装メモ」）。安易に反転しない。
 - `tools/dev.ps1` は UTF-8（BOM 付き）、BAT は ASCII のみ。

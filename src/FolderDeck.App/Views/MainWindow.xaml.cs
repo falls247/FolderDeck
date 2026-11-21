@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using FolderDeck.Core.Layout;
 using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Stores;
 using FolderDeck.Core.Transfer;
@@ -192,15 +193,6 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             e.Handled = true;
             _vm.GoForwardCommand.Execute(null);
-        }
-    }
-
-    private void OnRegisterKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter)
-        {
-            e.Handled = true;
-            _vm.RegisterCommand.Execute(null);
         }
     }
 
@@ -494,5 +486,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _cascade.CloseAll();
         var window = new SettingsWindow(settings) { Owner = this };
         return window.ShowDialog() == true;
+    }
+
+    public void ApplyTheme(AppTheme theme)
+    {
+        _cascade.CloseAll();
+        _theme.Apply(theme); // swaps the colour dictionary and the title bars
     }
 }

@@ -51,35 +51,23 @@
           <Grid>
               <Grid.RowDefinitions>
                   <RowDefinition Height="Auto" />
-                  <RowDefinition Height="Auto" />
                   <RowDefinition Height="*" />
               </Grid.RowDefinitions>
-              <DockPanel Grid.Row="0" Margin="14,6,6,2" Height="32">
+              <DockPanel Grid.Row="0" Margin="14,6,6,4" Height="32">
                   <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="30" Height="28" FontSize="14" Content="&#xE8F4;"
-                          ToolTip="フォルダを選んで登録…" Command="{Binding BrowseCommand}" />
+                          ToolTip="フォルダを選んで登録…（エクスプローラーからフォルダをドロップしても登録できます）" Command="{Binding BrowseCommand}" />
                   <TextBlock Text="登録フォルダ" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Folder}" />
                   <TextBlock Text="{Binding RegisteredCountText}" Margin="8,0,0,0" VerticalAlignment="Center"
                              Foreground="{DynamicResource Brush.Muted}" Typography.NumeralAlignment="Tabular" />
               </DockPanel>
-              <Grid Grid.Row="1" Margin="8,2,8,6">
-                  <Grid.ColumnDefinitions>
-                      <ColumnDefinition Width="*" />
-                      <ColumnDefinition Width="Auto" />
-                  </Grid.ColumnDefinitions>
-                  <TextBox x:Name="RegisterBox" Style="{StaticResource Input}" Tag="登録するパス" Padding="6,4" FontSize="12"
-                           ToolTip="登録するフォルダのパス（例: E:\写真\画像）を入力して Enter。エクスプローラーからフォルダをドロップしても登録できます。"
-                           Text="{Binding RegisterInput, UpdateSourceTrigger=PropertyChanged}" KeyDown="OnRegisterKeyDown" />
-                  <Button Grid.Column="1" Style="{StaticResource Btn}" Content="登録" Margin="6,0,0,0" Padding="9,3" FontSize="12"
-                          Command="{Binding RegisterCommand}" />
-              </Grid>
-              <views:SidebarView x:Name="Sidebar" Grid.Row="2" />
-              <TextBlock Grid.Row="2" Margin="14,10,12,0" VerticalAlignment="Top" TextWrapping="Wrap" FontSize="12"
+              <views:SidebarView x:Name="Sidebar" Grid.Row="1" />
+              <TextBlock Grid.Row="1" Margin="14,10,12,0" VerticalAlignment="Top" TextWrapping="Wrap" FontSize="12"
                          Foreground="{DynamicResource Brush.Muted}" IsHitTestVisible="False"
-                         Text="登録フォルダはまだありません。上の欄にパスを貼り付けるか、右上のボタンで追加してください。フォルダのドロップでも登録できます。"
+                         Text="登録フォルダはまだありません。右上のボタンでフォルダを選ぶか、エクスプローラーからフォルダをドロップして追加してください。"
                          Visibility="{Binding HasNoRegistered, Converter={StaticResource BoolToVis}}" />
 
               <!-- drop hint while dragging folders from Explorer over the window -->
-              <Border x:Name="DropHint" Grid.RowSpan="3" Margin="6" CornerRadius="10" BorderThickness="2" BorderBrush="{DynamicResource Brush.Folder}"
+              <Border x:Name="DropHint" Grid.RowSpan="2" Margin="6" CornerRadius="10" BorderThickness="2" BorderBrush="{DynamicResource Brush.Folder}"
                       Background="{DynamicResource Brush.FolderSoft}" Opacity="0.94" Visibility="Collapsed" IsHitTestVisible="False">
                   <TextBlock Text="ドロップして登録" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Folder}"
                              HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" Margin="8" />
