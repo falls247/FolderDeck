@@ -4,7 +4,7 @@ using FolderDeck.Core.Listing;
 
 namespace FolderDeck.Shell;
 
-/// <summary>Decodes the cover thumbnail embedded in a presentation (see <see cref="OfficeThumbnail"/>).</summary>
+/// <summary>Decodes the thumbnail embedded in an Open XML file — a presentation's cover, a document's first page (see <see cref="OfficeThumbnail"/>).</summary>
 internal static class OfficeCover
 {
     /// <summary>The cover as a frozen 96-DPI bitmap, or null. Safe on any thread.</summary>

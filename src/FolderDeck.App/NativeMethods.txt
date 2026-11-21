@@ -35,3 +35,12 @@ GetCursorPos
 CoInitializeEx
 GetForegroundWindow
 GetWindowThreadProcessId
+AssocQueryString
+FindWindowEx
+IsWindowVisible
+PostMessage
+DwmGetWindowAttribute
+ILCreateFromPath
+ILGetSize
+ILFree
+SendMessageTimeout

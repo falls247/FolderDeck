@@ -40,9 +40,15 @@
             <TextBox Grid.Row="1" Grid.Column="1" Style="{StaticResource Input}" Text="{Binding FrequentLimitText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
         </Grid>
 
+        <TextBlock Text="エクスプローラー" Style="{StaticResource Section}" />
+        <CheckBox IsChecked="{Binding OpenExplorerInNewTab}">
+            <TextBlock Text="エクスプローラーで表示・開くとき、開いているエクスプローラーに新しいタブで開く（Windows 11）" TextWrapping="Wrap" />
+        </CheckBox>
+        <TextBlock Text="エクスプローラーが開いていないとき、またはタブに対応していない Windows では、新しいウィンドウで開きます。"
+                   TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="20,0,0,0" />
+
         <TextBlock Text="データ" Style="{StaticResource Section}" />
         <WrapPanel>
-            <Button Style="{StaticResource Btn}" Content="imgtool の登録フォルダを取り込む…" Command="{Binding ImportCommand}" Margin="0,0,8,8" />
             <Button Style="{StaticResource Btn}" Content="よく使う項目の統計をリセット" Command="{Binding ResetStatsCommand}" Margin="0,0,8,8" />
             <Button Style="{StaticResource Btn}" Content="データフォルダを開く" Command="{Binding OpenDataFolderCommand}" Margin="0,0,8,8" />
         </WrapPanel>

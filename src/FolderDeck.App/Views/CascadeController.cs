@@ -18,9 +18,10 @@ namespace FolderDeck.Views;
 /// Popups (levels 1…). Owns hover intent (§9.6), placement (§9.5), clicks (§9.7) and keyboard
 /// navigation (§9.9). Every close is decided here; Popups use StaysOpen=True.
 /// <para>
-/// Resting on an image / presentation row (or selecting it with the keyboard) shows a preview
-/// beside the list, in the place a child flyout would take. At most one preview is open; it is
-/// always the deepest thing in the cascade and closes with the level it belongs to.
+/// Resting on a previewable file row (image, Office file, text, anything the shell draws a
+/// thumbnail of), or selecting it with the keyboard, shows a preview beside the list, in the
+/// place a child flyout would take. At most one preview is open; it is always the deepest thing
+/// in the cascade and closes with the level it belongs to.
 /// </para>
 /// </summary>
 public sealed class CascadeController
@@ -42,6 +43,7 @@ public sealed class CascadeController
     private readonly DispatcherTimer _exitTimer;
     private readonly DispatcherTimer _previewTimer;
     private readonly DispatcherTimer _previewCloseTimer;
+    private readonly PreviewTextCache _previewTexts = new();
 
     private CardView? _card;
     private CardViewModel? _waitingFor;
@@ -51,6 +53,7 @@ public sealed class CascadeController
     private int _graceLevel = -1;
     private int _keyLevel = -1;
     private bool _menuOpen;
+    private bool _suspended;
     private int _generation;
 
     public CascadeController(Window window, MainViewModel vm, ContextMenuFactory menus)
@@ -76,11 +79,25 @@ public sealed class CascadeController
 
     public bool IsOpen => _levels.Count > 0;
 
+    /// <summary>A card drag started: closes everything; nothing opens on hover until <see cref="Resume"/>.</summary>
+    public void Suspend()
+    {
+        _suspended = true;
+        CloseAll();
+    }
+
+    public void Resume() => _suspended = false;
+
     // ---- card events --------------------------------------------------------------------------
 
     public void CardMouseEnter(CardView card)
     {
         _exitTimer.Stop();
+        if (_suspended)
+        {
+            return; // dragging a card
+        }
+
         if (!_window.IsActive)
         {
             return; // rule 7: nothing opens over an inactive window
@@ -220,7 +237,7 @@ public sealed class CascadeController
         _overlayTimer.Stop();
         var card = _card;
         var vm = card?.ViewModel;
-        if (card is null || vm is null || _levels.Count > 0 || !_window.IsActive || !card.IsMouseOver)
+        if (card is null || vm is null || _suspended || _levels.Count > 0 || !_window.IsActive || !card.IsMouseOver)
         {
             return;
         }
@@ -246,7 +263,7 @@ public sealed class CascadeController
 
         StopWaiting();
         var card = _card;
-        if (card is not null && ReferenceEquals(card.ViewModel, vm) && card.IsMouseOver && _window.IsActive && _levels.Count == 0)
+        if (card is not null && !_suspended && ReferenceEquals(card.ViewModel, vm) && card.IsMouseOver && _window.IsActive && _levels.Count == 0)
         {
             _ = OpenOverlayAsync(card, vm);
         }
@@ -279,7 +296,7 @@ public sealed class CascadeController
             return;
         }
 
-        if (generation != _generation || !ReferenceEquals(_card, card) || !ReferenceEquals(card.ViewModel, vm) || _levels.Count > 0)
+        if (_suspended || generation != _generation || !ReferenceEquals(_card, card) || !ReferenceEquals(card.ViewModel, vm) || _levels.Count > 0)
         {
             return;
         }
@@ -723,7 +740,7 @@ public sealed class CascadeController
         return new Rect(topLeft, bottomRight);
     }
 
-    // ---- previews (image / presentation rows) -------------------------------------------------
+    // ---- previews (previewable file rows) -----------------------------------------------------
 
     /// <summary>The pointer moved to <paramref name="row"/> (null = blank space) of <paramref name="level"/>.</summary>
     private void OnPreviewHover(Level level, EntryRowViewModel? row)
@@ -832,9 +849,20 @@ public sealed class CascadeController
             RowRect = rowRect,
             AnchorRect = anchor,
             PreferLeft = parent.Index > 0 && parent.DirectionLeft,
+
+            // Nothing of its own to show (audio, video, PDF…), only maybe a shell thumbnail: it
+            // appears once a picture has come, and without one nothing appears at all.
+            AwaitsPicture = row.PreviewKind == PreviewKind.None,
         };
         _preview = preview;
-        row.IsActive = true;
+        if (preview.AwaitsPicture)
+        {
+            view.IsHitTestVisible = false; // invisible until then: the pointer goes to what is under it
+        }
+        else
+        {
+            row.IsActive = true;
+        }
 
         view.MouseEnter += (_, _) =>
         {
@@ -889,8 +917,11 @@ public sealed class CascadeController
 
         preview.TargetX = p.X;
         preview.TargetY = p.Y;
-        if (reveal)
+        if (reveal && !preview.IsRevealed && !preview.AwaitsPicture)
         {
+            preview.IsRevealed = true;
+            preview.Row.IsActive = true;
+            preview.View.IsHitTestVisible = true;
             preview.View.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, HoverTimings.FlyoutFadeIn));
         }
 
@@ -902,9 +933,36 @@ public sealed class CascadeController
     private async Task LoadPreviewAsync(Preview preview, double dpiScale)
     {
         var row = preview.Row;
+        var kind = row.PreviewKind;
         int pixels = ThumbnailService.Bucket(PreviewView.ImageWidth * dpiScale);
         try
         {
+            // Word / Excel / text: the text itself first. A document without text (or a "text"
+            // file that turns out binary, like a .ts video) falls back to a picture below.
+            string? emptyNote = null;
+            if (kind is PreviewKind.WordDocument or PreviewKind.Spreadsheet or PreviewKind.Text)
+            {
+                var excerpt = await _previewTexts.GetAsync(row.Path, kind, row.ModifiedUtc, row.Length, preview.Cts.Token);
+                if (!ReferenceEquals(_preview, preview))
+                {
+                    return;
+                }
+
+                if (ShowExcerpt(preview.Model, excerpt))
+                {
+                    return;
+                }
+
+                emptyNote = excerpt switch
+                {
+                    WordExcerpt => "本文がありません",
+                    SheetExcerpt => "空のシート",
+                    _ => null,
+                };
+            }
+
+            // A picture: the shell's thumbnail (images, Office's or another app's handler, video
+            // frames) or, for Open XML files, the thumbnail saved inside the file.
             var result = await _services.Thumbnails.GetAsync(row.Path, ThumbSource.File, pixels, ThumbnailService.IconPixelsBase, row.ModifiedUtc, row.Length, preview.Cts.Token);
             if (!ReferenceEquals(_preview, preview))
             {
@@ -915,10 +973,27 @@ public sealed class CascadeController
             if (result.Image is not null && result.Mode is (ThumbMode.Image or ThumbMode.Shell))
             {
                 preview.Model.Show(result.Image);
+                if (preview.AwaitsPicture)
+                {
+                    // The pointer (or the key selection) left the row while the picture was coming:
+                    // don't flash a card that the grace timer is about to close.
+                    bool wanted = !_previewCloseTimer.IsEnabled && preview.ParentIndex < _levels.Count
+                        && (ReferenceEquals(_levels[preview.ParentIndex].List.HoveredRow, preview.Row)
+                            || ReferenceEquals(_levels[preview.ParentIndex].KeyRow, preview.Row));
+                    if (!wanted)
+                    {
+                        ClosePreview();
+                        return;
+                    }
+
+                    // The picture has come: place the card at its real size, then fade it in.
+                    preview.AwaitsPicture = false;
+                    _ = _window.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => PositionPreview(preview, reveal: true));
+                }
             }
             else
             {
-                preview.Model.Fail();
+                FailPreview(preview, emptyNote);
             }
         }
         catch (OperationCanceledException)
@@ -929,8 +1004,46 @@ public sealed class CascadeController
             AppLog.Warn($"Preview failed: {row.Path}", ex);
             if (ReferenceEquals(_preview, preview))
             {
-                preview.Model.Fail();
+                FailPreview(preview, null);
             }
+        }
+    }
+
+    /// <summary>
+    /// Nothing to show: says why, or, for a row that only hoped for a shell thumbnail (audio
+    /// without cover art…), closes the still invisible preview without a word.
+    /// </summary>
+    private void FailPreview(Preview preview, string? reason)
+    {
+        if (preview.AwaitsPicture)
+        {
+            ClosePreview();
+        }
+        else
+        {
+            preview.Model.Fail(reason);
+        }
+    }
+
+    /// <summary>Shows an extracted excerpt; false when there is none to show (the caller tries a picture).</summary>
+    private static bool ShowExcerpt(PreviewViewModel model, object? excerpt)
+    {
+        switch (excerpt)
+        {
+            case WordExcerpt { IsEmpty: false } document:
+                model.ShowParagraphs(document);
+                return true;
+            case SheetExcerpt { IsEmpty: false } sheet:
+                model.ShowSheet(sheet);
+                return true;
+            case TextExcerpt { IsEmpty: false } text:
+                model.ShowLines(text);
+                return true;
+            case TextExcerpt:
+                model.Fail("空のファイル");
+                return true;
+            default:
+                return false;
         }
     }
 
@@ -1017,7 +1130,7 @@ public sealed class CascadeController
         row.IsKeySelected = true;
         level.List.ScrollRowIntoView(row);
 
-        // Selecting an image / presentation with the keyboard previews it too.
+        // Selecting a previewable file with the keyboard previews it too.
         if (row.IsPreviewable)
         {
             if (!ReferenceEquals(_preview?.Row, row))
@@ -1121,6 +1234,15 @@ public sealed class CascadeController
         public Rect AnchorRect { get; init; }
 
         public bool PreferLeft { get; init; }
+
+        /// <summary>
+        /// Kept invisible (and transparent to the pointer) until a picture comes; when none comes
+        /// it closes instead of saying it cannot be shown.
+        /// </summary>
+        public bool AwaitsPicture { get; set; }
+
+        /// <summary>Faded in (once).</summary>
+        public bool IsRevealed { get; set; }
 
         public int TargetX { get; set; }
 

@@ -1,7 +1,9 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Stores;
 using FolderDeck.Shell;
 using FolderDeck.ViewModels;
@@ -184,10 +186,56 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private void OnHideMessage(object sender, RoutedEventArgs e) => _vm.Message.Hide();
 
+    /// <summary>
+    /// Toolbar sort button: a menu of the five modes, the current one checked, and on 最近の履歴 /
+    /// よく使う項目 「手動の並びをリセット」 (enabled when cards were dragged there).
+    /// </summary>
+    private void OnSortClick(object sender, RoutedEventArgs e)
+    {
+        _cascade.CloseAll();
+        var current = _vm.SelectedTab.SortMode;
+        var menu = new ContextMenu
+        {
+            PlacementTarget = (UIElement)sender,
+            Placement = PlacementMode.Bottom,
+        };
+        foreach (var mode in CardSortModes.All)
+        {
+            bool selected = mode == current;
+            var item = new MenuItem
+            {
+                Header = SortModeLabels.Long(mode),
+                Tag = selected ? "" : string.Empty, // check mark (the menu style draws Tag as a glyph)
+                IsCheckable = true,
+                IsChecked = selected,
+            };
+            item.Click += (_, _) => _vm.SetSortMode(mode);
+            menu.Items.Add(item);
+        }
+
+        if (_vm.ShowResetManualOrder)
+        {
+            menu.Items.Add(new Separator());
+            var reset = new MenuItem
+            {
+                Header = SortModeLabels.ResetManual,
+                Tag = "", // undo glyph
+                IsEnabled = _vm.CanResetManualOrder,
+                ToolTip = SortModeLabels.ResetManualTip,
+            };
+            ToolTipService.SetShowOnDisabled(reset, true);
+            reset.Click += (_, _) => _ = _vm.ResetManualOrderAsync();
+            menu.Items.Add(reset);
+        }
+
+        menu.IsOpen = true;
+    }
+
     // ---- drag & drop registration (§10.1, P1) -----------------------------------------------
 
+    // Cards being reordered carry only CardGrid.ReorderFormat: never a folder drop.
     private bool CanDrop(DragEventArgs e) =>
-        _vm.SelectedTab.ShowRegisterBar && e.Data.GetDataPresent(DataFormats.FileDrop);
+        _vm.SelectedTab.ShowRegisterBar && e.Data.GetDataPresent(DataFormats.FileDrop) && !e.Data.GetDataPresent(CardGrid.ReorderFormat);
 
     private void OnDragOver(object sender, DragEventArgs e)
     {
@@ -242,6 +290,34 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
     }
 
+    public bool CanDragCard(CardView card) => card.ViewModel is { } vm && _vm.CanReorder(vm);
+
+    public void CardDrag(CardView card)
+    {
+        if (card.ViewModel is not { } vm || !_vm.CanReorder(vm))
+        {
+            return;
+        }
+
+        int? index;
+        _cascade.Suspend();
+        try
+        {
+            index = Grid.RunReorderDrag(vm);
+        }
+        finally
+        {
+            _cascade.Resume();
+        }
+
+        if (index is { } i)
+        {
+            double offset = Grid.VerticalOffset;
+            _vm.MoveCard(vm, i);
+            Grid.ScrollTo(offset); // the grid rebuilds its rows: stay where the card was dropped
+        }
+    }
+
     // ---- IMainView ----------------------------------------------------------------------------
 
     public void CloseCascade() => _cascade.CloseAll();
@@ -266,17 +342,6 @@ public partial class MainWindow : Window, IMainView, ICardHost
             Title = "登録するフォルダを選択",
         };
         return dialog.ShowDialog(this) == true ? dialog.FolderNames : null;
-    }
-
-    public string? PickImportFile()
-    {
-        var dialog = new OpenFileDialog
-        {
-            Title = "imgtool の registered_folders.json を選択",
-            Filter = "registered_folders.json|registered_folders.json|JSON ファイル (*.json)|*.json|すべてのファイル (*.*)|*.*",
-            CheckFileExists = true,
-        };
-        return dialog.ShowDialog(this) == true ? dialog.FileName : null;
     }
 
     public bool ShowSettings(SettingsViewModel settings)

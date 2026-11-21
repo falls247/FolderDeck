@@ -21,9 +21,18 @@ public static class OfficeThumbnail
     private static readonly string[] Fallbacks = ["docProps/thumbnail.jpeg", "docProps/thumbnail.jpg", "docProps/thumbnail.png"];
 
     /// <summary>The thumbnail's encoded bytes (JPEG / PNG…), or null when there is none or it cannot be read.</summary>
-    /// <remarks>Opens the file shared, so a presentation open in PowerPoint can still be read. Never throws.</remarks>
+    /// <remarks>
+    /// Opens the file shared, so a presentation open in PowerPoint can still be read. A cloud-only
+    /// file (<see cref="FileContent.IsCloudOnly(string)"/>) gives null without being opened, so it is
+    /// not downloaded. Never throws.
+    /// </remarks>
     public static byte[]? ReadEmbedded(string path)
     {
+        if (FileContent.IsCloudOnly(path))
+        {
+            return null;
+        }
+
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -67,7 +76,8 @@ public static class OfficeThumbnail
         }
 
         var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, IgnoreComments = true };
-        using var reader = XmlReader.Create(rels.Open(), settings);
+        using var relStream = rels.Open(); // the reader does not close it (CloseInput is false)
+        using var reader = XmlReader.Create(relStream, settings);
         while (reader.Read())
         {
             if (reader.NodeType == XmlNodeType.Element && reader.LocalName == "Relationship"

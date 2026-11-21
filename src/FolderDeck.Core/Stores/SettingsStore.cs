@@ -1,4 +1,5 @@
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Ordering;
 
 namespace FolderDeck.Core.Stores;
 
@@ -44,6 +45,12 @@ public sealed class AppSettings
 
     public int CardSize { get; set; } = CardSizeDefault;
 
+    /// <summary>
+    /// Sort mode per tab: <see cref="TabRegistered"/> / <see cref="TabRecent"/> / <see cref="TabFrequent"/> →
+    /// <c>manual</c>, <c>name_asc</c>, <c>name_desc</c>, <c>modified_asc</c>, <c>modified_desc</c>.
+    /// </summary>
+    public Dictionary<string, string>? SortModes { get; set; } = new();
+
     public bool ShowHidden { get; set; }
 
     public bool ConfirmExecutables { get; set; } = true;
@@ -58,11 +65,24 @@ public sealed class AppSettings
 
     public bool AddToWindowsRecent { get; set; }
 
+    /// <summary>"Show / open in Explorer" uses a new tab of the running File Explorer window (Windows 11 22H2+).</summary>
+    public bool OpenExplorerInNewTab { get; set; }
+
     public static int ClampCardSize(int value)
     {
         int clamped = Math.Clamp(value, CardSizeMin, CardSizeMax);
         int steps = (int)Math.Round((clamped - CardSizeMin) / (double)CardSizeStep);
         return CardSizeMin + (steps * CardSizeStep);
+    }
+
+    /// <summary>Sort mode of a tab; missing or unknown values are <see cref="CardSortMode.Manual"/>.</summary>
+    public CardSortMode SortModeOf(string tab) =>
+        SortModes is not null && SortModes.TryGetValue(tab, out string? mode) ? CardSortModes.FromSetting(mode) : CardSortMode.Manual;
+
+    public void SetSortMode(string tab, CardSortMode mode)
+    {
+        SortModes ??= new Dictionary<string, string>();
+        SortModes[tab] = CardSortModes.ToSetting(mode);
     }
 
     /// <summary>Fills gaps and pulls out-of-range values back into range.</summary>
@@ -99,6 +119,13 @@ public sealed class AppSettings
             }
         }
 
+        SortModes ??= new Dictionary<string, string>();
+        foreach (string tab in new[] { TabRegistered, TabRecent, TabFrequent })
+        {
+            SortModes.TryGetValue(tab, out string? mode);
+            SortModes[tab] = CardSortModes.ToSetting(CardSortModes.FromSetting(mode));
+        }
+
         CardSize = ClampCardSize(CardSize);
         RecentLimit = Math.Clamp(RecentLimit, 10, 500);
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
@@ -116,6 +143,7 @@ public sealed class AppSettings
             Maximized = Window.Maximized,
         };
         copy.Locations = Locations?.ToDictionary(kv => kv.Key, kv => new LocationSetting { Root = kv.Value.Root, Path = kv.Value.Path });
+        copy.SortModes = SortModes is null ? null : new Dictionary<string, string>(SortModes);
         return copy;
     }
 }

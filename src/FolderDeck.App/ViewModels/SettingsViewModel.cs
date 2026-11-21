@@ -21,6 +21,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool _addToWindowsRecent;
 
     [ObservableProperty]
+    private bool _openExplorerInNewTab;
+
+    [ObservableProperty]
     private string _recentLimitText;
 
     [ObservableProperty]
@@ -38,11 +41,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         _confirmExecutables = settings.ConfirmExecutables;
         _includeWindowsRecent = settings.IncludeWindowsRecent;
         _addToWindowsRecent = settings.AddToWindowsRecent;
+        _openExplorerInNewTab = settings.OpenExplorerInNewTab;
         _recentLimitText = settings.RecentLimit.ToString(CultureInfo.InvariantCulture);
         _frequentLimitText = settings.FrequentLimit.ToString(CultureInfo.InvariantCulture);
     }
-
-    public Func<Task<string?>>? ImportAction { get; init; }
 
     public Func<string?>? ResetStatsAction { get; init; }
 
@@ -79,17 +81,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.ConfirmExecutables = ConfirmExecutables;
         settings.IncludeWindowsRecent = IncludeWindowsRecent;
         settings.AddToWindowsRecent = AddToWindowsRecent;
+        settings.OpenExplorerInNewTab = OpenExplorerInNewTab;
         settings.RecentLimit = RecentLimit;
         settings.FrequentLimit = FrequentLimit;
-    }
-
-    [RelayCommand]
-    private async Task Import()
-    {
-        if (ImportAction is not null)
-        {
-            Status = await ImportAction() ?? Status;
-        }
     }
 
     [RelayCommand]

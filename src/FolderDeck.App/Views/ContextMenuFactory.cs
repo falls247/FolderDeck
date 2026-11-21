@@ -39,10 +39,10 @@ public sealed class ContextMenuFactory
             BeforeNavigate?.Invoke();
             _ = card is not null ? _vm.ActivateCardAsync(card) : _vm.OpenItemAsync(item);
         }));
-        menu.Items.Add(Item("エクスプローラーで表示", "", !disabled, () => _vm.ShowInExplorer(item)));
+        menu.Items.Add(Item("エクスプローラーで表示", "", !disabled, () => _ = _vm.ShowInExplorerAsync(item)));
         if (item.IsFolder)
         {
-            menu.Items.Add(Item("エクスプローラーで開く", "", !disabled, () => _vm.OpenInExplorer(item)));
+            menu.Items.Add(Item("エクスプローラーで開く", "", !disabled, () => _ = _vm.OpenInExplorerAsync(item)));
         }
 
         menu.Items.Add(Item("パスをコピー", "", !disabled, () => _vm.CopyPath(item)));

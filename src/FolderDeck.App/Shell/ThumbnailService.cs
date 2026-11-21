@@ -72,13 +72,21 @@ public sealed class ThumbnailService : IDisposable
             result = await FallbackIconAsync(path, source == ThumbSource.Folder, iconPx, cancellationToken).ConfigureAwait(false);
         }
 
-        if (result.Image is not null)
+        if (result.Image is not null && !IsCloudOnlyOfficeIcon(path, source, result))
         {
             _cache.Set(key, result);
         }
 
         return result;
     }
+
+    /// <summary>
+    /// An icon for an Office file that is online-only (OneDrive Files On-Demand): its embedded cover was
+    /// not read on purpose, so don't remember the icon — once the file is downloaded (same time stamp
+    /// and size, so the same key) the cover should show.
+    /// </summary>
+    private static bool IsCloudOnlyOfficeIcon(string path, ThumbSource source, ThumbResult result) =>
+        source == ThumbSource.File && result.Mode == ThumbMode.Icon && PreviewKinds.IsOpenXml(path) && FileContent.IsCloudOnly(path);
 
     public void Clear() => _cache.Clear();
 
@@ -116,14 +124,16 @@ public sealed class ThumbnailService : IDisposable
 
             default:
             {
-                // Presentations: the shell's thumbnail needs Office's handler; without it, the cover
-                // embedded in the file. Slides are landscape, so they are fitted, not cropped to 3:4.
-                bool presentation = PreviewKinds.IsPresentation(path);
+                // Open XML files: the shell's thumbnail needs Office's handler; without it, the picture
+                // embedded in the file. Slides and sheets are landscape, so they are fitted, not
+                // cropped to 3:4; a Word page is portrait and is cropped from the top like a photo.
+                var kind = PreviewKinds.KindOf(path);
+                bool openXml = kind is PreviewKind.Presentation or PreviewKind.WordDocument or PreviewKind.Spreadsheet;
                 var image = ShellInterop.GetShellImage(path, sizePx, ThumbFlags)
-                    ?? (presentation ? OfficeCover.Load(path) : null);
+                    ?? (openXml ? OfficeCover.Load(path) : null);
                 if (image is not null)
                 {
-                    return new ThumbResult(image, presentation ? ThumbMode.Shell : ThumbMode.Image);
+                    return new ThumbResult(image, kind is PreviewKind.Presentation or PreviewKind.Spreadsheet ? ThumbMode.Shell : ThumbMode.Image);
                 }
 
                 // Most file types share one icon per extension: ask the shell once.

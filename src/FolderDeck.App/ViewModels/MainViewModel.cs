@@ -1,7 +1,8 @@
-using System.Text.Json;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
 using FolderDeck.Core.Stores;
 using FolderDeck.Services;
@@ -21,8 +22,6 @@ public interface IMainView
     bool Confirm(string title, string body, string? path, string primaryText, bool danger);
 
     IReadOnlyList<string>? PickFolders();
-
-    string? PickImportFile();
 
     bool ShowSettings(SettingsViewModel settings);
 }
@@ -44,6 +43,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly List<NavEntry> _back = [];
     private readonly List<NavEntry> _forward = [];
     private readonly HashSet<TabKind> _restoring = [];
+    private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SelectedKind))]
@@ -72,8 +72,14 @@ public sealed partial class MainViewModel : ObservableObject
                 {
                     GoUpCommand.NotifyCanExecuteChanged();
                 }
+                else if (e.PropertyName == nameof(TabViewModel.Cards) && ReferenceEquals(tab, SelectedTab))
+                {
+                    View?.CloseCascade(); // the grid rebuilds its cards: an open overlay would be left behind
+                }
             };
         }
+
+        services.Stores.Pins.Changed += OnPinsChanged;
     }
 
     public IMainView? View { get; set; }
@@ -331,6 +337,136 @@ public sealed partial class MainViewModel : ObservableObject
     public void StepCardSize(int direction) =>
         CardSize = AppSettings.ClampCardSize(CardSize + (Math.Sign(direction) * AppSettings.CardSizeStep));
 
+    // ---- card order: sort modes and drag & drop ---------------------------------------------
+
+    /// <summary>Changes the selected tab's sort mode (saved per tab) and re-orders its cards in place.</summary>
+    public void SetSortMode(CardSortMode mode)
+    {
+        View?.CloseCascade();
+        var tab = SelectedTab;
+        if (tab.SortMode == mode)
+        {
+            return;
+        }
+
+        SaveSortMode(tab, mode);
+        tab.ApplyOrder();
+        View?.ScrollTo(0);
+    }
+
+    /// <summary>True when <paramref name="card"/> may be dragged to a new position (top level of the selected tab).</summary>
+    public bool CanReorder(CardViewModel card) =>
+        card.IsTopLevel && SelectedTab.CanReorder && SelectedTab.Cards.Count > 1 && SelectedTab.Cards.Contains(card);
+
+    /// <summary>
+    /// A card was dropped at <paramref name="insertIndex"/> (0…Count, counted with the card still in
+    /// place). The shown order becomes the tab's manual order; a sort mode switches to 手動.
+    /// </summary>
+    public void MoveCard(CardViewModel card, int insertIndex)
+    {
+        var tab = SelectedTab;
+        if (!tab.CanReorder)
+        {
+            return;
+        }
+
+        var cards = tab.Cards.ToList();
+        int from = cards.IndexOf(card);
+        insertIndex = Math.Clamp(insertIndex, 0, cards.Count);
+        if (from < 0 || insertIndex == from || insertIndex == from + 1)
+        {
+            return;
+        }
+
+        cards.RemoveAt(from);
+        cards.Insert(insertIndex > from ? insertIndex - 1 : insertIndex, card);
+        bool switched = tab.SortMode != CardSortMode.Manual;
+        if (switched)
+        {
+            SaveSortMode(tab, CardSortMode.Manual);
+        }
+
+        tab.SetBaseOrder(cards);
+        SaveManualOrder(tab, cards);
+        if (switched)
+        {
+            Message.Info("並び順を「手動」に切り替えました。");
+        }
+    }
+
+    private void SaveSortMode(TabViewModel tab, CardSortMode mode)
+    {
+        string key = TabKinds.ToSetting(tab.Kind);
+        _services.Stores.Settings.Update(s => s.SetSortMode(key, mode));
+        tab.SortMode = mode;
+    }
+
+    /// <summary>
+    /// Saves <paramref name="shown"/> as the manual order of the tab's top level: 登録フォルダ in
+    /// registered_folders.json, the others in card_order.json (shown paths first, then the
+    /// previously saved ones that are not shown now).
+    /// </summary>
+    private void SaveManualOrder(TabViewModel tab, IReadOnlyList<CardViewModel> shown)
+    {
+        if (tab.Kind == TabKind.Registered)
+        {
+            _services.Stores.Registered.Reorder(shown.Select(c => c.RegisteredId).OfType<string>().ToList());
+            return;
+        }
+
+        if (OrderListOf(tab.Kind) is not { } list)
+        {
+            return;
+        }
+
+        var paths = shown.Select(c => c.Path).ToList();
+        var showing = new HashSet<string>(paths, PathTools.Comparer);
+        var hidden = _services.Stores.CardOrders.Get(list).Where(p => !showing.Contains(p));
+        _services.Stores.CardOrders.Set(list, paths.Concat(hidden));
+    }
+
+    /// <summary>The card_order.json list of a tab, or null for 登録フォルダ (its order is registered_folders.json).</summary>
+    private static CardOrderList? OrderListOf(TabKind kind) => kind switch
+    {
+        TabKind.Recent => CardOrderList.Recent,
+        TabKind.Frequent => CardOrderList.Frequent,
+        _ => null,
+    };
+
+    /// <summary>True when the tab's top level has a saved drag &amp; drop order in card_order.json.</summary>
+    private bool HasSavedOrder(TabKind kind) => OrderListOf(kind) is { } list && _services.Stores.CardOrders.HasOrder(list);
+
+    /// <summary>
+    /// 「手動の並びをリセット」 is offered on 最近の履歴 and よく使う項目, at any level (登録フォルダ has
+    /// nothing to reset: its manual order is the order of registered_folders.json).
+    /// </summary>
+    public bool ShowResetManualOrder => OrderListOf(SelectedTab.Kind) is not null;
+
+    /// <summary>The reset does something: the selected tab has a saved order (cards were dragged there).</summary>
+    public bool CanResetManualOrder => HasSavedOrder(SelectedTab.Kind);
+
+    /// <summary>
+    /// Forgets the selected tab's saved drag &amp; drop order: its top level goes back to the default
+    /// order (最近の履歴: last used first, so re-opened items move to the front again; よく使う項目:
+    /// pinned items, then the most used). Reloaded now
+    /// when the tab shows its top level; inside a folder, the top level is rebuilt when it is shown.
+    /// </summary>
+    public async Task ResetManualOrderAsync()
+    {
+        View?.CloseCascade();
+        var tab = SelectedTab;
+        if (OrderListOf(tab.Kind) is not { } list || !_services.Stores.CardOrders.Clear(list))
+        {
+            return;
+        }
+
+        Message.Info("手動の並びをリセットしました。");
+        if (tab.IsTop && await tab.LoadAsync() == LoadOutcome.Ok && ReferenceEquals(tab, SelectedTab) && tab.IsTop)
+        {
+            View?.ScrollTo(0);
+        }
+    }
+
     // ---- opening items (§6.8, §9.7, §12) ----------------------------------------------------
 
     public Task ActivateCardAsync(CardViewModel card)
@@ -433,9 +569,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     // ---- context menu actions (§11) ---------------------------------------------------------
 
-    public void ShowInExplorer(ItemRef item)
+    /// <summary>Parent folder with the item selected: in a new Explorer tab when the setting asks for it, else a new window.</summary>
+    public async Task ShowInExplorerAsync(ItemRef item)
     {
-        var result = ShellActions.ShowInExplorer(item.Path);
+        var result = Settings.OpenExplorerInNewTab
+            ? await ExplorerTabs.ShowAsync(item.Path)
+            : ShellActions.ShowInExplorer(item.Path);
         if (!result.Success)
         {
             Message.Error(result.Error!);
@@ -445,9 +584,12 @@ public sealed partial class MainViewModel : ObservableObject
         RecordUse(item.Path, item.IsFolder ? ItemKind.Folder : ItemKind.File);
     }
 
-    public void OpenInExplorer(ItemRef item)
+    /// <summary>The folder itself: in a new Explorer tab when the setting asks for it, else a new window.</summary>
+    public async Task OpenInExplorerAsync(ItemRef item)
     {
-        var result = ShellActions.OpenInExplorer(item.Path);
+        var result = Settings.OpenExplorerInNewTab
+            ? await ExplorerTabs.OpenAsync(item.Path)
+            : ShellActions.OpenInExplorer(item.Path);
         if (!result.Success)
         {
             Message.Error(result.Error!);
@@ -471,26 +613,94 @@ public sealed partial class MainViewModel : ObservableObject
     public void TogglePin(ItemRef item)
     {
         var pins = _services.Stores.Pins;
+        bool reloadFrequent = true;
         if (pins.IsPinned(item.Path))
         {
+            // OnPinsChanged re-sorts: the card moves to its sorted place.
             pins.Unpin(item.Path);
             Message.Success($"「{item.Name}」のピン留めを外しました。");
         }
         else
         {
+            // Before Pin(): its Changed event re-sorts (OnPinsChanged), and by then the card must
+            // already own its shown slot in the base order.
+            bool keptInMemoryOnly = KeepInPlace(SelectedTab, item.Path);
             pins.Pin(item.Path, item.IsFolder ? ItemKind.Folder : ItemKind.File);
             Message.Success($"「{item.Name}」をピン留めしました。");
-        }
 
-        if (item.Card is { } card)
-        {
-            card.IsPinned = pins.IsPinned(item.Path);
+            // The card is already listed there; a reload would rebuild the base order from the
+            // defaults (pinned items first) and move it.
+            reloadFrequent = !(keptInMemoryOnly && SelectedTab == FrequentTab);
         }
 
         FrequentTab.IsStale = true;
-        if (SelectedTab == FrequentTab && FrequentTab.IsTop)
+        if (reloadFrequent && SelectedTab == FrequentTab && FrequentTab.IsTop)
         {
             _ = FrequentTab.LoadAsync();
+        }
+    }
+
+    /// <summary>
+    /// Pinning a card of a sorted top level: the card takes its shown index as its base-order slot
+    /// (only that card moves in the base order), so it stays where it is once pinned (pinned cards
+    /// sit at their base-order slot). The move is saved for 登録フォルダ (registered_folders.json)
+    /// and, in card_order.json, only for a tab that already has a saved order (cards were dragged
+    /// there); otherwise it is kept in memory only and a later reload puts the card at its default
+    /// slot (saving would freeze the recency / usage order for good). Returns true in that last case.
+    /// </summary>
+    private bool KeepInPlace(TabViewModel tab, string path)
+    {
+        if (!tab.CanReorder || tab.SortMode == CardSortMode.Manual)
+        {
+            return false;
+        }
+
+        var target = new PathSet([path]);
+        var shown = tab.Cards;
+        int slot = -1;
+        for (int i = 0; i < shown.Count; i++)
+        {
+            if (target.Contains(shown[i].Path))
+            {
+                slot = i;
+                break;
+            }
+        }
+
+        if (slot < 0 || !tab.PlaceInBase(shown[slot], slot))
+        {
+            return false;
+        }
+
+        if (tab.Kind != TabKind.Registered && !HasSavedOrder(tab.Kind))
+        {
+            return true;
+        }
+
+        SaveManualOrder(tab, tab.BaseCards);
+        return false;
+    }
+
+    /// <summary>pins.json changed: every card of every tab gets its 📌 (and sorted views their order) updated.</summary>
+    private void OnPinsChanged()
+    {
+        if (!_dispatcher.CheckAccess())
+        {
+            _dispatcher.BeginInvoke(OnPinsChanged);
+            return;
+        }
+
+        var pins = new PathSet(_services.Stores.Pins.Pins.Select(p => p.Path));
+        double offset = View?.GetScrollOffset() ?? 0;
+        bool moved = false;
+        foreach (var tab in Tabs)
+        {
+            moved |= tab.ApplyPins(pins) && ReferenceEquals(tab, SelectedTab);
+        }
+
+        if (moved)
+        {
+            View?.ScrollTo(offset);
         }
     }
 
@@ -630,7 +840,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (_services.Stores.Registered.Remove(card.RegisteredId))
         {
             Message.Success($"「{card.Name}」の登録を解除しました。");
-            RegisteredTab.Cards = RegisteredTab.Cards.Where(c => c != card).ToList();
+            RegisteredTab.RemoveCard(card);
             RegisteredTab.CountText = $"登録 {RegisteredTab.Cards.Count:N0}";
             if (RegisteredTab.Cards.Count == 0)
             {
@@ -661,7 +871,7 @@ public sealed partial class MainViewModel : ObservableObject
     public void ExcludeFromRecent(CardViewModel card)
     {
         _services.Stores.Excluded.Exclude(card.Path);
-        RecentTab.Cards = RecentTab.Cards.Where(c => c != card).ToList();
+        RecentTab.RemoveCard(card);
         RecentTab.CountText = $"履歴 {RecentTab.Cards.Count:N0}";
         if (RecentTab.Cards.Count == 0)
         {
@@ -714,7 +924,6 @@ public sealed partial class MainViewModel : ObservableObject
         var before = Settings;
         var vm = new SettingsViewModel(before)
         {
-            ImportAction = ImportImgtoolAsync,
             ResetStatsAction = ResetStats,
             OpenDataFolderAction = OpenDataFolder,
         };
@@ -749,69 +958,6 @@ public sealed partial class MainViewModel : ObservableObject
         {
             await SelectedTab.LoadAsync();
         }
-    }
-
-    /// <summary>§13.4: imports imgtool's registered_folders.json. Returns the result text.</summary>
-    public async Task<string?> ImportImgtoolAsync()
-    {
-        string? file = View?.PickImportFile();
-        if (file is null)
-        {
-            return null;
-        }
-
-        List<string> paths;
-        try
-        {
-            paths = await Task.Run(() => ReadImgtoolPaths(file));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
-        {
-            string error = "取り込めませんでした：" + ex.Message;
-            Message.Error(error);
-            return error;
-        }
-
-        var summary = await Task.Run(() => _services.Stores.Registered.RegisterMany(paths, _services.FileSystem));
-        int notFound = summary.Results.Count(r => r.Outcome is RegisterOutcome.NotFound or RegisterOutcome.Invalid);
-        string text = $"{summary.Added} 件取り込みました。{summary.AlreadyRegistered} 件は登録済み、{notFound} 件は見つかりません。";
-        Message.Success(text);
-        if (summary.Added > 0)
-        {
-            RegisteredChanged();
-        }
-
-        return text;
-    }
-
-    internal static List<string> ReadImgtoolPaths(string file)
-    {
-        byte[] bytes = File.ReadAllBytes(file);
-        ReadOnlySpan<byte> span = bytes;
-        if (span.Length >= 3 && span[0] == 0xEF && span[1] == 0xBB && span[2] == 0xBF)
-        {
-            span = span[3..];
-        }
-
-        var reader = new Utf8JsonReader(span, new JsonReaderOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
-        using var doc = JsonDocument.ParseValue(ref reader);
-        if (doc.RootElement.ValueKind != JsonValueKind.Object
-            || !doc.RootElement.TryGetProperty("folders", out var folders)
-            || folders.ValueKind != JsonValueKind.Array)
-        {
-            throw new InvalidOperationException("registered_folders.json の形式ではありません。");
-        }
-
-        var paths = new List<string>();
-        foreach (var f in folders.EnumerateArray())
-        {
-            if (f.ValueKind == JsonValueKind.Object && f.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String)
-            {
-                paths.Add(p.GetString()!);
-            }
-        }
-
-        return paths;
     }
 
     public string? ResetStats()

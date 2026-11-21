@@ -1,11 +1,13 @@
-﻿# FolderDeck 開発用タスク（build / test / run / publish）
+﻿# FolderDeck 開発用タスク（build / test / run / all / publish）
 #
 #   tools\dev.ps1 build   [Debug|Release]   ソリューションをビルド（既定 Debug）
 #   tools\dev.ps1 test    [dotnet test の追加引数]   Core のテスト
 #   tools\dev.ps1 run     [アプリへの引数]   Debug ビルドして起動（例: --data-dir E:\tmp\data）
+#   tools\dev.ps1 all     [アプリへの引数]   ソリューションを Debug ビルド → Core のテスト → 起動（別名 build-test-run）。
+#                                           失敗した段階で止まる（引数は run と同じくアプリに渡す）
 #   tools\dev.ps1 publish                   配布用の single-file exe を作り dist\ にコピー
 #
-# ルートの build.bat / test.bat / run.bat / publish.bat から呼ばれます（ダブルクリック可）。
+# ルートの build.bat / test.bat / run.bat / build-test-run.bat / publish.bat から呼ばれます（ダブルクリック可）。
 # このフォルダの中で起動中の FolderDeck はファイルをロックするため、ビルド前に終了を確認します。
 # 確認なしで終了させたいときは、環境変数 FOLDERDECK_AUTOCLOSE=1 を設定してください。
 #
@@ -201,13 +203,41 @@ function Join-Arguments([string[]]$list) {
     return ($parts -join ' ')
 }
 
+# ビルド済みの Debug の exe を、アプリへの引数（$AppArgs）つきで起動する（run と all で共通）。
+# 起動できたら $true。すぐに終了したら起動できていない（ほかの FolderDeck が先に起動した、起動直後に落ちた、など）ので $false。
+function Start-DebugApp([string]$Title, [string[]]$AppArgs) {
+    if (-not (Test-Path -LiteralPath $DebugExe)) {
+        Write-Host "exe が見つかりません: $DebugExe" -ForegroundColor Red
+        return $false
+    }
+
+    Write-Step $Title
+    if ($AppArgs.Count -gt 0) {
+        $argText = Join-Arguments $AppArgs
+        Write-Command "FolderDeck.exe $argText"
+        $app = Start-Process -FilePath $DebugExe -ArgumentList $argText -WorkingDirectory $Root -PassThru -ErrorAction Stop
+    }
+    else {
+        Write-Command 'FolderDeck.exe'
+        $app = Start-Process -FilePath $DebugExe -WorkingDirectory $Root -PassThru -ErrorAction Stop
+    }
+
+    if ($app.WaitForExit(2000)) {
+        Write-Host "起動した FolderDeck がすぐに終了しました（終了コード $($app.ExitCode)）。ほかの FolderDeck が起動していないか、ログ（logs\app.log）を確認してください。" -ForegroundColor Red
+        return $false
+    }
+
+    return $true
+}
+
 function Show-Help {
     Write-Host 'FolderDeck 開発用タスク'
     Write-Host ''
-    Write-Host '  build.bat   [Debug|Release]      ソリューションをビルド（既定 Debug）'
-    Write-Host '  test.bat    [追加の引数]          Core のテスト（例: test.bat --filter Ranking）'
-    Write-Host '  run.bat     [アプリへの引数]      Debug ビルドして起動（例: run.bat --data-dir E:\tmp\data）'
-    Write-Host '  publish.bat                      配布用の exe を作って dist\FolderDeck.exe にコピー'
+    Write-Host '  build.bat          [Debug|Release]    ソリューションをビルド（既定 Debug）'
+    Write-Host '  test.bat           [追加の引数]       Core のテスト（例: test.bat --filter Ranking）'
+    Write-Host '  run.bat            [アプリへの引数]   Debug ビルドして起動（例: run.bat --data-dir E:\tmp\data）'
+    Write-Host '  build-test-run.bat [アプリへの引数]   ビルド（Debug）→ テスト → 起動を続けて実行。失敗した段階で止まる（引数は run.bat と同じ）'
+    Write-Host '  publish.bat                           配布用の exe を作って dist\FolderDeck.exe にコピー'
 }
 
 $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -259,30 +289,43 @@ try {
             & dotnet build $AppProject -c Debug --nologo
             $code = $LASTEXITCODE
             if ($code -eq 0) {
-                if (-not (Test-Path -LiteralPath $DebugExe)) {
-                    Write-Host "exe が見つかりません: $DebugExe" -ForegroundColor Red
-                    $code = 1
+                if (Start-DebugApp '起動' $rest) {
+                    $quietSuccess = $true
                 }
                 else {
-                    Write-Step '起動'
-                    if ($rest.Count -gt 0) {
-                        $argText = Join-Arguments $rest
-                        Write-Command "FolderDeck.exe $argText"
-                        $app = Start-Process -FilePath $DebugExe -ArgumentList $argText -WorkingDirectory $Root -PassThru -ErrorAction Stop
-                    }
-                    else {
-                        Write-Command 'FolderDeck.exe'
-                        $app = Start-Process -FilePath $DebugExe -WorkingDirectory $Root -PassThru -ErrorAction Stop
-                    }
-
-                    # すぐに終了したら起動できていない（ほかの FolderDeck が先に起動した、起動直後に落ちた、など）。
-                    if ($app.WaitForExit(2000)) {
-                        Write-Host "起動した FolderDeck がすぐに終了しました（終了コード $($app.ExitCode)）。ほかの FolderDeck が起動していないか、ログ（logs\app.log）を確認してください。" -ForegroundColor Red
-                        $code = 1
-                    }
-                    else {
-                        $quietSuccess = $true
-                    }
+                    $code = 1
+                }
+            }
+        }
+    }
+    elseif ($task -in @('all', 'build-test-run')) {
+        # ビルド → テスト → 起動を続けて行い、失敗した段階で止まる。引数はすべてアプリに渡す（run と同じ）。
+        if (-not (Test-Dotnet) -or -not (Stop-RunningApp @($DebugDir)) -or (Test-OtherInstance)) {
+            $code = 1
+        }
+        else {
+            Write-Step '1/3 ビルド（Debug）'
+            Write-Command 'dotnet build FolderDeck.sln -c Debug'
+            & dotnet build $Solution -c Debug --nologo
+            $code = $LASTEXITCODE
+            if ($code -ne 0) {
+                Write-Host 'ビルドで失敗しました。テストと起動はしません。' -ForegroundColor Red
+            }
+            else {
+                # テストのプロジェクトもソリューションに入っていて 1/3 でビルド済みなので、--no-build でビルドし直さない。
+                Write-Step '2/3 テスト（FolderDeck.Core.Tests）'
+                Write-Command 'dotnet test tests\FolderDeck.Core.Tests -c Debug --no-build'
+                & dotnet test $TestProject -c Debug --no-build --nologo
+                $code = $LASTEXITCODE
+                if ($code -ne 0) {
+                    Write-Host 'テストで失敗しました。起動はしません。' -ForegroundColor Red
+                }
+                elseif (Start-DebugApp '3/3 起動' $rest) {
+                    $quietSuccess = $true
+                }
+                else {
+                    Write-Host '起動で失敗しました。' -ForegroundColor Red
+                    $code = 1
                 }
             }
         }
@@ -346,7 +389,7 @@ else {
     Write-Host "失敗しました（終了コード $code、$seconds 秒）。" -ForegroundColor Red
 }
 
-# ダブルクリックで起動したときは閉じる前に止める（run が成功したときはアプリが出るので止めない）。
+# ダブルクリックで起動したときは閉じる前に止める（run / all が成功したときはアプリが出るので止めない）。
 if ($fromExplorer -and -not ($quietSuccess -and $code -eq 0)) {
     try {
         try { $Host.UI.RawUI.FlushInputBuffer() } catch { }

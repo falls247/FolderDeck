@@ -30,11 +30,67 @@ public sealed class PreviewTests : IDisposable
     [InlineData("scan.tiff", true)]
     [InlineData("deck.pptx", true)]
     [InlineData("deck.PPSX", true)]
-    [InlineData("notes.docx", false)]
-    [InlineData("readme.txt", false)]
+    [InlineData("notes.docx", true)]
+    [InlineData("book.xlsx", true)]
+    [InlineData("readme.txt", true)]
+    [InlineData("old.doc", false)]
+    [InlineData("old.xls", false)]
+    [InlineData("setup.exe", false)]
     [InlineData("noext", false)]
-    public void Previewable_files_are_images_and_presentations(string name, bool expected) =>
+    public void Previewable_files_are_images_office_files_and_text(string name, bool expected) =>
         Assert.Equal(expected, PreviewKinds.IsPreviewable(name));
+
+    [Theory]
+    [InlineData("a.png", PreviewKind.Image)]
+    [InlineData("scan.TIFF", PreviewKind.Image)]
+    [InlineData("deck.pptx", PreviewKind.Presentation)]
+    [InlineData("notes.docx", PreviewKind.WordDocument)]
+    [InlineData("macro.docm", PreviewKind.WordDocument)]
+    [InlineData("template.DOTX", PreviewKind.WordDocument)]
+    [InlineData("book.xlsx", PreviewKind.Spreadsheet)]
+    [InlineData("macro.XLSM", PreviewKind.Spreadsheet)]
+    [InlineData("template.xltx", PreviewKind.Spreadsheet)]
+    [InlineData("readme.txt", PreviewKind.Text)]
+    [InlineData("app.log", PreviewKind.Text)]
+    [InlineData("data.CSV", PreviewKind.Text)]
+    [InlineData("Program.cs", PreviewKind.Text)]
+    [InlineData("build.ps1", PreviewKind.Text)]
+    [InlineData("MainWindow.xaml", PreviewKind.Text)]
+    [InlineData(".gitignore", PreviewKind.Text)]
+    [InlineData("old.doc", PreviewKind.None)]
+    [InlineData("old.xls", PreviewKind.None)]
+    [InlineData("binary.xlsb", PreviewKind.None)]
+    [InlineData("movie.mp4", PreviewKind.None)]
+    [InlineData("setup.exe", PreviewKind.None)]
+    [InlineData("noext", PreviewKind.None)]
+    [InlineData("dot.", PreviewKind.None)]
+    public void Kind_of_a_file_follows_its_extension(string name, PreviewKind expected) =>
+        Assert.Equal(expected, PreviewKinds.KindOf(name));
+
+    [Theory]
+    [InlineData("clip.mp4", true, false)]
+    [InlineData("clip.MKV", true, false)]
+    [InlineData("clip.m2ts", true, false)]
+    [InlineData("tool.exe", false, true)]
+    [InlineData("lib.dll", false, true)]
+    [InlineData("link.lnk", false, true)]
+    [InlineData("site.url", false, true)]
+    [InlineData("setup.msi", false, true)]
+    [InlineData("doc.pdf", false, false)]
+    public void Videos_and_programs_are_told_apart(string name, bool video, bool neverPreviewed)
+    {
+        Assert.Equal(video, PreviewKinds.IsVideo(name));
+        Assert.Equal(neverPreviewed, PreviewKinds.IsNeverPreviewed(name));
+    }
+
+    [Theory]
+    [InlineData("deck.pptx", true)]
+    [InlineData("notes.docx", true)]
+    [InlineData("book.xlsm", true)]
+    [InlineData("readme.txt", false)]
+    [InlineData("a.png", false)]
+    public void Open_xml_files_are_presentations_documents_and_workbooks(string name, bool expected) =>
+        Assert.Equal(expected, PreviewKinds.IsOpenXml(name));
 
     [Fact]
     public void Embedded_thumbnail_follows_the_package_relationship()
@@ -80,6 +136,45 @@ public sealed class PreviewTests : IDisposable
         using var held = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read | FileShare.Write);
         Assert.Equal(FakeJpeg, OfficeThumbnail.ReadEmbedded(path));
     }
+
+    [Fact]
+    public void Embedded_thumbnail_of_a_cloud_only_file_is_not_read()
+    {
+        string path = MakePackage("cloud.pptx", ("docProps/thumbnail.jpeg", FakeJpeg));
+        File.SetAttributes(path, FileAttributes.Archive | FileAttributes.Offline);
+        try
+        {
+            Assert.Null(OfficeThumbnail.ReadEmbedded(path));
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
+
+        Assert.Equal(FakeJpeg, OfficeThumbnail.ReadEmbedded(path));
+    }
+
+    [Fact]
+    public void Local_missing_and_invalid_paths_are_not_cloud_only()
+    {
+        string local = Path.Combine(_dir, "local.txt");
+        File.WriteAllText(local, "here");
+        Assert.False(FileContent.IsCloudOnly(local));
+        Assert.False(FileContent.IsCloudOnly(_dir));
+        Assert.False(FileContent.IsCloudOnly(Path.Combine(_dir, "missing.txt")));
+        Assert.False(FileContent.IsCloudOnly(string.Empty));
+        Assert.False(FileContent.IsCloudOnly("bad\0path"));
+    }
+
+    [Theory]
+    [InlineData(0x400000 | 0x400 | 0x20, true)] // FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS (OneDrive online-only)
+    [InlineData(0x40000, true)] // FILE_ATTRIBUTE_RECALL_ON_OPEN
+    [InlineData((int)FileAttributes.Offline, true)]
+    [InlineData((int)(FileAttributes.Archive | FileAttributes.ReparsePoint | FileAttributes.SparseFile), false)] // hydrated placeholder
+    [InlineData(0x80000 | 0x20, false)] // FILE_ATTRIBUTE_PINNED ("always keep on this device")
+    [InlineData((int)FileAttributes.Normal, false)]
+    public void Cloud_only_files_are_told_by_their_attributes(int attributes, bool expected) =>
+        Assert.Equal(expected, FileContent.IsCloudOnly((FileAttributes)attributes));
 
     [Fact]
     public void Session_marker_round_trips_and_is_gone_after_a_clean_exit()

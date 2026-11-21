@@ -176,6 +176,55 @@ public sealed class RegisteredFoldersStore : StoreBase
         return removed;
     }
 
+    /// <summary>
+    /// Drag &amp; drop order: the listed ids first, in that order; folders not listed keep their
+    /// relative order after them. Unknown ids are ignored. Saves only when the order changed.
+    /// </summary>
+    public bool Reorder(IReadOnlyList<string> orderedIds)
+    {
+        bool changed;
+        lock (Gate)
+        {
+            var byId = new Dictionary<string, RegisteredFolder>(StringComparer.Ordinal);
+            foreach (var f in _folders)
+            {
+                byId.TryAdd(f.Id, f);
+            }
+
+            var reordered = new List<RegisteredFolder>(_folders.Count);
+            var used = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string id in orderedIds)
+            {
+                if (id is not null && byId.TryGetValue(id, out var folder) && used.Add(id))
+                {
+                    reordered.Add(folder);
+                }
+            }
+
+            foreach (var f in _folders)
+            {
+                if (!used.Contains(f.Id))
+                {
+                    reordered.Add(f);
+                }
+            }
+
+            changed = !reordered.SequenceEqual(_folders);
+            if (changed)
+            {
+                _folders.Clear();
+                _folders.AddRange(reordered);
+            }
+        }
+
+        if (changed)
+        {
+            RequestSave();
+        }
+
+        return changed;
+    }
+
     protected override byte[] Serialize()
     {
         var doc = new RegisteredFoldersDocument

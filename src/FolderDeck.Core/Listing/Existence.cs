@@ -1,4 +1,5 @@
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Ordering;
 
 namespace FolderDeck.Core.Listing;
 
@@ -12,8 +13,28 @@ public enum ExistState
     Timeout,
 }
 
+/// <summary>Result of <see cref="Existence.ProbeAsync"/>: what the path is and, when known, its last write time (UTC).</summary>
+public readonly record struct ExistProbe(ExistState State, DateTime? LastWriteTimeUtc);
+
 public static class Existence
 {
+    /// <summary>
+    /// Like <see cref="CheckAsync"/> (same single worker call, same timeout) but also returns the
+    /// last write time, used by the "更新日" sort modes.
+    /// </summary>
+    public static async Task<ExistProbe> ProbeAsync(IFileSystem fs, string path, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var work = Task.Run(() => Probe(fs, path), CancellationToken.None);
+        try
+        {
+            return await work.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return new ExistProbe(ExistState.Timeout, null);
+        }
+    }
+
     /// <summary>Checks a path on a worker thread and gives up after <paramref name="timeout"/>.</summary>
     public static async Task<ExistState> CheckAsync(IFileSystem fs, string path, TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -38,15 +59,52 @@ public static class Existence
     /// Walks <paramref name="items"/> in order and keeps the ones that exist (or timed out) until
     /// <paramref name="limit"/> are kept. Checks run <paramref name="parallelism"/> at a time.
     /// </summary>
-    public static async Task<List<(T Item, ExistState State)>> FilterAsync<T>(
+    public static Task<List<(T Item, ExistState State)>> FilterAsync<T>(
         IReadOnlyList<T> items,
         Func<T, string> pathOf,
         int limit,
         Func<string, CancellationToken, Task<ExistState>> check,
         CancellationToken cancellationToken,
-        int parallelism = 16)
+        int parallelism = 16) =>
+        FilterCoreAsync(items, pathOf, limit, check, s => s != ExistState.Missing, cancellationToken, parallelism);
+
+    /// <summary><see cref="FilterAsync"/> with <see cref="ProbeAsync"/>-style checks: each kept item keeps its probe.</summary>
+    public static Task<List<(T Item, ExistProbe Probe)>> FilterProbedAsync<T>(
+        IReadOnlyList<T> items,
+        Func<T, string> pathOf,
+        int limit,
+        Func<string, CancellationToken, Task<ExistProbe>> probe,
+        CancellationToken cancellationToken,
+        int parallelism = 16) =>
+        FilterCoreAsync(items, pathOf, limit, probe, p => p.State != ExistState.Missing, cancellationToken, parallelism);
+
+    private static ExistProbe Probe(IFileSystem fs, string path)
     {
-        var kept = new List<(T, ExistState)>();
+        if (fs.GetEntry(path) is { } entry)
+        {
+            return new ExistProbe(entry.IsDirectory ? ExistState.Folder : ExistState.File, CardOrdering.KnownTime(entry.LastWriteTimeUtc));
+        }
+
+        // GetEntry can miss what GetKind still sees (no access to the parent): keep CheckAsync's answer.
+        var state = fs.GetKind(path) switch
+        {
+            PathKind.Folder => ExistState.Folder,
+            PathKind.File => ExistState.File,
+            _ => ExistState.Missing,
+        };
+        return new ExistProbe(state, null);
+    }
+
+    private static async Task<List<(T Item, TState State)>> FilterCoreAsync<T, TState>(
+        IReadOnlyList<T> items,
+        Func<T, string> pathOf,
+        int limit,
+        Func<string, CancellationToken, Task<TState>> check,
+        Func<TState, bool> keep,
+        CancellationToken cancellationToken,
+        int parallelism)
+    {
+        var kept = new List<(T, TState)>();
         int index = 0;
         while (index < items.Count && kept.Count < limit)
         {
@@ -76,7 +134,7 @@ public static class Existence
             var states = await Task.WhenAll(tasks).ConfigureAwait(false);
             for (int i = 0; i < slice.Length && kept.Count < limit; i++)
             {
-                if (states[i] != ExistState.Missing)
+                if (keep(states[i]))
                 {
                     kept.Add((slice[i], states[i]));
                 }
