@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using FolderDeck.Core.Input;
 using FolderDeck.Core.Transfer;
 using FolderDeck.ViewModels;
 
@@ -19,15 +20,17 @@ public partial class SidebarView : UserControl
     private Point _pressedAt;
 
     /// <summary>
-    /// The row left-clicked while the right button was held: shown in Explorer when the right
-    /// button is released (the row holds the mouse capture until then).
+    /// Right button held + left click on a row: the folder is shown in Explorer when the right
+    /// button is released.
     /// </summary>
-    private FrameworkElement? _rockerRow;
+    private readonly RockerGesture<SidebarItemViewModel> _rocker = new();
     private ReorderDrag? _drag;
 
     public SidebarView()
     {
         InitializeComponent();
+        AddHandler(PreviewMouseRightButtonDownEvent, new MouseButtonEventHandler((_, _) => _rocker.RightDown()), handledEventsToo: true);
+        MouseLeave += (_, _) => _rocker.Cancel();
         Scroller.ScrollChanged += (_, e) =>
         {
             if (e.VerticalChange != 0)
@@ -85,15 +88,12 @@ public partial class SidebarView : UserControl
     private void OnRowLeftDown(object sender, MouseButtonEventArgs e)
     {
         e.Handled = true;
-        if (e.RightButton == MouseButtonState.Pressed)
+        bool rightHeld = e.RightButton == MouseButtonState.Pressed;
+        if (_rocker.LeftDown(rightHeld, ItemOf(sender)) || rightHeld)
         {
             // Right button held + left click: shown in Explorer once the right button is released.
+            // Neither a click nor the start of a drag.
             _pressed = null;
-            if (_rockerRow is null && sender is FrameworkElement row && row.CaptureMouse())
-            {
-                _rockerRow = row;
-            }
-
             return;
         }
 
@@ -107,8 +107,9 @@ public partial class SidebarView : UserControl
     private void OnRowLeftUp(object sender, MouseButtonEventArgs e)
     {
         e.Handled = true;
-        if (_rockerRow is not null)
+        if (_rocker.LeftUp())
         {
+            _pressed = null;
             return; // the left click of the gesture: waits for the right button
         }
 
@@ -124,27 +125,15 @@ public partial class SidebarView : UserControl
     private void OnRowRightUp(object sender, MouseButtonEventArgs e)
     {
         e.Handled = true;
-        if (sender is not FrameworkElement row || ItemOf(sender) is not { } item)
+        if (_rocker.RightUp() is { } armed)
         {
+            ItemExplorerRequested?.Invoke(armed); // the row that was clicked, wherever the release lands
             return;
         }
 
-        if (ReferenceEquals(_rockerRow, row))
+        if (sender is FrameworkElement row && ItemOf(sender) is { } item)
         {
-            _rockerRow = null;
-            row.ReleaseMouseCapture();
-            ItemExplorerRequested?.Invoke(item);
-            return;
-        }
-
-        ItemContextMenu?.Invoke(item, row);
-    }
-
-    private void OnRowLostCapture(object sender, MouseEventArgs e)
-    {
-        if (ReferenceEquals(_rockerRow, sender))
-        {
-            _rockerRow = null;
+            ItemContextMenu?.Invoke(item, row);
         }
     }
 

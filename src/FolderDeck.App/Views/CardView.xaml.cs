@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using FolderDeck.Core.Input;
 using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
 using FolderDeck.ViewModels;
@@ -65,16 +66,19 @@ public partial class CardView : UserControl
     private bool _hot;
 
     /// <summary>
-    /// The card was left-clicked while the right button was held: it is shown in Explorer when the
-    /// right button is released (the card holds the mouse capture until then).
+    /// Right button held + left click on the card: it is shown in Explorer when the right button
+    /// is released. (Rows of the overlay do the same for themselves, in their list.)
     /// </summary>
-    private bool _rocker;
+    private readonly RockerGesture<CardViewModel> _rocker = new();
 
     public CardView()
     {
         InitializeComponent();
         _hoverShadow.Freeze();
-        LostMouseCapture += (_, _) => _rocker = false;
+
+        // Tunnelling, handled or not: a right press anywhere on the card (also on an overlay row,
+        // which handles it) starts afresh.
+        AddHandler(PreviewMouseRightButtonDownEvent, new MouseButtonEventHandler((_, _) => _rocker.RightDown()), handledEventsToo: true);
         DataContextChanged += OnDataContextChanged;
         Loaded += (_, _) => Realize();
         Unloaded += (_, _) => Unrealize();
@@ -108,6 +112,7 @@ public partial class CardView : UserControl
         TryStartDrag(e); // left the card with the button held: that is a drag too
         _pressed = false;
         _dragCandidate = false;
+        _rocker.Cancel();
         UpdateHot();
         Host?.CardMouseLeave(this);
     }
@@ -115,19 +120,24 @@ public partial class CardView : UserControl
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
-        if (e.RightButton == MouseButtonState.Pressed)
+
+        // Right button held + left click: the card is shown in Explorer once the right button is
+        // released. This press is neither a click nor the start of a drag. (A press on a row of
+        // the overlay never gets here: the list handles its own. A press on × or 📌 is theirs.)
+        bool rightHeld = e.RightButton == MouseButtonState.Pressed;
+        bool onButton = FindAncestor<System.Windows.Controls.Primitives.ButtonBase>(e.OriginalSource as DependencyObject) is not null;
+        if (_rocker.LeftDown(rightHeld, e.Handled || onButton ? null : _vm))
         {
-            // Right button held + left click: the card is shown in Explorer once the right button
-            // is released. This press is neither a click nor the start of a drag. (A press on a row
-            // of the overlay never gets here: the list handles its own.)
             _pressed = false;
             _dragCandidate = false;
-            if (!e.Handled && !_rocker && FindAncestor<System.Windows.Controls.Primitives.ButtonBase>(e.OriginalSource as DependencyObject) is null)
-            {
-                e.Handled = true;
-                _rocker = CaptureMouse();
-            }
+            e.Handled = true;
+            return;
+        }
 
+        if (rightHeld)
+        {
+            _pressed = false; // with the right button down a press is never an ordinary click
+            _dragCandidate = false;
             return;
         }
 
@@ -147,6 +157,13 @@ public partial class CardView : UserControl
     {
         base.OnMouseLeftButtonUp(e);
         _dragCandidate = false;
+        if (_rocker.LeftUp())
+        {
+            _pressed = false; // the left click of the gesture: waits for the right button
+            e.Handled = true;
+            return;
+        }
+
         if (_pressed && IsMouseOver)
         {
             _pressed = false;
@@ -159,11 +176,13 @@ public partial class CardView : UserControl
     {
         base.OnMouseRightButtonUp(e);
         e.Handled = true;
-        if (_rocker)
+        if (_rocker.RightUp() is { } armed)
         {
-            _rocker = false;
-            ReleaseMouseCapture();
-            Host?.CardShowInExplorer(this);
+            if (ReferenceEquals(armed, _vm))
+            {
+                Host?.CardShowInExplorer(this);
+            }
+
             return;
         }
 
@@ -223,6 +242,7 @@ public partial class CardView : UserControl
 
         Unrealize();
         OverlayHost.Content = null;
+        _rocker.Cancel();
         _vm = e.NewValue as CardViewModel;
         if (_vm is not null)
         {

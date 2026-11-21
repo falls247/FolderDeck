@@ -1,6 +1,7 @@
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using FolderDeck.Core.Layout;
 using FolderDeck.Core.Stores;
 
 namespace FolderDeck.ViewModels;
@@ -8,6 +9,11 @@ namespace FolderDeck.ViewModels;
 /// <summary>Settings dialog (§14). Values apply only on OK.</summary>
 public sealed partial class SettingsViewModel : ObservableObject
 {
+    /// <summary>Colour theme: follow Windows, light or dark. The three switches below show and set it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsThemeSystem), nameof(IsThemeLight), nameof(IsThemeDark))]
+    private AppTheme _theme;
+
     [ObservableProperty]
     private bool _showHidden;
 
@@ -40,6 +46,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public SettingsViewModel(AppSettings settings)
     {
+        _theme = AppThemes.FromSetting(settings.Theme);
         _showHidden = settings.ShowHidden;
         _confirmExecutables = settings.ConfirmExecutables;
         _includeWindowsRecent = settings.IncludeWindowsRecent;
@@ -48,6 +55,26 @@ public sealed partial class SettingsViewModel : ObservableObject
         _recentLimitText = settings.RecentLimit.ToString(CultureInfo.InvariantCulture);
         _frequentLimitText = settings.FrequentLimit.ToString(CultureInfo.InvariantCulture);
         _thumbCacheMbText = settings.ThumbCacheMb.ToString(CultureInfo.InvariantCulture);
+    }
+
+    // One switch per theme (RadioButtons). Only "checked" counts: the one that gets unchecked
+    // writes false, which must not change anything.
+    public bool IsThemeSystem
+    {
+        get => Theme == AppTheme.System;
+        set => SelectTheme(value, AppTheme.System);
+    }
+
+    public bool IsThemeLight
+    {
+        get => Theme == AppTheme.Light;
+        set => SelectTheme(value, AppTheme.Light);
+    }
+
+    public bool IsThemeDark
+    {
+        get => Theme == AppTheme.Dark;
+        set => SelectTheme(value, AppTheme.Dark);
     }
 
     public Func<string?>? ResetStatsAction { get; init; }
@@ -88,8 +115,17 @@ public sealed partial class SettingsViewModel : ObservableObject
         return true;
     }
 
+    private void SelectTheme(bool selected, AppTheme theme)
+    {
+        if (selected)
+        {
+            Theme = theme;
+        }
+    }
+
     public void ApplyTo(AppSettings settings)
     {
+        settings.Theme = AppThemes.ToSetting(Theme);
         settings.ShowHidden = ShowHidden;
         settings.ConfirmExecutables = ConfirmExecutables;
         settings.IncludeWindowsRecent = IncludeWindowsRecent;

@@ -14,7 +14,7 @@
 #   - 見出しを変えたら sections も直す。
 
 version: 1
-updated: 2026-11-21
+updated: 2026-11-22
 
 topics:
   - id: codebase_overview
@@ -23,7 +23,7 @@ topics:
     summary: 層構成・主要クラスの責務・処理の流れ・スレッド規約・改修レシピ・テスト対応表。改修や調査の最初に読む地図
     tags: [architecture, overview, wpf, core, recipe, testing, threading, persistence]
     status: 現行（実装に追従して更新する）
-    updated: 2026-11-21
+    updated: 2026-11-22
     read_when: 改修・調査を始めるとき（最初に読む）。触るファイルを決めるとき
     sections:
       - id: "0"
@@ -40,7 +40,7 @@ topics:
         heading: ファイルマップ
         about: ファイルごとの責務の一覧
         children:
-          - { id: "2.1", heading: Core, about: Infrastructure / Layout / Listing / Ordering / Paths / Ranking / Stores / Text / Transfer }
+          - { id: "2.1", heading: Core, about: Infrastructure / Input / Layout / Listing / Ordering / Paths / Ranking / Stores / Text / Transfer }
           - { id: "2.2", heading: App, about: Services / Shell / ViewModels / Views / Themes }
           - { id: "2.3", heading: その他, about: tools と BAT（文字コードの注意） }
       - id: "3"
@@ -55,7 +55,7 @@ topics:
           - { id: "3.6", heading: 並べ替え・ピン留め, about: SetSortMode、SetFilter、MoveCard、MoveRegistered、ApplyPins、PlaceInBase、📌 のクリック、カードの形 }
           - { id: "3.7", heading: 他アプリへのドラッグ, about: FileDragOut、BeginDrag / EndDrag、Copy | Link のみ }
           - { id: "3.8", heading: 永続化, about: StoreBase の保存予約、原子的書き込み、壊れたファイルの退避 }
-          - { id: "3.9", heading: テーマ, about: ThemeManager と Light / Dark の差し替え }
+          - { id: "3.9", heading: テーマ, about: 設定のテーマ（システム / ライト / ダーク）、ThemeManager と Light / Dark の差し替え }
           - { id: "3.10", heading: サイドバー（登録フォルダ）とフォルダのタブ, about: RefreshRegistered、OpenFolderTabAsync、ShowTabAsync、タブを閉じる・並べ替える、タブごとの履歴、open_tabs の保存 }
       - id: "4"
         heading: スレッドと非同期の規約

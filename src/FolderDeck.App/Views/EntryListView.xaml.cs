@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using FolderDeck.Core.Input;
 using FolderDeck.Core.Transfer;
 using FolderDeck.ViewModels;
 
@@ -14,10 +15,10 @@ public partial class EntryListView : UserControl
     private Point _pressedAt;
 
     /// <summary>
-    /// The row left-clicked while the right button was held: shown in Explorer when the right
-    /// button is released (the list holds the mouse capture until then).
+    /// Right button held + left click on a row: the row is shown in Explorer when the right button
+    /// is released. No mouse capture (the ListBox drops its capture on every left release).
     /// </summary>
-    private EntryRowViewModel? _rocker;
+    private readonly RockerGesture<EntryRowViewModel> _rocker = new();
 
     public EntryListView()
     {
@@ -27,11 +28,12 @@ public partial class EntryListView : UserControl
         {
             TryStartDrag(e); // left the list with the button held: that is a drag too
             SetHovered(null, null);
+            _rocker.Cancel();
         };
         List.AddHandler(PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler(OnLeftDown), handledEventsToo: true);
         List.AddHandler(PreviewMouseLeftButtonUpEvent, new MouseButtonEventHandler(OnLeftUp), handledEventsToo: true);
+        List.AddHandler(PreviewMouseRightButtonDownEvent, new MouseButtonEventHandler((_, _) => _rocker.RightDown()), handledEventsToo: true);
         List.AddHandler(PreviewMouseRightButtonUpEvent, new MouseButtonEventHandler(OnRightUp), handledEventsToo: true);
-        List.LostMouseCapture += (_, _) => _rocker = null;
 
         // The list's own scrolling stays here: ScrollChanged bubbles, and the card grid around the
         // overlay would otherwise take it for a grid scroll and close the whole cascade.
@@ -114,18 +116,13 @@ public partial class EntryListView : UserControl
     private void OnLeftDown(object sender, MouseButtonEventArgs e)
     {
         var container = RowContainerAt(e.OriginalSource as DependencyObject);
-        if (e.RightButton == MouseButtonState.Pressed && (_rocker is not null || container?.DataContext is EntryRowViewModel))
+        if (_rocker.LeftDown(e.RightButton == MouseButtonState.Pressed, container?.DataContext as EntryRowViewModel))
         {
             // Right button held + left click on a row: the row is shown in Explorer once the right
             // button is released. This press is neither a click nor the start of a drag. (On blank
             // space the press goes on to the card under the overlay, which does the same for itself.)
             _pressed = null;
             e.Handled = true;
-            if (_rocker is null && container?.DataContext is EntryRowViewModel target && Mouse.Capture(List))
-            {
-                _rocker = target; // after Capture: taking the capture clears a previous one
-            }
-
             return;
         }
 
@@ -140,9 +137,10 @@ public partial class EntryListView : UserControl
 
     private void OnLeftUp(object sender, MouseButtonEventArgs e)
     {
-        if (_rocker is not null)
+        if (_rocker.LeftUp())
         {
             e.Handled = true; // the left click of the gesture: waits for the right button
+            _pressed = null;
             return;
         }
 
@@ -160,11 +158,9 @@ public partial class EntryListView : UserControl
 
     private void OnRightUp(object sender, MouseButtonEventArgs e)
     {
-        if (_rocker is { } armed)
+        if (_rocker.RightUp() is { } armed)
         {
             e.Handled = true;
-            _rocker = null;
-            List.ReleaseMouseCapture();
             RowExplorerRequested?.Invoke(this, armed);
             return;
         }

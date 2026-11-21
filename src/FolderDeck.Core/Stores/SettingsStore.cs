@@ -75,6 +75,9 @@ public sealed class AppSettings
     /// <summary>Card shape for every tab: <c>portrait</c> (3:4 thumbnail) or <c>square</c> (1:1).</summary>
     public string? CardShape { get; set; } = CardShapes.Portrait;
 
+    /// <summary>Colour theme: <c>system</c> (follow Windows), <c>light</c> or <c>dark</c>.</summary>
+    public string? Theme { get; set; } = AppThemes.System;
+
     /// <summary>
     /// Sort mode per tab: <see cref="TabRecent"/> / <see cref="TabFrequent"/> / <see cref="TabFolder"/> →
     /// <c>manual</c>, <c>name_asc</c>, <c>name_desc</c>, <c>modified_asc</c>, <c>modified_desc</c>.
@@ -210,6 +213,7 @@ public sealed class AppSettings
         SidebarWidth = ClampSidebarWidth(SidebarWidth);
         CardSize = ClampCardSize(CardSize);
         CardShape = CardShapes.ToSetting(CardShapes.FromSetting(CardShape));
+        Theme = AppThemes.ToSetting(AppThemes.FromSetting(Theme));
         RecentLimit = Math.Clamp(RecentLimit, 10, 500);
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
         ThumbCacheMb = Math.Clamp(ThumbCacheMb, 0, ThumbCacheMbMax);
