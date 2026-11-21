@@ -32,6 +32,9 @@ public sealed class AppSettings
     public const int CardSizeStep = 20;
     public const int CardSizeDefault = 200;
 
+    public const int ThumbCacheMbDefault = 512;
+    public const int ThumbCacheMbMax = 8192;
+
     public const string TabRegistered = "registered";
     public const string TabRecent = "recent";
     public const string TabFrequent = "frequent";
@@ -71,6 +74,12 @@ public sealed class AppSettings
 
     /// <summary>"Show in Explorer" uses a new tab of the running File Explorer window (Windows 11 22H2+).</summary>
     public bool OpenExplorerInNewTab { get; set; }
+
+    /// <summary>
+    /// Upper limit, in megabytes, of the thumbnail cache kept in the data folder (<c>thumbs</c>);
+    /// 0 turns the disk cache off. Read at startup.
+    /// </summary>
+    public int ThumbCacheMb { get; set; } = ThumbCacheMbDefault;
 
     public static int ClampCardSize(int value)
     {
@@ -134,6 +143,7 @@ public sealed class AppSettings
         CardShape = CardShapes.ToSetting(CardShapes.FromSetting(CardShape));
         RecentLimit = Math.Clamp(RecentLimit, 10, 500);
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
+        ThumbCacheMb = Math.Clamp(ThumbCacheMb, 0, ThumbCacheMbMax);
     }
 
     public AppSettings Clone()

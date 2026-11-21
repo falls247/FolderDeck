@@ -522,6 +522,7 @@ public class SettingsStoreTests
         Assert.False(s.AddToWindowsRecent);
         Assert.Equal(100, s.RecentLimit);
         Assert.Equal(50, s.FrequentLimit);
+        Assert.Equal(512, s.ThumbCacheMb);
         Assert.Null(s.RecentClearedAt);
         Assert.Equal(3, s.Locations!.Count);
     }
@@ -531,7 +532,7 @@ public class SettingsStoreTests
     {
         using var tmp = new TempDir();
         string file = tmp.Combine("settings.json");
-        File.WriteAllText(file, """{"version":1,"card_size":205,"recent_limit":5000,"frequent_limit":1,"last_tab":"bogus","recent_cleared_at":"garbage"}""");
+        File.WriteAllText(file, """{"version":1,"card_size":205,"recent_limit":5000,"frequent_limit":1,"thumb_cache_mb":999999,"last_tab":"bogus","recent_cleared_at":"garbage"}""");
         var store = new SettingsStore(file, FakeClock.Fixed());
         store.Load();
         var s = store.Current;
@@ -539,6 +540,7 @@ public class SettingsStoreTests
         Assert.Equal(200, s.CardSize);
         Assert.Equal(500, s.RecentLimit);
         Assert.Equal(10, s.FrequentLimit);
+        Assert.Equal(AppSettings.ThumbCacheMbMax, s.ThumbCacheMb);
         Assert.Equal(AppSettings.TabRegistered, s.LastTab);
         Assert.Null(s.RecentClearedAt);
         Assert.True(s.ConfirmExecutables);

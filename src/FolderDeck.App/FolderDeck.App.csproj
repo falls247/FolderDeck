@@ -17,6 +17,8 @@
     <!-- Precompiled code: the window must appear within 1.5 s (§16). -->
     <PublishReadyToRun>true</PublishReadyToRun>
     <DebugType>embedded</DebugType>
+    <!-- Compressed bundle (about 145 MB -> 65 MB). The SDK can compress only a self-contained bundle. -->
+    <EnableCompressionInSingleFile Condition="'$(SelfContained)' == 'true'">true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <ItemGroup>

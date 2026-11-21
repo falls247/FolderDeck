@@ -48,7 +48,7 @@ topics:
         about: 呼び出しの順序をメンバー名でたどる
         children:
           - { id: "3.1", heading: タブの読み込み, about: TabViewModel.LoadAsync、NavLocation、_baseCards と Cards }
-          - { id: "3.2", heading: カードの段階読み込み, about: Realize / Unrealize、DetailGate、ThumbnailService }
+          - { id: "3.2", heading: カードの段階読み込み, about: Realize / Unrealize、DetailGate、ThumbnailService（画像は ImageDecoder + ThumbDiskCache、ほかはシェル） }
           - { id: "3.3", heading: カスケード（CascadeController、§9）, about: オーバーレイ・フライアウト・タイマー・開閉の判断 }
           - { id: "3.4", heading: プレビュー, about: PreviewTextCache → Office / テキスト抜粋 → サムネイル }
           - { id: "3.5", heading: 開く・移動する, about: OpenFileAsync、利用記録、右クリックの操作、ごみ箱への削除（DeleteAsync / RecycleBin） }
