@@ -125,13 +125,6 @@ public static class ShellActions
         }
     }
 
-    private static string ShellPath(string path)
-    {
-        if (path.Length >= 260 && ShellInterop.GetShortPath(path) is { } shortPath && shortPath.Length < 260)
-        {
-            return shortPath;
-        }
-
-        return path;
-    }
+    /// <summary>The path itself, or its 8.3 short form when it is too long for the shell (MAX_PATH).</summary>
+    internal static string ShellPath(string path) => PathTools.ForShell(path, ShellInterop.GetShortPath);
 }

@@ -607,6 +607,41 @@ public class SettingsStoreTests
     }
 
     [Fact]
+    public void OpenExplorerInNewTab_DefaultsOff_RoundTrips_AndIsCloned()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        Assert.False(store.Current.OpenExplorerInNewTab);
+
+        store.Update(s => s.OpenExplorerInNewTab = true);
+        store.Flush();
+        Assert.Contains("\"open_explorer_in_new_tab\": true", File.ReadAllText(file));
+
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        Assert.True(reloaded.Current.OpenExplorerInNewTab);
+
+        var copy = reloaded.Current.Clone();
+        Assert.True(copy.OpenExplorerInNewTab);
+        copy.OpenExplorerInNewTab = false;
+        Assert.True(reloaded.Current.OpenExplorerInNewTab);
+    }
+
+    [Fact]
+    public void OpenExplorerInNewTab_MissingKey_IsOff()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        File.WriteAllText(file, """{"version":1,"add_to_windows_recent":true}""");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        Assert.True(store.Current.AddToWindowsRecent);
+        Assert.False(store.Current.OpenExplorerInNewTab);
+    }
+
+    [Fact]
     public void DataStores_LoadAll_CreatesFolder()
     {
         using var tmp = new TempDir();

@@ -75,6 +75,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Button Grid.Column="0" Style="{StaticResource Btn.Icon}" Content="&#xE74A;" ToolTip="1つ上へ（Backspace）"
                         Command="{Binding GoUpCommand}" />
@@ -120,7 +121,18 @@
                         Command="{Binding ClearHistoryCommand}"
                         Visibility="{Binding SelectedTab.ShowClearHistory, Converter={StaticResource BoolToVis}}" />
 
-                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0"
+                <!-- sort mode of the selected tab -->
+                <Button Grid.Column="4" Style="{StaticResource Btn}" Margin="0,0,12,0" Padding="10,4" Click="OnSortClick"
+                        ToolTip="並べ替え（タブごと）。最上位はドラッグで並べた順、フォルダの中は既定の順（フォルダ→ファイル、名前順）が「手動」です。ピン留めした項目は位置が固定されます。">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE8CB;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
+                        <TextBlock Text="{Binding SelectedTab.SortModeText}" VerticalAlignment="Center" />
+                        <TextBlock Text="&#xE70D;" FontFamily="{StaticResource Font.Icons}" FontSize="9" VerticalAlignment="Center" Margin="6,1,0,0"
+                                   Foreground="{DynamicResource Brush.Muted}" />
+                    </StackPanel>
+                </Button>
+
+                <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0"
                             ToolTip="カードの大きさ（Ctrl + ホイールでも変更できます）">
                     <TextBlock Text="&#xE71E;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center"
                                Foreground="{DynamicResource Brush.Muted}" Margin="0,0,6,0" />
@@ -129,7 +141,7 @@
                             Value="{Binding CardSize, Mode=TwoWay}" />
                 </StackPanel>
 
-                <Grid Grid.Column="5">
+                <Grid Grid.Column="6">
                     <Button Style="{StaticResource Btn.Icon}" Content="&#xE72C;" ToolTip="更新（F5）"
                             Command="{Binding RefreshCommand}"
                             IsEnabled="{Binding SelectedTab.IsLoading, Converter={StaticResource Not}}" />

@@ -145,11 +145,23 @@
             </Grid>
         </Border>
 
-        <!-- 📌 on pinned items of よく使う項目 -->
+        <!-- 📌 on every pinned item (all tabs, inside folders too); hidden while the overlay covers the thumbnail -->
         <Border x:Name="PinBadge" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="6,6,0,0"
                 Width="26" Height="26" CornerRadius="13" Background="{DynamicResource Brush.Surface}"
-                BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1"
-                Visibility="{Binding ShowPinBadge, Converter={StaticResource BoolToVis}}" ToolTip="ピン留め">
+                BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1" ToolTip="ピン留め中">
+            <Border.Style>
+                <Style TargetType="{x:Type Border}">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsPinned}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsHoverHeld}" Value="True">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
             <TextBlock Text="&#xE718;" FontFamily="{StaticResource Font.Icons}" FontSize="12"
                        Foreground="{DynamicResource Brush.Accent}" HorizontalAlignment="Center" VerticalAlignment="Center" />
         </Border>

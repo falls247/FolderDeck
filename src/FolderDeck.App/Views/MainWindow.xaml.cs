@@ -1,8 +1,11 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Stores;
+using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
 using FolderDeck.ViewModels;
 using Microsoft.Win32;
@@ -184,10 +187,59 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private void OnHideMessage(object sender, RoutedEventArgs e) => _vm.Message.Hide();
 
+    /// <summary>
+    /// Toolbar sort button: a menu of the five modes, the current one checked, and on 最近の履歴 /
+    /// よく使う項目 「手動の並びをリセット」 (enabled when cards were dragged there).
+    /// </summary>
+    private void OnSortClick(object sender, RoutedEventArgs e)
+    {
+        _cascade.CloseAll();
+        var current = _vm.SelectedTab.SortMode;
+        var menu = new ContextMenu
+        {
+            PlacementTarget = (UIElement)sender,
+            Placement = PlacementMode.Bottom,
+        };
+        foreach (var mode in CardSortModes.All)
+        {
+            bool selected = mode == current;
+            var item = new MenuItem
+            {
+                Header = SortModeLabels.Long(mode),
+                Tag = selected ? "" : string.Empty, // check mark (the menu style draws Tag as a glyph)
+                IsCheckable = true,
+                IsChecked = selected,
+            };
+            item.Click += (_, _) => _vm.SetSortMode(mode);
+            menu.Items.Add(item);
+        }
+
+        if (_vm.ShowResetManualOrder)
+        {
+            menu.Items.Add(new Separator());
+            var reset = new MenuItem
+            {
+                Header = SortModeLabels.ResetManual,
+                Tag = "", // undo glyph
+                IsEnabled = _vm.CanResetManualOrder,
+                ToolTip = SortModeLabels.ResetManualTip,
+            };
+            ToolTipService.SetShowOnDisabled(reset, true);
+            reset.Click += (_, _) => _ = _vm.ResetManualOrderAsync();
+            menu.Items.Add(reset);
+        }
+
+        menu.IsOpen = true;
+    }
+
     // ---- drag & drop registration (§10.1, P1) -----------------------------------------------
 
+    // Drags the app started itself (cards, rows, previews) carry a file drop too, for other apps:
+    // released over the window they are never a folder registration.
     private bool CanDrop(DragEventArgs e) =>
-        _vm.SelectedTab.ShowRegisterBar && e.Data.GetDataPresent(DataFormats.FileDrop);
+        _vm.SelectedTab.ShowRegisterBar && e.Data.GetDataPresent(DataFormats.FileDrop) && !IsOwnDrag(e.Data);
+
+    private static bool IsOwnDrag(IDataObject data) => FileDragOut.IsDragging || FileDrag.IsFromThisApp(data.GetDataPresent);
 
     private void OnDragOver(object sender, DragEventArgs e)
     {
@@ -242,6 +294,52 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
     }
 
+    public bool CanDragCard(CardView card) => card.ViewModel is { IsDisabled: false } vm && FileDragOut.CanDrag(vm.Path);
+
+    /// <summary>
+    /// At the top level of a tab one drag carries both the reorder format and the file drop: released
+    /// over the grid it moves the card, released over another app that app gets the file or folder.
+    /// Inside folders the drag only hands the item to other apps.
+    /// </summary>
+    public void CardDrag(CardView card)
+    {
+        if (card.ViewModel is not { } vm || !CanDragCard(card))
+        {
+            return;
+        }
+
+        bool reorder = _vm.CanReorder(vm);
+        if (FileDragOut.CreateData([vm.Path], reorder) is not { } data)
+        {
+            return;
+        }
+
+        int? index = null;
+        _cascade.BeginDrag();
+        try
+        {
+            if (reorder)
+            {
+                index = Grid.RunReorderDrag(vm, source => FileDragOut.Run(source, data, "top card"));
+            }
+            else
+            {
+                FileDragOut.Run(this, data, "card"); // the window outlives any card container
+            }
+        }
+        finally
+        {
+            _cascade.EndDrag();
+        }
+
+        if (index is { } i)
+        {
+            double offset = Grid.VerticalOffset;
+            _vm.MoveCard(vm, i);
+            Grid.ScrollTo(offset); // the grid rebuilds its rows: stay where the card was dropped
+        }
+    }
+
     // ---- IMainView ----------------------------------------------------------------------------
 
     public void CloseCascade() => _cascade.CloseAll();
@@ -266,17 +364,6 @@ public partial class MainWindow : Window, IMainView, ICardHost
             Title = "登録するフォルダを選択",
         };
         return dialog.ShowDialog(this) == true ? dialog.FolderNames : null;
-    }
-
-    public string? PickImportFile()
-    {
-        var dialog = new OpenFileDialog
-        {
-            Title = "imgtool の registered_folders.json を選択",
-            Filter = "registered_folders.json|registered_folders.json|JSON ファイル (*.json)|*.json|すべてのファイル (*.*)|*.*",
-            CheckFileExists = true,
-        };
-        return dialog.ShowDialog(this) == true ? dialog.FileName : null;
     }
 
     public bool ShowSettings(SettingsViewModel settings)

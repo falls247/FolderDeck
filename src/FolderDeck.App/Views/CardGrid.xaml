@@ -17,7 +17,12 @@
                   ScrollViewer.CanContentScroll="True">
         <ItemsControl.Template>
             <ControlTemplate TargetType="{x:Type ItemsControl}">
-                <ScrollViewer x:Name="PART_Scroll" Focusable="False" CanContentScroll="True"
+                <!--
+                  Transparent (not null) background: the gaps between cards, the padding and the area
+                  below the last row must be hit-testable, or a card dragged there would be routed to
+                  the window (which refuses it) and the drop would be cancelled.
+                -->
+                <ScrollViewer x:Name="PART_Scroll" Focusable="False" CanContentScroll="True" Background="Transparent"
                               HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
                     <ItemsPresenter Margin="16,14,4,4" />
                 </ScrollViewer>

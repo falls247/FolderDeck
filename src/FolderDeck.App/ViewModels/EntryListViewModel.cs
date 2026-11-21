@@ -15,6 +15,7 @@ public sealed partial class EntryRowViewModel : ObservableObject
     private ImageSource? _icon;
     private bool _iconRequested;
     private string? _toolTip;
+    private bool? _isPreviewable;
 
     [ObservableProperty]
     private bool _isActive;
@@ -42,6 +43,15 @@ public sealed partial class EntryRowViewModel : ObservableObject
     public long Length { get; }
 
     public DateTime ModifiedUtc { get; }
+
+    /// <summary>
+    /// An image, Office file, text file, or a file Windows draws a thumbnail of: resting on the row
+    /// shows a preview beside the list. Decided on first use (the shell is asked once per extension).
+    /// </summary>
+    public bool IsPreviewable => _isPreviewable ??= !IsFolder && ShellPreviewSupport.IsPreviewable(Name);
+
+    /// <summary>How the preview is made (<see cref="PreviewKind.None"/> = the shell's thumbnail).</summary>
+    public PreviewKind PreviewKind => IsFolder ? PreviewKind.None : PreviewKinds.KindOf(Name);
 
     /// <summary>Location of this row inside the app (folder rows navigate here).</summary>
     public NavLocation Target { get; }

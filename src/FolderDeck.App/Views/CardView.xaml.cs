@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
 using FolderDeck.ViewModels;
 
@@ -22,6 +23,15 @@ public interface ICardHost
     void CardContextMenu(CardView card);
 
     void CardRemove(CardView card);
+
+    /// <summary>
+    /// True when the card may be dragged at all (to other apps; at the top level also to a new
+    /// position). Missing / not responding cards cannot: their press stays a click.
+    /// </summary>
+    bool CanDragCard(CardView card);
+
+    /// <summary>The pointer moved past the drag threshold with the button held: runs the drag (blocks until it ends).</summary>
+    void CardDrag(CardView card);
 }
 
 public partial class CardView : UserControl
@@ -41,6 +51,8 @@ public partial class CardView : UserControl
     private CardViewModel? _realized;
     private CardGrid? _grid;
     private bool _pressed;
+    private bool _dragCandidate;
+    private Point _pressedAt;
     private bool _hot;
 
     public CardView()
@@ -77,7 +89,9 @@ public partial class CardView : UserControl
     protected override void OnMouseLeave(MouseEventArgs e)
     {
         base.OnMouseLeave(e);
+        TryStartDrag(e); // left the card with the button held: that is a drag too
         _pressed = false;
+        _dragCandidate = false;
         UpdateHot();
         Host?.CardMouseLeave(this);
     }
@@ -87,11 +101,20 @@ public partial class CardView : UserControl
         base.OnMouseLeftButtonDown(e);
         // A double click must not run twice (§6.8): only the first press counts.
         _pressed = e.ClickCount == 1;
+        _pressedAt = e.GetPosition(this);
+        _dragCandidate = _pressed && !e.Handled && !IsOnOverlayOrButton(e.OriginalSource as DependencyObject);
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        TryStartDrag(e);
     }
 
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
+        _dragCandidate = false;
         if (_pressed && IsMouseOver)
         {
             _pressed = false;
@@ -112,6 +135,38 @@ public partial class CardView : UserControl
         e.Handled = true;
         Host?.CardRemove(this);
     }
+
+    /// <summary>
+    /// Starts a drag (to other apps; at the top level also to a new position) once the pointer
+    /// moved past the system drag distance with the button held.
+    /// </summary>
+    private void TryStartDrag(MouseEventArgs e)
+    {
+        if (!_dragCandidate || !_pressed || e.LeftButton != MouseButtonState.Pressed)
+        {
+            return;
+        }
+
+        Vector moved = e.GetPosition(this) - _pressedAt;
+        if (!FileDrag.IsDragGesture(moved.X, moved.Y, SystemParameters.MinimumHorizontalDragDistance, SystemParameters.MinimumVerticalDragDistance))
+        {
+            return;
+        }
+
+        _dragCandidate = false;
+        if (Host is not { } host || !host.CanDragCard(this))
+        {
+            return; // a missing card: the press stays a click (which does nothing for it)
+        }
+
+        _pressed = false; // a drag never opens the card on mouse up
+        host.CardDrag(this);
+    }
+
+    /// <summary>Presses on the overlay's rows or on a button (×) never start a card drag.</summary>
+    private bool IsOnOverlayOrButton(DependencyObject? source) =>
+        (CurrentOverlay is not null && FindAncestor<OverlayView>(source) is not null)
+        || FindAncestor<System.Windows.Controls.Primitives.ButtonBase>(source) is not null;
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
@@ -181,6 +236,9 @@ public partial class CardView : UserControl
             case nameof(CardViewModel.IsHoverHeld):
                 UpdateHot();
                 break;
+            case nameof(CardViewModel.IsDragged):
+                UpdateOpacity();
+                break;
         }
     }
 
@@ -223,9 +281,15 @@ public partial class CardView : UserControl
     {
         bool disabled = _vm?.IsDisabled == true;
         NameText.TextDecorations = disabled ? TextDecorations.Strikethrough : null;
-        Root.Opacity = disabled ? 0.6 : 1.0;
+        UpdateOpacity();
         Cursor = disabled ? Cursors.Arrow : Cursors.Hand;
         UpdateCloseButton();
+    }
+
+    private void UpdateOpacity()
+    {
+        var vm = _vm;
+        Root.Opacity = vm?.IsDragged == true ? 0.4 : vm?.IsDisabled == true ? 0.6 : 1.0;
     }
 
     private void UpdateHot()

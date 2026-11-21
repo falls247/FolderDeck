@@ -62,11 +62,14 @@ public sealed partial class CardViewModel : ObservableObject
     [ObservableProperty]
     private ThumbMode _thumbMode;
 
+    /// <summary>Pinned (📌 badge on every tab, kept in sync with pins.json).</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RemoveToolTip))]
     private bool _isPinned;
 
+    /// <summary>The card is being dragged to a new position (drawn semi-transparent).</summary>
     [ObservableProperty]
-    private bool _showPinBadge;
+    private bool _isDragged;
 
     [ObservableProperty]
     private bool _isBusy;

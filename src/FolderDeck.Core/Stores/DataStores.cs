@@ -13,6 +13,7 @@ public sealed class DataStores
         Pins = new PinStore(Path.Combine(dataDirectory, PinStore.DefaultFileName), clock);
         Excluded = new ExcludedStore(Path.Combine(dataDirectory, ExcludedStore.DefaultFileName), clock);
         Settings = new SettingsStore(Path.Combine(dataDirectory, SettingsStore.DefaultFileName), clock);
+        CardOrders = new CardOrderStore(Path.Combine(dataDirectory, CardOrderStore.DefaultFileName), clock);
     }
 
     public static string DefaultDataDirectory =>
@@ -30,7 +31,10 @@ public sealed class DataStores
 
     public SettingsStore Settings { get; }
 
-    public IEnumerable<StoreBase> All => [Registered, History, Pins, Excluded, Settings];
+    /// <summary>Drag &amp; drop order of the top level of "最近の履歴" and "よく使う項目".</summary>
+    public CardOrderStore CardOrders { get; }
+
+    public IEnumerable<StoreBase> All => [Registered, History, Pins, Excluded, Settings, CardOrders];
 
     /// <summary>Loads every store (blocking I/O).</summary>
     public void LoadAll()
