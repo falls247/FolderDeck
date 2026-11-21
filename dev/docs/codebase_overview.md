@@ -143,9 +143,9 @@ App
 | | `IconCache.cs` | 一覧の行のアイコン（拡張子ごとに共有できるものは共有） |
 | | `OfficeCover.cs` | `OfficeThumbnail.ReadEmbedded` を WPF の画像にする |
 | | `ShellPreviewSupport.cs` | 「Windows がサムネイルを作れるか」を拡張子ごとに 1 回だけ確認（`AssocQueryString`）。`IsPreviewable` |
-| | `ShellActions.cs` | 既定のアプリで開く、エクスプローラーで表示（`ShowInExplorer`）/ 開く（`OpenInExplorer`、いまはデータフォルダを開くときだけ）、パスをコピー、実行形式の判定 |
+| | `ShellActions.cs` | 既定のアプリで開く、エクスプローラーで表示（`ShowInExplorer`、親フォルダで選択。ファイル用）/ 開く（`OpenInExplorer`。フォルダの「エクスプローラーで表示」とデータフォルダを開くとき）、パスをコピー、実行形式の判定 |
 | | `RecycleBin.cs` | ごみ箱への移動（`MoveAsync`）。`IFileOperation` を操作ごとの専用 STA スレッドで実行し、進行状況シンクの `PreDeleteItem` で「ごみ箱に入らない（完全に削除される）」項目を止める。結果は `RecycleOutcome`（`Recycled` / `Canceled` / `NotRecyclable` / `Failed`） |
-| | `ExplorerTabs.cs` | エクスプローラーの新しいタブで「表示」（`ShowAsync`。Windows 11 22H2+、非公開の `WM_COMMAND 0xA21B`。失敗時は `ShellActions` の新しいウィンドウへ）。`RunAsync` の `select: false` の経路は呼び出し元がなくなった |
+| | `ExplorerTabs.cs` | エクスプローラーの新しいタブで「表示」（ファイル：`ShowAsync`＝親フォルダで選択、フォルダ：`OpenAsync`＝そのフォルダ。Windows 11 22H2+、非公開の `WM_COMMAND 0xA21B`。失敗時は `ShellActions` の新しいウィンドウへ） |
 | | `WindowsRecent.cs` | `%APPDATA%\Microsoft\Windows\Recent\*.lnk` の読み取り、記録が有効かの確認 |
 | | `FileDragOut.cs` | ドラッグ用 `DataObject` の作成、`DoDragDrop` の実行、`IsDragging` |
 | | `SingleInstance.cs` / `ThemeManager.cs` | 単一インスタンス / Windows のライト・ダーク追従 |
@@ -231,7 +231,7 @@ App
 - カードのクリック → `MainViewModel.ActivateCardAsync`、行のクリック → `OpenItemAsync`
 - フォルダ：`NavigateAsync(Target, NavMode.New, recordPath: …)`（移動も利用として `RecordUse`）
 - ファイル：`OpenFileAsync`：実行形式の確認（`ConfirmExecutables` && `ShellActions.IsExecutable`）→ `Task.Run(ShellActions.Open)` → `RecordUse`（`History.Record` → 最近の履歴・よく使う項目を更新）→ 設定によって `SHAddToRecentDocs`
-- 右クリック：`ContextMenuFactory.Show(ItemRef, target)` → `MainViewModel` の `ShowInExplorerAsync`（設定で `ExplorerTabs`）/ `CopyPath` / `TogglePin` / `AddToRegisteredAsync` / `DeleteAsync` / `Unregister` / `ExcludeFromRecent` / `RemoveFromFrequent`
+- 右クリック：`ContextMenuFactory.Show(ItemRef, target)` → `MainViewModel` の `ShowInExplorerAsync`（`ItemRef.IsFolder` ならフォルダ自体を開く `OpenInExplorer` / `ExplorerTabs.OpenAsync`、ファイルなら親フォルダで選択 `ShowInExplorer` / `ExplorerTabs.ShowAsync`。どのタブ・どの位置の項目でも同じ。設定で `ExplorerTabs`）/ `CopyPath` / `TogglePin` / `AddToRegisteredAsync` / `DeleteAsync` / `Unregister` / `ExcludeFromRecent` / `RemoveFromFrequent`
 - ごみ箱への削除：`CanDelete`（`ItemContext.InnerCard` か `Row`、かつ見つからない・応答なしでない。最上位のカードとフライアウトの見出しは対象外）→ メニューで `BeforeNavigate`（カスケードを閉じる）→ `DeleteAsync`：`IMainView.Confirm`（危険操作。既定は「キャンセル」）→ `RecycleBin.MoveAsync(path, IMainView.WindowHandle)` → 結果をメッセージ行へ → `ReloadAfterDeleteAsync`（`ClearCaches`、全タブを `IsStale`、表示中のタブをスクロール位置を保って読み直す。中止・失敗でも読み直す）
 
 ### 3.6 並べ替え・ピン留め

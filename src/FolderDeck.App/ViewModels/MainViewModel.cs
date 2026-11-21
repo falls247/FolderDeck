@@ -588,12 +588,20 @@ public sealed partial class MainViewModel : ObservableObject
 
     // ---- context menu actions (§11) ---------------------------------------------------------
 
-    /// <summary>Parent folder with the item selected: in a new Explorer tab when the setting asks for it, else a new window.</summary>
+    /// <summary>
+    /// A folder opens itself; a file opens its parent folder with the file selected. In a new
+    /// Explorer tab when the setting asks for it, else a new window.
+    /// </summary>
     public async Task ShowInExplorerAsync(ItemRef item)
     {
-        var result = Settings.OpenExplorerInNewTab
-            ? await ExplorerTabs.ShowAsync(item.Path)
-            : ShellActions.ShowInExplorer(item.Path);
+        bool newTab = Settings.OpenExplorerInNewTab;
+        var result = (item.IsFolder, newTab) switch
+        {
+            (true, true) => await ExplorerTabs.OpenAsync(item.Path),
+            (true, false) => ShellActions.OpenInExplorer(item.Path),
+            (false, true) => await ExplorerTabs.ShowAsync(item.Path),
+            (false, false) => ShellActions.ShowInExplorer(item.Path),
+        };
         if (!result.Success)
         {
             Message.Error(result.Error!);

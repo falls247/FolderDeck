@@ -67,6 +67,9 @@ public static class ExplorerTabs
     /// <summary>Parent folder in a new tab with the item selected (like <c>explorer.exe /select</c>).</summary>
     public static Task<OpenResult> ShowAsync(string path) => RunAsync(path, select: true);
 
+    /// <summary>The folder itself in a new tab (like <c>explorer.exe "path"</c>).</summary>
+    public static Task<OpenResult> OpenAsync(string path) => RunAsync(path, select: false);
+
     private static async Task<OpenResult> RunAsync(string path, bool select)
     {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, MinBuild))
