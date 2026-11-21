@@ -1,5 +1,6 @@
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using FolderDeck.Core.Listing;
 using FolderDeck.Core.Paths;
 using Windows.Win32.UI.Shell;
 
@@ -115,10 +116,14 @@ public sealed class ThumbnailService : IDisposable
 
             default:
             {
-                var image = ShellInterop.GetShellImage(path, sizePx, ThumbFlags);
+                // Presentations: the shell's thumbnail needs Office's handler; without it, the cover
+                // embedded in the file. Slides are landscape, so they are fitted, not cropped to 3:4.
+                bool presentation = PreviewKinds.IsPresentation(path);
+                var image = ShellInterop.GetShellImage(path, sizePx, ThumbFlags)
+                    ?? (presentation ? OfficeCover.Load(path) : null);
                 if (image is not null)
                 {
-                    return new ThumbResult(image, ThumbMode.Image);
+                    return new ThumbResult(image, presentation ? ThumbMode.Shell : ThumbMode.Image);
                 }
 
                 // Most file types share one icon per extension: ask the shell once.

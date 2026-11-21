@@ -6,11 +6,17 @@ namespace FolderDeck.Core.Infrastructure;
 /// Minimal file log (<c>logs\app.log</c>, rotated to <c>app.log.1</c> above 5 MB).
 /// Never throws. File contents are never logged, only paths and exceptions.
 /// </summary>
+/// <remarks>
+/// Line format (parsed by <c>tools\analyze-log.ps1</c>):
+/// <c>yyyy-MM-dd HH:mm:ss.fff +09:00 [LEVEL] [p&lt;pid&gt;/t&lt;thread&gt;] message</c>.
+/// Start, close requests and exit are written as <c>lifecycle: …</c> messages.
+/// </remarks>
 public static class AppLog
 {
     public const long MaxBytes = 5 * 1024 * 1024;
 
     private static readonly object Gate = new();
+    private static readonly int Pid = Environment.ProcessId;
     private static string? _file;
 
     public static string? FilePath => _file;
@@ -57,7 +63,7 @@ public static class AppLog
                 var sb = new StringBuilder();
                 sb.Append(DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss.fff zzz"));
                 sb.Append(" [").Append(level).Append("] ");
-                sb.Append('[').Append(Environment.CurrentManagedThreadId).Append("] ");
+                sb.Append("[p").Append(Pid).Append("/t").Append(Environment.CurrentManagedThreadId).Append("] ");
                 sb.Append(message);
                 if (ex is not null)
                 {

@@ -123,7 +123,9 @@ public partial class CardGrid : UserControl
         {
             _scroll.ScrollChanged += (_, e) =>
             {
-                if (e.VerticalChange != 0)
+                // ScrollChanged bubbles: the overlay's own list (inside a card) scrolling must not
+                // count as the grid scrolling, or the wheel over the overlay would close it.
+                if (ReferenceEquals(e.OriginalSource, _scroll) && e.VerticalChange != 0)
                 {
                     Scrolled?.Invoke(this, EventArgs.Empty);
                 }

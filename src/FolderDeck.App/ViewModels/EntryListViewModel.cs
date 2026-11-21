@@ -31,6 +31,7 @@ public sealed partial class EntryRowViewModel : ObservableObject
         Length = entry.Length;
         ModifiedUtc = entry.LastWriteTimeUtc;
         Target = target;
+        IsPreviewable = !entry.IsDirectory && PreviewKinds.IsPreviewable(entry.Name);
     }
 
     public string Name { get; }
@@ -42,6 +43,9 @@ public sealed partial class EntryRowViewModel : ObservableObject
     public long Length { get; }
 
     public DateTime ModifiedUtc { get; }
+
+    /// <summary>An image or presentation: resting on the row shows a preview beside the list.</summary>
+    public bool IsPreviewable { get; }
 
     /// <summary>Location of this row inside the app (folder rows navigate here).</summary>
     public NavLocation Target { get; }

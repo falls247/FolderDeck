@@ -14,6 +14,7 @@ public partial class App : Application
 {
     private SingleInstance? _instance;
     private AppServices? _services;
+    private SessionMonitor? _session;
     private DateTime _lastErrorDialog = DateTime.MinValue;
 
     public ThemeManager? Theme { get; private set; }
@@ -32,9 +33,13 @@ public partial class App : Application
         }
 
         string dataDir = ParseDataDir(e.Args) ?? DataStores.DefaultDataDirectory;
-        AppLog.Initialize(Path.Combine(dataDir, "logs"));
-        AppLog.Info($"FolderDeck {typeof(App).Assembly.GetName().Version} starting (data: {dataDir})");
+        string logDir = Path.Combine(dataDir, "logs");
+        string version = typeof(App).Assembly.GetName().Version?.ToString() ?? "?";
+        AppLog.Initialize(logDir);
+        AppLog.Info($"lifecycle: start FolderDeck {version} (data: {dataDir}; {DescribeExe()})");
         HookUnhandledExceptions();
+        _session = new SessionMonitor(logDir, version);
+        _session.Start(Dispatcher);
         var startedAt = System.Diagnostics.Process.GetCurrentProcess().StartTime;
         string Since() => $"{(DateTime.Now - startedAt).TotalMilliseconds:F0} ms";
         AppLog.Info($"startup: OnStartup at {Since()}");
@@ -50,6 +55,7 @@ public partial class App : Application
         var vm = new MainViewModel(_services);
         var window = new MainWindow(vm, Theme);
         window.RestorePlacement(stores.Settings.Current.Window);
+        _session.Watch(window);
         MainWindow = window;
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         AppLog.Info($"startup: window built at {Since()}");
@@ -74,13 +80,33 @@ public partial class App : Application
         }
         finally
         {
-            AppLog.Info("FolderDeck exiting");
+            AppLog.Info($"lifecycle: exit (code {e.ApplicationExitCode})");
             _services?.Dispose();
             Theme?.Dispose();
             _instance?.Dispose();
+            _session?.MarkCleanExit();
         }
 
         base.OnExit(e);
+    }
+
+    /// <summary>Exe path and build time: a close right before a newer build points at a build script.</summary>
+    private static string DescribeExe()
+    {
+        try
+        {
+            string? exe = Environment.ProcessPath;
+            if (exe is null)
+            {
+                return "exe: ?";
+            }
+
+            return $"exe: {exe}, built {File.GetLastWriteTime(exe):yyyy-MM-dd HH:mm:ss}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return "exe: ?";
+        }
     }
 
     /// <summary><c>--data-dir &lt;path&gt;</c> overrides <c>%LOCALAPPDATA%\FolderDeck</c> (development and testing).</summary>
@@ -142,7 +168,7 @@ public partial class App : Application
         };
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
-            AppLog.Error("Unhandled exception", e.ExceptionObject as Exception);
+            AppLog.Error($"lifecycle: crash (unhandled exception, terminating={e.IsTerminating})", e.ExceptionObject as Exception);
             try
             {
                 MessageBox.Show("予期しないエラーが発生しました。アプリを終了します。\n\nログ: " + AppLog.FilePath, "FolderDeck", MessageBoxButton.OK, MessageBoxImage.Error);
