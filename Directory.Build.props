@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Deterministic>true</Deterministic>
+    <DebugType>embedded</DebugType>
+    <Company>FolderDeck</Company>
+    <Product>FolderDeck</Product>
+    <Version>0.1.0</Version>
+    <SatelliteResourceLanguages>ja</SatelliteResourceLanguages>
+  </PropertyGroup>
+</Project>

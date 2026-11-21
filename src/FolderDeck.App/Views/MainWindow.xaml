@@ -1,0 +1,221 @@
+<Window x:Class="FolderDeck.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:FolderDeck.Views"
+        xmlns:vm="clr-namespace:FolderDeck.ViewModels"
+        Title="FolderDeck" Width="1280" Height="800" MinWidth="560" MinHeight="420"
+        Background="{DynamicResource Brush.Bg}" Foreground="{DynamicResource Brush.Text}"
+        FontFamily="{StaticResource Font.UI}" FontSize="13"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" AllowDrop="True"
+        Icon="pack://application:,,,/FolderDeck;component/Assets/FolderDeck.ico">
+    <Window.Resources>
+        <views:EnumEqualsConverter x:Key="EnumEquals" />
+        <views:NotEmptyToVisibilityConverter x:Key="NotEmptyToVis" />
+        <views:InverseBoolConverter x:Key="Not" />
+
+        <Style x:Key="MessageBar" TargetType="{x:Type Border}">
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="12,7" />
+            <Setter Property="Margin" Value="16,8,16,0" />
+            <Setter Property="Background" Value="{DynamicResource Brush.AccentSoft}" />
+            <Setter Property="TextElement.Foreground" Value="{DynamicResource Brush.Accent}" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Message.Kind}" Value="{x:Static vm:MessageKind.Success}">
+                    <Setter Property="Background" Value="{DynamicResource Brush.OkSoft}" />
+                    <Setter Property="TextElement.Foreground" Value="{DynamicResource Brush.Ok}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Message.Kind}" Value="{x:Static vm:MessageKind.Warning}">
+                    <Setter Property="Background" Value="{DynamicResource Brush.WarnSoft}" />
+                    <Setter Property="TextElement.Foreground" Value="{DynamicResource Brush.Warn}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Message.Kind}" Value="{x:Static vm:MessageKind.Error}">
+                    <Setter Property="Background" Value="{DynamicResource Brush.DangerSoft}" />
+                    <Setter Property="TextElement.Foreground" Value="{DynamicResource Brush.Danger}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Tabs + settings (§5.1) -->
+        <Border Grid.Row="0" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
+            <DockPanel Margin="8,0,8,0">
+                <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Content="&#xE713;" ToolTip="設定"
+                        Command="{Binding OpenSettingsCommand}" VerticalAlignment="Center" />
+                <StackPanel Orientation="Horizontal">
+                    <RadioButton Style="{StaticResource TabButton}" GroupName="Tabs" Content="登録フォルダ"
+                                 IsChecked="{Binding SelectedKind, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Registered}"
+                                 Command="{Binding SelectTabCommand}" CommandParameter="{x:Static vm:TabKind.Registered}" />
+                    <RadioButton Style="{StaticResource TabButton}" GroupName="Tabs" Content="最近の履歴"
+                                 IsChecked="{Binding SelectedKind, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Recent}"
+                                 Command="{Binding SelectTabCommand}" CommandParameter="{x:Static vm:TabKind.Recent}" />
+                    <RadioButton Style="{StaticResource TabButton}" GroupName="Tabs" Content="よく使う項目"
+                                 IsChecked="{Binding SelectedKind, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Frequent}"
+                                 Command="{Binding SelectTabCommand}" CommandParameter="{x:Static vm:TabKind.Frequent}" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- Toolbar (§5.3) -->
+        <Border Grid.Row="1" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
+                Padding="8,6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Style="{StaticResource Btn.Icon}" Content="&#xE74A;" ToolTip="1つ上へ（Backspace）"
+                        Command="{Binding GoUpCommand}" />
+
+                <!-- breadcrumb -->
+                <ItemsControl Grid.Column="1" x:Name="Crumbs" ItemsSource="{Binding SelectedTab.Breadcrumbs}" Margin="4,0,8,0"
+                              VerticalAlignment="Center" ClipToBounds="True" Focusable="False">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type vm:BreadcrumbItem}">
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="Crumb" Style="{StaticResource Btn.Crumb}" ToolTip="{Binding ToolTip}"
+                                        Command="{Binding DataContext.NavigateCrumbCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                        CommandParameter="{Binding}">
+                                    <TextBlock x:Name="CrumbText" Text="{Binding Text}" TextTrimming="CharacterEllipsis" MaxWidth="260" />
+                                </Button>
+                                <TextBlock x:Name="Dots" Text="…" Margin="6,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}"
+                                           ToolTip="{Binding ToolTip}" Visibility="Collapsed" />
+                                <TextBlock x:Name="Sep" Text="/" Margin="2,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}" />
+                            </StackPanel>
+                            <DataTemplate.Triggers>
+                                <DataTrigger Binding="{Binding IsLast}" Value="True">
+                                    <Setter TargetName="Sep" Property="Visibility" Value="Collapsed" />
+                                    <Setter TargetName="CrumbText" Property="FontWeight" Value="SemiBold" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsEllipsis}" Value="True">
+                                    <Setter TargetName="Crumb" Property="Visibility" Value="Collapsed" />
+                                    <Setter TargetName="Dots" Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <TextBlock Grid.Column="2" Text="{Binding SelectedTab.CountText}" Foreground="{DynamicResource Brush.Muted}"
+                           VerticalAlignment="Center" Margin="8,0,12,0" Typography.NumeralAlignment="Tabular" />
+
+                <Button Grid.Column="3" Style="{StaticResource Btn}" Content="履歴をクリア" Margin="0,0,12,0" Padding="10,4"
+                        Command="{Binding ClearHistoryCommand}"
+                        Visibility="{Binding SelectedTab.ShowClearHistory, Converter={StaticResource BoolToVis}}" />
+
+                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0"
+                            ToolTip="カードの大きさ（Ctrl + ホイールでも変更できます）">
+                    <TextBlock Text="&#xE71E;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.Muted}" Margin="0,0,6,0" />
+                    <Slider x:Name="SizeSlider" Width="140" Minimum="120" Maximum="400" TickFrequency="20" SmallChange="20" LargeChange="40"
+                            IsSnapToTickEnabled="True" VerticalAlignment="Center" Focusable="False"
+                            Value="{Binding CardSize, Mode=TwoWay}" />
+                </StackPanel>
+
+                <Grid Grid.Column="5">
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE72C;" ToolTip="更新（F5）"
+                            Command="{Binding RefreshCommand}"
+                            IsEnabled="{Binding SelectedTab.IsLoading, Converter={StaticResource Not}}" />
+                    <ContentControl Style="{StaticResource Spinner}" Width="16" Height="16"
+                                    Visibility="{Binding SelectedTab.IsLoading, Converter={StaticResource BoolToVis}}" />
+                </Grid>
+            </Grid>
+        </Border>
+
+        <!-- Register bar: top level of 登録フォルダ only (§10.1) -->
+        <Grid Grid.Row="2" Margin="16,10,16,0" Visibility="{Binding SelectedTab.ShowRegisterBar, Converter={StaticResource BoolToVis}}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="RegisterBox" Style="{StaticResource Input}" Tag="登録するフォルダのパス（例: E:\写真\画像）"
+                     Text="{Binding RegisterInput, UpdateSourceTrigger=PropertyChanged}" KeyDown="OnRegisterKeyDown" />
+            <Button Grid.Column="1" Style="{StaticResource Btn.Primary}" Content="登録" Margin="8,0,0,0" MinWidth="72"
+                    Command="{Binding RegisterCommand}" />
+            <Button Grid.Column="2" Style="{StaticResource Btn}" Content="参照…" Margin="8,0,0,0" MinWidth="72"
+                    Command="{Binding BrowseCommand}" />
+        </Grid>
+
+        <!-- Messages, notice, error banner (§5.4, §8.4, §10.2) -->
+        <StackPanel Grid.Row="3">
+            <Border Style="{StaticResource MessageBar}" Visibility="{Binding Message.IsVisible, Converter={StaticResource BoolToVis}}">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="24" Height="22" FontSize="10" Content="&#xE711;"
+                            ToolTip="閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
+                    <TextBlock Text="{Binding Message.Text}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </DockPanel>
+            </Border>
+            <Border Margin="16,8,16,0" Padding="12,7" CornerRadius="8" Background="{DynamicResource Brush.WarnSoft}"
+                    Visibility="{Binding SelectedTab.NoticeText, Converter={StaticResource NotEmptyToVis}}">
+                <TextBlock Text="{Binding SelectedTab.NoticeText}" TextWrapping="Wrap" Foreground="{DynamicResource Brush.Warn}" />
+            </Border>
+            <Border Margin="16,8,16,0" Padding="12,8" CornerRadius="8" Background="{DynamicResource Brush.DangerSoft}"
+                    Visibility="{Binding SelectedTab.BannerText, Converter={StaticResource NotEmptyToVis}}">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Style="{StaticResource Btn}" Padding="10,3" Margin="12,0,0,0"
+                            Command="{Binding BackToTopCommand}">
+                        <TextBlock>
+                            <Run Text="{Binding SelectedTab.Title, Mode=OneWay}" /><Run Text="の一覧に戻る" />
+                        </TextBlock>
+                    </Button>
+                    <TextBlock Text="{Binding SelectedTab.BannerText}" TextWrapping="Wrap" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.Danger}" />
+                </DockPanel>
+            </Border>
+        </StackPanel>
+
+        <!-- Card grid (§6) -->
+        <Grid Grid.Row="4">
+            <views:CardGrid x:Name="Grid" Items="{Binding SelectedTab.Cards}" CardSize="{Binding CardSize}">
+                <views:CardGrid.Style>
+                    <Style TargetType="{x:Type views:CardGrid}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding SelectedTab.IsLoading}" Value="True">
+                                <Setter Property="Opacity" Value="0.55" />
+                                <Setter Property="IsHitTestVisible" Value="False" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </views:CardGrid.Style>
+            </views:CardGrid>
+
+            <TextBlock Text="{Binding SelectedTab.EmptyText}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Foreground="{DynamicResource Brush.Muted}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="560" Margin="24"
+                       IsHitTestVisible="False" Visibility="{Binding SelectedTab.EmptyText, Converter={StaticResource NotEmptyToVis}}" />
+
+            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,24,0,0" Padding="14,8" CornerRadius="8"
+                    Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1"
+                    Visibility="{Binding SelectedTab.IsSlow, Converter={StaticResource BoolToVis}}">
+                <StackPanel Orientation="Horizontal">
+                    <ContentControl Style="{StaticResource Spinner}" Margin="0,0,8,0" />
+                    <TextBlock Text="応答がありません（待機中…）" Foreground="{DynamicResource Brush.Muted}" />
+                </StackPanel>
+            </Border>
+
+            <!-- drop hint while dragging folders over the register screen -->
+            <Border x:Name="DropHint" Margin="16" CornerRadius="12" BorderThickness="2" BorderBrush="{DynamicResource Brush.Accent}"
+                    Background="{DynamicResource Brush.AccentSoft}" Opacity="0.92" Visibility="Collapsed" IsHitTestVisible="False">
+                <TextBlock Text="ここにドロップして登録" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Accent}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

@@ -1,0 +1,168 @@
+<UserControl x:Class="FolderDeck.Views.CardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:FolderDeck.Views"
+             xmlns:vm="clr-namespace:FolderDeck.ViewModels"
+             xmlns:shell="clr-namespace:FolderDeck.Shell"
+             Focusable="False"
+             Cursor="Hand"
+             ToolTipService.InitialShowDelay="900"
+             ToolTipService.Placement="Mouse"
+             ToolTip="{Binding ToolTipText}">
+    <UserControl.Resources>
+        <Style x:Key="Pill" TargetType="{x:Type Border}">
+            <Setter Property="CornerRadius" Value="9" />
+            <Setter Property="Padding" Value="7,1,7,2" />
+            <Setter Property="Margin" Value="4,0,0,0" />
+            <Setter Property="Background" Value="{DynamicResource Brush.Surface3}" />
+            <Setter Property="TextElement.Foreground" Value="{DynamicResource Brush.Muted}" />
+        </Style>
+        <Style x:Key="PillAccent" TargetType="{x:Type Border}" BasedOn="{StaticResource Pill}">
+            <Setter Property="Background" Value="{DynamicResource Brush.AccentSoft}" />
+            <Setter Property="TextElement.Foreground" Value="{DynamicResource Brush.Accent}" />
+        </Style>
+        <Style x:Key="PillWarn" TargetType="{x:Type Border}" BasedOn="{StaticResource Pill}">
+            <Setter Property="Background" Value="{DynamicResource Brush.WarnSoft}" />
+            <Setter Property="TextElement.Foreground" Value="{DynamicResource Brush.Warn}" />
+        </Style>
+        <Style x:Key="PillText" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="PillGlyph" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontFamily" Value="{StaticResource Font.Icons}" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Margin" Value="0,1,4,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid x:Name="Root" Background="Transparent">
+        <!-- weak card shadow (cheap: a dark rounded rect 1 px below) -->
+        <Border x:Name="FakeShadow" CornerRadius="10" Background="{DynamicResource Brush.CardShadow}" Margin="0,1,0,-1" />
+
+        <Border x:Name="CardBorder" CornerRadius="10" BorderThickness="1"
+                BorderBrush="{DynamicResource Brush.Border}" Background="{DynamicResource Brush.Surface2}">
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="Lift" Y="0" />
+            </Border.RenderTransform>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="{Binding Metrics.ThumbHeight, RelativeSource={RelativeSource AncestorType={x:Type views:CardGrid}}}" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Thumbnail (3:4) -->
+                <Grid x:Name="ThumbArea" Grid.Row="0" Background="{DynamicResource Brush.Surface3}" ClipToBounds="True">
+                    <Image x:Name="ThumbImage" Source="{Binding Thumbnail}" Stretch="UniformToFill"
+                           HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="Collapsed"
+                           RenderOptions.BitmapScalingMode="HighQuality" />
+                    <Image x:Name="ShellImage" Source="{Binding Thumbnail}" Stretch="Uniform" Margin="18"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"
+                           RenderOptions.BitmapScalingMode="HighQuality" />
+                    <Image x:Name="IconImage" Source="{Binding Thumbnail}" Stretch="Uniform"
+                           Width="{Binding Metrics.IconSize, RelativeSource={RelativeSource AncestorType={x:Type views:CardGrid}}}"
+                           Height="{Binding Metrics.IconSize, RelativeSource={RelativeSource AncestorType={x:Type views:CardGrid}}}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"
+                           RenderOptions.BitmapScalingMode="HighQuality" />
+                    <TextBlock x:Name="WarnGlyph" Text="&#xE7BA;" FontFamily="{StaticResource Font.Icons}" FontSize="40"
+                               Foreground="{DynamicResource Brush.Warn}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Visibility="Collapsed" />
+                    <ContentPresenter x:Name="OverlayHost" />
+                </Grid>
+
+                <!-- Footer: name, sub line, badges -->
+                <StackPanel Grid.Row="1" Margin="10,8,10,9">
+                    <TextBlock x:Name="NameText" Text="{Binding Name}" FontSize="12.5" Foreground="{DynamicResource Brush.Text}"
+                               TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                               LineHeight="16.875" LineStackingStrategy="BlockLineHeight"
+                               MinHeight="33.75" MaxHeight="33.75" />
+                    <TextBlock x:Name="SubLine" Text="{Binding SubText}" FontSize="11" Foreground="{DynamicResource Brush.Muted}"
+                               TextTrimming="CharacterEllipsis" Margin="0,2,0,0">
+                        <TextBlock.Style>
+                            <Style TargetType="{x:Type TextBlock}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SubText}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+
+                    <Grid Margin="0,6,0,0" Height="20">
+                        <!-- pending -->
+                        <StackPanel x:Name="BadgePending" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
+                            <Border Style="{StaticResource Pill}">
+                                <TextBlock Text="…" Style="{StaticResource PillText}" />
+                            </Border>
+                        </StackPanel>
+                        <!-- folder counts -->
+                        <StackPanel x:Name="BadgeFolder" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
+                            <Border Style="{StaticResource PillAccent}" Visibility="{Binding ShowFolderCount, Converter={StaticResource BoolToVis}}"
+                                    ToolTip="フォルダ数">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE8B7;" Style="{StaticResource PillGlyph}" />
+                                    <TextBlock Text="{Binding FolderCountText}" Style="{StaticResource PillText}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource PillAccent}" Visibility="{Binding ShowFileCount, Converter={StaticResource BoolToVis}}"
+                                    ToolTip="ファイル数">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE8A5;" Style="{StaticResource PillGlyph}" />
+                                    <TextBlock Text="{Binding FileCountText}" Style="{StaticResource PillText}" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                        <!-- file: extension + size -->
+                        <StackPanel x:Name="BadgeFile" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
+                            <Border Style="{StaticResource Pill}">
+                                <TextBlock Text="{Binding ExtensionText}" Style="{StaticResource PillText}" />
+                            </Border>
+                            <Border>
+                                <Border.Style>
+                                    <Style TargetType="{x:Type Border}" BasedOn="{StaticResource Pill}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SizeText}" Value="{x:Null}">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <TextBlock Text="{Binding SizeText}" Style="{StaticResource PillText}" />
+                            </Border>
+                        </StackPanel>
+                        <!-- missing / no response / error -->
+                        <StackPanel x:Name="BadgeWarn" Orientation="Horizontal" HorizontalAlignment="Right" Visibility="Collapsed">
+                            <Border Style="{StaticResource PillWarn}">
+                                <TextBlock x:Name="WarnText" Text="見つかりません" Style="{StaticResource PillText}" />
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- 📌 on pinned items of よく使う項目 -->
+        <Border x:Name="PinBadge" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="6,6,0,0"
+                Width="26" Height="26" CornerRadius="13" Background="{DynamicResource Brush.Surface}"
+                BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1"
+                Visibility="{Binding ShowPinBadge, Converter={StaticResource BoolToVis}}" ToolTip="ピン留め">
+            <TextBlock Text="&#xE718;" FontFamily="{StaticResource Font.Icons}" FontSize="12"
+                       Foreground="{DynamicResource Brush.Accent}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Border>
+
+        <!-- × (§6.7) -->
+        <Button x:Name="CloseButton" Style="{StaticResource Btn.CardClose}" Content="&#xE711;"
+                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,6,6,0"
+                Visibility="Collapsed" ToolTip="{Binding RemoveToolTip}" Click="OnCloseClick" />
+
+        <!-- opening… (§6.8) -->
+        <Border x:Name="BusyScrim" CornerRadius="10" Background="{StaticResource Busy.Scrim}"
+                Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}">
+            <ContentControl Style="{StaticResource Spinner}" Width="26" Height="26" Foreground="White" />
+        </Border>
+    </Grid>
+</UserControl>
