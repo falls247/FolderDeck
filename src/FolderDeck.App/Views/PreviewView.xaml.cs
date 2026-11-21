@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using FolderDeck.Core.Listing;
+using FolderDeck.Core.Transfer;
 using FolderDeck.ViewModels;
 
 namespace FolderDeck.Views;
@@ -27,12 +28,17 @@ public partial class PreviewView : UserControl
         DependencyProperty.Register(nameof(IsOverflowing), typeof(bool), typeof(PreviewView), new PropertyMetadata(false));
 
     private bool _pressed;
+    private Point _pressedAt;
 
     public PreviewView()
     {
         InitializeComponent();
         AddHandler(MouseWheelEvent, new MouseWheelEventHandler((_, e) => e.Handled = true), handledEventsToo: true);
-        Card.MouseLeftButtonDown += (_, e) => _pressed = e.ClickCount == 1;
+        Card.MouseLeftButtonDown += (_, e) =>
+        {
+            _pressed = e.ClickCount == 1; // a double click must not open twice
+            _pressedAt = e.GetPosition(Card);
+        };
         Card.MouseLeftButtonUp += (_, e) =>
         {
             if (_pressed)
@@ -42,7 +48,12 @@ public partial class PreviewView : UserControl
                 Clicked?.Invoke(this);
             }
         };
-        Card.MouseLeave += (_, _) => _pressed = false;
+        Card.MouseMove += (_, e) => TryStartDrag(e);
+        Card.MouseLeave += (_, e) =>
+        {
+            TryStartDrag(e); // left the card with the button held: that is a drag too
+            _pressed = false;
+        };
         Card.MouseRightButtonUp += (_, e) =>
         {
             e.Handled = true;
@@ -76,6 +87,12 @@ public partial class PreviewView : UserControl
 
     public event Action<PreviewView>? ContextMenuRequested;
 
+    /// <summary>
+    /// The card was pressed and the pointer moved past the system drag distance: drag the previewed
+    /// file out to other apps. The press no longer counts as a click.
+    /// </summary>
+    public event Action<PreviewView>? DragRequested;
+
     /// <summary>The visible card (without the shadow margin).</summary>
     public FrameworkElement CardElement => Card;
 
@@ -90,6 +107,23 @@ public partial class PreviewView : UserControl
     {
         get => (bool)GetValue(IsOverflowingProperty);
         private set => SetValue(IsOverflowingProperty, value);
+    }
+
+    private void TryStartDrag(MouseEventArgs e)
+    {
+        if (!_pressed || e.LeftButton != MouseButtonState.Pressed)
+        {
+            return;
+        }
+
+        Vector moved = e.GetPosition(Card) - _pressedAt;
+        if (!FileDrag.IsDragGesture(moved.X, moved.Y, SystemParameters.MinimumHorizontalDragDistance, SystemParameters.MinimumVerticalDragDistance))
+        {
+            return;
+        }
+
+        _pressed = false; // a drag never opens the file on mouse up
+        DragRequested?.Invoke(this);
     }
 
     private void OnModelPropertyChanged(object? sender, PropertyChangedEventArgs e)

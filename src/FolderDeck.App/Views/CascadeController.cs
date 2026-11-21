@@ -54,6 +54,7 @@ public sealed class CascadeController
     private int _keyLevel = -1;
     private bool _menuOpen;
     private bool _suspended;
+    private bool _dragging;
     private int _generation;
 
     public CascadeController(Window window, MainViewModel vm, ContextMenuFactory menus)
@@ -79,14 +80,57 @@ public sealed class CascadeController
 
     public bool IsOpen => _levels.Count > 0;
 
-    /// <summary>A card drag started: closes everything; nothing opens on hover until <see cref="Resume"/>.</summary>
-    public void Suspend()
+    /// <summary>
+    /// A drag started (a card, a row or a preview): the whole cascade disappears at once and nothing
+    /// opens on hover until <see cref="EndDrag"/>, which then really closes it. Taking it away at the
+    /// start, rather than leaving it up during the drag, is deliberate:
+    /// <list type="bullet">
+    /// <item>The flyouts and the preview are topmost popup windows: left visible they would cover the
+    /// place the user drops on (the slide in PowerPoint, the folder in Explorer).</item>
+    /// <item>The hover timers (overlay, open, grace, exit, preview) keep ticking inside DoDragDrop's
+    /// modal loop while the pointer state they check (IsMouseOver, hovered rows) no longer updates,
+    /// so they would close or open levels at random under the drag. They are all stopped here.</item>
+    /// <item>It matches the reorder drag, which always closed the cascade.</item>
+    /// </list>
+    /// The popups are only hidden (their content made invisible, so the layered windows are fully
+    /// transparent and the pointer and the drop go through them), not destroyed, until the drag ends:
+    /// destroying the popup window that received the button press while the button is still down
+    /// leaves DoDragDrop unaware of the release (observed: the drag only ended at the next click).
+    /// For the same reason <see cref="CloseAll"/> does nothing during a drag (the window losing
+    /// activation when the pointer rests on the taskbar, the grid auto-scrolling…).
+    /// The drag itself never depends on the cascade's elements: the paths are captured first and the
+    /// drag source is the main window (or the card grid), which lives through the whole drag.
+    /// </summary>
+    public void BeginDrag()
     {
+        _dragging = true;
         _suspended = true;
-        CloseAll();
+        StopTimers();
+        foreach (var level in _levels)
+        {
+            Hide(level.Overlay);
+            Hide(level.Flyout);
+        }
+
+        Hide(_preview?.View);
+
+        static void Hide(UIElement? element)
+        {
+            if (element is not null)
+            {
+                element.IsHitTestVisible = false;
+                element.Visibility = Visibility.Hidden;
+            }
+        }
     }
 
-    public void Resume() => _suspended = false;
+    /// <summary>The drag ended (dropped, refused or cancelled): closes the hidden cascade for real.</summary>
+    public void EndDrag()
+    {
+        _dragging = false;
+        CloseAll();
+        _suspended = false;
+    }
 
     // ---- card events --------------------------------------------------------------------------
 
@@ -126,8 +170,31 @@ public sealed class CascadeController
 
     // ---- closing ------------------------------------------------------------------------------
 
-    /// <summary>Closes everything at once (rule 5: scroll, resize, tab switch, navigation, deactivation…).</summary>
+    /// <summary>
+    /// Closes everything at once (rule 5: scroll, resize, tab switch, navigation, deactivation…).
+    /// During a drag the cascade is already hidden and closes when the drag ends (see <see cref="BeginDrag"/>).
+    /// </summary>
     public void CloseAll()
+    {
+        if (_dragging)
+        {
+            return;
+        }
+
+        StopTimers();
+        _keyLevel = -1;
+        CloseFrom(0);
+        if (_card?.ViewModel is { } vm)
+        {
+            vm.IsHoverHeld = false;
+        }
+
+        _card = null;
+        _generation++;
+    }
+
+    /// <summary>Stops every hover timer and forgets what they were about to open or close.</summary>
+    private void StopTimers()
     {
         _overlayTimer.Stop();
         _openTimer.Stop();
@@ -138,16 +205,7 @@ public sealed class CascadeController
         _pendingOpen = null;
         _pendingPreview = null;
         _graceLevel = -1;
-        _keyLevel = -1;
         StopWaiting();
-        CloseFrom(0);
-        if (_card?.ViewModel is { } vm)
-        {
-            vm.IsHoverHeld = false;
-        }
-
-        _card = null;
-        _generation++;
     }
 
     /// <summary>Esc (rule 6): closes only the deepest level (the preview, when one is open).</summary>
@@ -338,6 +396,7 @@ public sealed class CascadeController
         level.List.RowHovered += (_, row, _) => OnRowHovered(level, row);
         level.List.RowClicked += (_, row) => OnRowClicked(row);
         level.List.RowContextMenu += (_, row, element) => _menus.Show(row.ToItemRef(), element);
+        level.List.RowDragRequested += (_, row) => DragOut(row, "row");
 
         // Anything opened from this list is anchored to a row that just moved.
         level.List.Scrolled += _ =>
@@ -524,6 +583,30 @@ public sealed class CascadeController
         var item = new ItemRef(level.Model.Path, true, level.Model.Location, ItemContext.FlyoutHeader);
         CloseAll();
         _ = _vm.OpenItemAsync(item);
+    }
+
+    // ---- dragging out to other apps -----------------------------------------------------------
+
+    /// <summary>
+    /// A row (or its preview) is dragged out: the cascade disappears (see <see cref="BeginDrag"/>),
+    /// then the file or folder is handed to whatever it is dropped on. Blocks until the drag ends.
+    /// </summary>
+    private void DragOut(EntryRowViewModel row, string origin)
+    {
+        if (_dragging || !FileDragOut.CanDrag(row.Path) || FileDragOut.CreateData([row.Path], reorder: false) is not { } data)
+        {
+            return;
+        }
+
+        BeginDrag();
+        try
+        {
+            FileDragOut.Run(_window, data, origin);
+        }
+        finally
+        {
+            EndDrag();
+        }
     }
 
     // ---- flyouts (levels 1…, §9.3) ------------------------------------------------------------
@@ -889,6 +972,7 @@ public sealed class CascadeController
         view.MouseLeave += (_, _) => Restart(_exitTimer);
         view.Clicked += _ => OnRowClicked(row);
         view.ContextMenuRequested += _ => _menus.Show(row.ToItemRef(), view.CardElement);
+        view.DragRequested += _ => DragOut(row, "preview");
         view.CardElement.SizeChanged += (_, _) => PositionPreview(preview, reveal: false);
 
         // Rough position first (main window DPI), exact position once the popup has a size.

@@ -77,6 +77,24 @@ public static class PathTools
         }
     }
 
+    /// <summary>Shell APIs (ShellExecute, explorer.exe arguments, CF_HDROP readers) are limited to MAX_PATH.</summary>
+    public const int MaxShellPath = 260;
+
+    /// <summary>
+    /// The path itself, or its 8.3 short form from <paramref name="getShortPath"/> when the path is
+    /// too long for the shell (MAX_PATH) and the short form fits. The resolver is only asked for long
+    /// paths; null (8.3 names turned off on the volume, …) keeps the long path.
+    /// </summary>
+    public static string ForShell(string path, Func<string, string?> getShortPath)
+    {
+        if (path.Length >= MaxShellPath && getShortPath(path) is { Length: > 0 and < MaxShellPath } shortPath)
+        {
+            return shortPath;
+        }
+
+        return path;
+    }
+
     /// <summary>
     /// <c>Path.GetFullPath</c> plus removal of trailing separators. Drive roots such as
     /// <c>E:\</c> keep their separator.

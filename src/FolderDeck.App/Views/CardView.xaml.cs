@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
 using FolderDeck.ViewModels;
 
@@ -23,7 +24,10 @@ public interface ICardHost
 
     void CardRemove(CardView card);
 
-    /// <summary>True when the card may be dragged to a new position (otherwise the press stays a click).</summary>
+    /// <summary>
+    /// True when the card may be dragged at all (to other apps; at the top level also to a new
+    /// position). Missing / not responding cards cannot: their press stays a click.
+    /// </summary>
     bool CanDragCard(CardView card);
 
     /// <summary>The pointer moved past the drag threshold with the button held: runs the drag (blocks until it ends).</summary>
@@ -132,7 +136,10 @@ public partial class CardView : UserControl
         Host?.CardRemove(this);
     }
 
-    /// <summary>Starts a reorder drag once the pointer moved past the system drag distance with the button held.</summary>
+    /// <summary>
+    /// Starts a drag (to other apps; at the top level also to a new position) once the pointer
+    /// moved past the system drag distance with the button held.
+    /// </summary>
     private void TryStartDrag(MouseEventArgs e)
     {
         if (!_dragCandidate || !_pressed || e.LeftButton != MouseButtonState.Pressed)
@@ -141,7 +148,7 @@ public partial class CardView : UserControl
         }
 
         Vector moved = e.GetPosition(this) - _pressedAt;
-        if (Math.Abs(moved.X) < SystemParameters.MinimumHorizontalDragDistance && Math.Abs(moved.Y) < SystemParameters.MinimumVerticalDragDistance)
+        if (!FileDrag.IsDragGesture(moved.X, moved.Y, SystemParameters.MinimumHorizontalDragDistance, SystemParameters.MinimumVerticalDragDistance))
         {
             return;
         }
@@ -149,7 +156,7 @@ public partial class CardView : UserControl
         _dragCandidate = false;
         if (Host is not { } host || !host.CanDragCard(this))
         {
-            return; // inside folders a small move while clicking still opens the item
+            return; // a missing card: the press stays a click (which does nothing for it)
         }
 
         _pressed = false; // a drag never opens the card on mouse up

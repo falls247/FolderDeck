@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
 using FolderDeck.ViewModels;
 
@@ -33,8 +34,12 @@ public partial class CardGrid : UserControl
 {
     public const double Gap = 12;
 
-    /// <summary>Private drag &amp; drop format of a card being moved (never a file drop).</summary>
-    public const string ReorderFormat = "FolderDeck.CardReorder";
+    /// <summary>
+    /// Effect the grid reports for a reorder drop. The drag also carries the file drop for other
+    /// apps and offers only Copy | Link (<see cref="FileDragOut.AllowedEffects"/>, never Move), so
+    /// the grid answers Copy and shows a plain arrow instead of the copy cursor (GiveFeedback).
+    /// </summary>
+    private const DragDropEffects ReorderEffect = DragDropEffects.Copy;
 
     /// <summary>Left/right padding of the rows (ItemsPresenter margin) plus the scroll bar.</summary>
     private const double HorizontalChrome = 16 + 4 + 12;
@@ -71,6 +76,7 @@ public partial class CardGrid : UserControl
         DragOver += OnReorderDragOver;
         DragLeave += OnReorderDragLeave;
         Drop += OnReorderDrop;
+        GiveFeedback += OnReorderGiveFeedback;
     }
 
     /// <summary>Raised when the grid scrolled (the cascade closes, §9.6 rule 5).</summary>
@@ -227,9 +233,12 @@ public partial class CardGrid : UserControl
     /// <summary>
     /// Drags <paramref name="card"/> to a new position (blocks until the drop, Esc or a drop
     /// elsewhere) and returns the insertion index in <see cref="Items"/> (0…Count, counted with the
-    /// card still in place), or null when the drag was cancelled.
+    /// card still in place), or null when the drag was cancelled or dropped outside the grid.
+    /// <paramref name="doDragDrop"/> runs the drag with the given source (the grid) and data that
+    /// carries <see cref="FileDrag.ReorderFormat"/> next to the file drop: released over the grid it
+    /// reorders, released over another app (Explorer, PowerPoint…) that app gets the file.
     /// </summary>
-    public int? RunReorderDrag(CardViewModel card)
+    public int? RunReorderDrag(CardViewModel card, Func<DependencyObject, DragDropEffects> doDragDrop)
     {
         if (_drag is not null || Items is not { Count: > 1 } items || !items.Contains(card))
         {
@@ -244,10 +253,8 @@ public partial class CardGrid : UserControl
         card.IsDragged = true;
         try
         {
-            var data = new DataObject();
-            data.SetData(ReorderFormat, ReorderFormat);
             // The grid is the drag source: the card's own container may be recycled while auto-scrolling.
-            DragDrop.DoDragDrop(this, data, DragDropEffects.Move);
+            doDragDrop(this);
         }
         finally
         {
@@ -262,12 +269,12 @@ public partial class CardGrid : UserControl
 
     private void OnReorderDragOver(object sender, DragEventArgs e)
     {
-        if (_drag is not { } drag || !e.Data.GetDataPresent(ReorderFormat))
+        if (_drag is not { } drag || !e.Data.GetDataPresent(FileDrag.ReorderFormat))
         {
-            return; // files from Explorer: the window handles them
+            return; // files from Explorer, or a card dragged inside a folder: the window handles them
         }
 
-        e.Effects = DragDropEffects.Move;
+        e.Effects = ReorderEffect & e.AllowedEffects;
         e.Handled = true;
         drag.Pointer = e.GetPosition(this);
         drag.Inside = true;
@@ -277,7 +284,7 @@ public partial class CardGrid : UserControl
 
     private void OnReorderDragLeave(object sender, DragEventArgs e)
     {
-        if (_drag is not { } drag || !e.Data.GetDataPresent(ReorderFormat))
+        if (_drag is not { } drag || !e.Data.GetDataPresent(FileDrag.ReorderFormat))
         {
             return;
         }
@@ -293,7 +300,7 @@ public partial class CardGrid : UserControl
 
     private void OnReorderDrop(object sender, DragEventArgs e)
     {
-        if (_drag is not { } drag || !e.Data.GetDataPresent(ReorderFormat))
+        if (_drag is not { } drag || !e.Data.GetDataPresent(FileDrag.ReorderFormat))
         {
             return;
         }
@@ -303,7 +310,22 @@ public partial class CardGrid : UserControl
         drag.Inside = true;
         UpdateDropTarget();
         drag.DropIndex = drag.Target;
-        e.Effects = drag.DropIndex is null ? DragDropEffects.None : DragDropEffects.Move;
+        e.Effects = drag.DropIndex is null ? DragDropEffects.None : ReorderEffect & e.AllowedEffects;
+    }
+
+    /// <summary>
+    /// The grid is the source of a reorder drag: over the grid it shows a plain arrow (the accent
+    /// bar tells where the card lands) rather than the copy cursor of the Copy effect it answers.
+    /// Elsewhere (other apps) the system cursors apply.
+    /// </summary>
+    private void OnReorderGiveFeedback(object sender, GiveFeedbackEventArgs e)
+    {
+        if (_drag is { Inside: true } && e.Effects != DragDropEffects.None)
+        {
+            e.UseDefaultCursors = false;
+            Mouse.SetCursor(Cursors.Arrow);
+            e.Handled = true;
+        }
     }
 
     private void UpdateDropTarget()

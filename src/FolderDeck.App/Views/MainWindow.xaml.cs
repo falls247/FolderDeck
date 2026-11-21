@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Stores;
+using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
 using FolderDeck.ViewModels;
 using Microsoft.Win32;
@@ -233,9 +234,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     // ---- drag & drop registration (§10.1, P1) -----------------------------------------------
 
-    // Cards being reordered carry only CardGrid.ReorderFormat: never a folder drop.
+    // Drags the app started itself (cards, rows, previews) carry a file drop too, for other apps:
+    // released over the window they are never a folder registration.
     private bool CanDrop(DragEventArgs e) =>
-        _vm.SelectedTab.ShowRegisterBar && e.Data.GetDataPresent(DataFormats.FileDrop) && !e.Data.GetDataPresent(CardGrid.ReorderFormat);
+        _vm.SelectedTab.ShowRegisterBar && e.Data.GetDataPresent(DataFormats.FileDrop) && !IsOwnDrag(e.Data);
+
+    private static bool IsOwnDrag(IDataObject data) => FileDragOut.IsDragging || FileDrag.IsFromThisApp(data.GetDataPresent);
 
     private void OnDragOver(object sender, DragEventArgs e)
     {
@@ -290,24 +294,42 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
     }
 
-    public bool CanDragCard(CardView card) => card.ViewModel is { } vm && _vm.CanReorder(vm);
+    public bool CanDragCard(CardView card) => card.ViewModel is { IsDisabled: false } vm && FileDragOut.CanDrag(vm.Path);
 
+    /// <summary>
+    /// At the top level of a tab one drag carries both the reorder format and the file drop: released
+    /// over the grid it moves the card, released over another app that app gets the file or folder.
+    /// Inside folders the drag only hands the item to other apps.
+    /// </summary>
     public void CardDrag(CardView card)
     {
-        if (card.ViewModel is not { } vm || !_vm.CanReorder(vm))
+        if (card.ViewModel is not { } vm || !CanDragCard(card))
         {
             return;
         }
 
-        int? index;
-        _cascade.Suspend();
+        bool reorder = _vm.CanReorder(vm);
+        if (FileDragOut.CreateData([vm.Path], reorder) is not { } data)
+        {
+            return;
+        }
+
+        int? index = null;
+        _cascade.BeginDrag();
         try
         {
-            index = Grid.RunReorderDrag(vm);
+            if (reorder)
+            {
+                index = Grid.RunReorderDrag(vm, source => FileDragOut.Run(source, data, "top card"));
+            }
+            else
+            {
+                FileDragOut.Run(this, data, "card"); // the window outlives any card container
+            }
         }
         finally
         {
-            _cascade.Resume();
+            _cascade.EndDrag();
         }
 
         if (index is { } i)
