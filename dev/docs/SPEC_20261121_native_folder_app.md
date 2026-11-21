@@ -1,3 +1,12 @@
+---
+id: spec_native_folder_app
+title: FolderDeck（仮称）仕様書：登録フォルダ機能の Windows ネイティブアプリ化
+summary: 最初の実装の元になった仕様（要件・画面・カスケード・データ形式・非機能要件・受け入れ基準）。コードコメントの §番号の出典
+tags: [spec, requirements, acceptance-criteria, ui, data-format]
+status: 作成時点の仕様（後から追加した機能と仕様からの判断は README が正）
+updated: 2026-11-21
+---
+
 # FolderDeck（仮称）仕様書：登録フォルダ機能の Windows ネイティブアプリ化
 
 | 項目 | 内容 |

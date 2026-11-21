@@ -1,3 +1,27 @@
+## 改修・調査の進め方（コードベース把握）
+
+### 最初に読むもの
+1. `dev/docs/_topics.yml`（`dev/docs` の目録と各文書の目次）で、読む文書と節を選ぶ。
+2. 改修・調査は `dev/docs/codebase_overview.md` から始める。§5「改修レシピ」→ §2「ファイルマップ」で触るファイルを決め、該当ファイルの該当メンバーだけ読む。
+3. リポジトリ全体のスキャンや、大きいファイル（`CascadeController.cs`、`MainViewModel.cs` など）の通読はしない。`rg` で型・メンバー名・`// ----` の区切りを引いてから必要な範囲だけ読む。
+4. 仕様の根拠は、コードコメントの `§n.n`（SPEC の節番号）から `rg "§9\.6" src` で引く。SPEC（約 1,100 行）は通読せず、`_topics.yml` の `sections` で節を選んで読む。
+5. 後から追加した機能（タブごとの並べ替え、ドラッグでの並べ替え、他アプリへのドラッグ、Office・テキストのプレビュー、エクスプローラーの新しいタブ）は SPEC になく、README と実装が正。
+
+### ドキュメントの保守
+- 次の変更をしたら、同じコミットで `dev/docs/codebase_overview.md` を更新する。
+  - ファイル・クラスの追加 / 削除 / 改名、責務の移動
+  - 処理の流れ・スレッド規約・永続化の方式の変更
+  - 改修レシピの手順が変わる変更、繰り返しそうな新しい改修（レシピに行を足す）
+  - テストファイル・テストクラスの追加
+- `dev/docs` の文書を追加・更新したら、`_topics.yml` と各文書の front matter（id / title / summary / tags / status / updated）を一致させる。見出しを変えたら `sections` も直す。
+- 利用者から見える挙動を変えたら、README.md の該当節も更新する。
+- ドキュメントと実装が食い違うときは実装を正とし、ドキュメントを直す。
+
+### よく使うコマンド
+- ビルド：`dotnet build FolderDeck.sln -c Debug`
+- 関連テストだけ実行：`dotnet test tests/FolderDeck.Core.Tests -c Debug --filter <テストクラス名の一部>`（対応表は overview §6）
+- 手動確認（App 層は自動テストなし）：`run.bat --data-dir E:\tmp\folderdeck-data`（本番データを汚さない）
+
 ## テスト・品質検証ポリシー
 
 ### 基本方針
