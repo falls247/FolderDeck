@@ -30,6 +30,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string _frequentLimitText;
 
     [ObservableProperty]
+    private string _thumbCacheMbText;
+
+    [ObservableProperty]
     private string? _status;
 
     [ObservableProperty]
@@ -44,6 +47,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _openExplorerInNewTab = settings.OpenExplorerInNewTab;
         _recentLimitText = settings.RecentLimit.ToString(CultureInfo.InvariantCulture);
         _frequentLimitText = settings.FrequentLimit.ToString(CultureInfo.InvariantCulture);
+        _thumbCacheMbText = settings.ThumbCacheMb.ToString(CultureInfo.InvariantCulture);
     }
 
     public Func<string?>? ResetStatsAction { get; init; }
@@ -53,6 +57,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     public int RecentLimit { get; private set; }
 
     public int FrequentLimit { get; private set; }
+
+    public int ThumbCacheMb { get; private set; }
 
     /// <summary>Checks the numeric fields; sets <see cref="Error"/> when they are out of range.</summary>
     public bool Validate()
@@ -69,8 +75,15 @@ public sealed partial class SettingsViewModel : ObservableObject
             return false;
         }
 
+        if (!int.TryParse(ThumbCacheMbText.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int cacheMb) || cacheMb is < 0 or > AppSettings.ThumbCacheMbMax)
+        {
+            Error = $"画像サムネイルのキャッシュ上限は 0〜{AppSettings.ThumbCacheMbMax} の整数（MB）で入力してください。";
+            return false;
+        }
+
         RecentLimit = recent;
         FrequentLimit = frequent;
+        ThumbCacheMb = cacheMb;
         Error = null;
         return true;
     }
@@ -84,6 +97,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.OpenExplorerInNewTab = OpenExplorerInNewTab;
         settings.RecentLimit = RecentLimit;
         settings.FrequentLimit = FrequentLimit;
+        settings.ThumbCacheMb = ThumbCacheMb;
     }
 
     [RelayCommand]

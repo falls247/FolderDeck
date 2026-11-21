@@ -11,6 +11,9 @@ public sealed class AppServices : IDisposable
     /// <summary>Cover results live as long as folder listings (§6.4).</summary>
     public static readonly TimeSpan CoverTtl = FolderListingCache.DefaultTtl;
 
+    /// <summary>The picture thumbnail cache, inside the data folder.</summary>
+    public const string ThumbCacheFolderName = "thumbs";
+
     private volatile bool _showHidden;
 
     public AppServices(DataStores stores)
@@ -18,6 +21,9 @@ public sealed class AppServices : IDisposable
         Stores = stores;
         _showHidden = stores.Settings.Current.ShowHidden;
         Listings = new FolderListingCache(FileSystem, () => _showHidden);
+        Thumbnails = new ThumbnailService(
+            Path.Combine(stores.DataDirectory, ThumbCacheFolderName),
+            stores.Settings.Current.ThumbCacheMb * 1024L * 1024L);
     }
 
     public DataStores Stores { get; }
@@ -31,7 +37,7 @@ public sealed class AppServices : IDisposable
     /// <summary>Folder path → cover image path ("" = none).</summary>
     public TtlCache<string, string> Covers { get; } = new(CoverTtl, 8000, StringComparer.OrdinalIgnoreCase);
 
-    public ThumbnailService Thumbnails { get; } = new();
+    public ThumbnailService Thumbnails { get; }
 
     public IconCache Icons { get; } = new();
 

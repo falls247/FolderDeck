@@ -65,7 +65,8 @@ App
 │   ├─ Stores: DataStores ─ Registered / History / Pins / Excluded / Settings / CardOrders
 │   ├─ Listings: FolderListingCache（TTL 60 秒・1,500 件・VolumeThrottle）
 │   ├─ Covers: TtlCache<フォルダ, カバー画像パス>（"" = なし）
-│   ├─ Thumbnails: ThumbnailService（STA ワーカー 4 本・1 回 5 秒・LRU 512 件 / 192 MB）
+│   ├─ Thumbnails: ThumbnailService（シェル用 STA ワーカー 4 本 + 画像デコード用ワーカー（コア数 − 1 本）・1 回 5 秒・LRU 512 件 / 192 MB）
+│   │   └─ ThumbDiskCache（データフォルダの thumbs。書き込み用ワーカー 1 本）
 │   ├─ Icons: IconCache（一覧の行のアイコン）
 │   ├─ Shell: StaWorkerPool(1)（.lnk の読み取りなど、その他のシェル呼び出し）
 │   └─ DetailGate: SemaphoreSlim(8)（カード詳細の同時読み込み数）
@@ -93,6 +94,7 @@ App
 | | `RealFileSystem.cs` | `IFileSystem` の実装 |
 | | `AppLog.cs` | `logs\app.log`（5 MB で `app.log.1` へ）。例外を投げない。**ファイルの中身は書かず、パスと例外だけ**。行形式は `tools/analyze-log.ps1` が解析する |
 | | `SessionMarker.cs` | `logs\session.json`（起動中だけある記録）の読み書き |
+| | `DiskCacheRules.cs` | 画像サムネイルのディスクキャッシュの規則（I/O なし）：キー → ファイル名（`RelativePathOf`、2 文字のフォルダ + 32 桁の 16 進）、キャッシュが付けた名前かの判定（`IsCacheFileName`）、上限を超えたとき消すファイルの選択（`SelectForRemoval`、使っていない順に上限の 8 割まで）。`CacheFile` |
 | Layout | `CardShape.cs` | カードの形（`Portrait` = サムネイル 3:4 / `Square` = 1:1）、`settings.json` の値（`portrait` / `square`）との変換、`ThumbHeight`（幅からサムネイルの高さ） |
 | Listing | `FolderListing.cs` | `FolderLister.List`：直下の列挙と並び（フォルダ→ファイル、自然順）、`ListingStatus` |
 | | `FolderListingCache.cs` | パス単位の TTL キャッシュ。同じパスの同時要求は 1 回の列挙を共有し、待つ側が全員キャンセルすると列挙も止める。`Clear` / `Invalidate` |
@@ -107,6 +109,7 @@ App
 | | `OpenXmlPackage.cs`（internal） | zip を共有モードで開く、DTD 禁止、展開量の上限（zip 爆弾対策） |
 | | `WordReader.cs` / `SheetReader.cs`（internal） | 本文の段落 / 最初の表示シートの左上。`SheetFormat` が一般形式と日付の表示 |
 | | `OfficeThumbnail.cs` | ファイル内に保存された縮小版（`docProps/thumbnail.*`）の読み取り |
+| | `ThumbSizing.cs` | アプリが画像をデコードするときの大きさ（`Fit`：短い辺を要求サイズに合わせる、拡大しない、長い辺は要求サイズの 4 倍まで） |
 | Ordering | `CardSortMode.cs` | 5 つの並び方と `settings.json` の値（`manual` / `name_asc` …）の変換、`CardSortModes.All` |
 | | `CardOrdering.cs` | `ComparerFor`、`FoldersFirst`、`SortKeepingPinned`（ピン留めは位置を固定）、`KnownTime` |
 | | `ManualOrder.cs` | 保存済みのドラッグ順を新しいリストへ適用（新規項目は元の並びで直前の項目の後ろ） |
@@ -123,7 +126,7 @@ App
 | | `HistoryStore.cs` | `history.json`（利用記録）。`Record` / `Remove` / `Clear` |
 | | `PinStore.cs` | `pins.json`。`Pin` / `Unpin` / `IsPinned`、`Changed` イベント |
 | | `ExcludedStore.cs` | `excluded.json`（最近の履歴から外した項目） |
-| | `SettingsStore.cs` | `settings.json`。`AppSettings`（既定値・`Normalize`・`Clone`）。カードの形は文字列の `CardShape`（`card_shape`） |
+| | `SettingsStore.cs` | `settings.json`。`AppSettings`（既定値・`Normalize`・`Clone`）。カードの形は文字列の `CardShape`（`card_shape`）、画像サムネイルのディスクキャッシュの上限は `ThumbCacheMb`（`thumb_cache_mb`、MB、0 で無効、起動時に読む） |
 | | `CardOrderStore.cs` | `card_order.json`（最近の履歴・よく使う項目のドラッグ順、各 1,000 件まで） |
 | Text | `Formatting.cs` | 相対時刻、日時、ファイルサイズの表示 |
 | Transfer | `FileDrag.cs` | 他アプリへのドラッグの規則：可否、`DropList`（260 文字以上→8.3）、自アプリ由来の判定、`IsDragGesture` |
@@ -134,12 +137,14 @@ App
 |---|---|---|
 | （直下） | `App.xaml(.cs)` | 起動・終了・未処理例外（[§1.2](#12-起動と終了appxamlcs)）。`App.xaml` の MergedDictionaries の 0 番がテーマ |
 | | `app.manifest` / `NativeMethods.txt` | マニフェスト（§4.3）/ CsWin32 で生成する Win32 API の一覧 |
-| Services | `AppServices.cs` | 合成ルート（[§1.3](#13-オブジェクトの所有関係)）。`ShowHidden` を変えるとキャッシュを消す |
+| Services | `AppServices.cs` | 合成ルート（[§1.3](#13-オブジェクトの所有関係)）。`ShowHidden` を変えるとキャッシュを消す。`ThumbnailService` にディスクキャッシュの場所（データフォルダの `thumbs`）と上限（`ThumbCacheMb`）を渡す |
 | | `PreviewTextCache.cs` | プレビューの抜粋（Word 段落・シートのセル・テキスト行）を裏のスレッドで読み、LRU で保持。5 秒で打ち切り、失敗はキャッシュしない |
 | | `SessionMonitor.cs` | `lifecycle:` ログ（閉じた理由）と前回の異常終了の報告（イベントログも調べる） |
 | Shell | `ShellInterop.cs` | Win32 / COM 呼び出しの集約：シェル画像（`IShellItemImageFactory`）、`GetDIBits`、システムイメージリスト、モニターと DPI、`SHAddToRecentDocs` など |
-| | `StaWorkerPool.cs` | シェル / COM 用の STA ワーカー。タイムアウトした呼び出しは放棄し、ワーカーを作り直す |
-| | `ThumbnailService.cs` | カードとプレビューの画像（`ThumbSource` / `ThumbMode` / `LruCache`） |
+| | `StaWorkerPool.cs` | シェル / COM と画像デコード用の STA ワーカー（スレッドの優先度を指定できる）。タイムアウトは呼び出しが始まってから数える（キューで待つ時間は含めない）。タイムアウトした呼び出しは放棄し、ワーカーを作り直す |
+| | `ThumbnailService.cs` | カードとプレビューの画像（`ThumbSource` / `ThumbMode` / `LruCache`）。画像ファイルは自前でデコード（`DecodePicture`）、それ以外はシェル（`Produce`）（[§3.2](#32-カードの段階読み込み741)） |
+| | `ImageDecoder.cs` | 画像ファイルを WIC で直接サムネイルの大きさにデコード（`CanDecode` / `Decode`）。対象の拡張子、JPEG のコーデック内縮小、EXIF の向き、透過の判定 |
+| | `ThumbDiskCache.cs`（internal） | `ImageDecoder` が作ったサムネイルをデータフォルダの `thumbs` に保存・読み出し・刈り込み（`TryRead` / `Save` / `Trim`）。規則は Core の `DiskCacheRules` |
 | | `IconCache.cs` | 一覧の行のアイコン（拡張子ごとに共有できるものは共有） |
 | | `OfficeCover.cs` | `OfficeThumbnail.ReadEmbedded` を WPF の画像にする |
 | | `ShellPreviewSupport.cs` | 「Windows がサムネイルを作れるか」を拡張子ごとに 1 回だけ確認（`AssocQueryString`）。`IsPreviewable` |
@@ -205,7 +210,12 @@ App
 2. フォルダ：`DetailGate`（同時 8 件）の中で `Listings.GetAsync` → `ApplyListing`（件数バッジ、`DetailsLoaded` を発火）→ `CoverFinder.Find`（結果は `Covers` に保存）
 3. 画像：カバー画像があれば `ThumbnailService.GetAsync(CoverImage)`、なければ `GetAsync(Folder)`。ファイルは `GetEntry` で大きさと日時を取ってから `GetAsync(File)`
 
-`ThumbnailService.Produce`（STA ワーカー上）：シェルのサムネイル → Open XML なら `OfficeCover`（ファイル内の縮小版）→ アイコン（拡張子ごとにキャッシュ）。タイムアウトしたらシステムイメージリストのアイコン。
+`ThumbnailService.GetAsync`：メモリの LRU → 画像ファイル（`ImageDecoder.CanDecode`：jpg / jpeg / jpe / jfif / png / bmp / gif / tif / tiff / webp。フォルダ自身は対象外）なら `DecodePicture` → 画像が得られなければ `Produce`。
+- `DecodePicture`（デコード用ワーカー上）：`ThumbDiskCache.TryRead`（データフォルダの `thumbs`）→ なければ `ImageDecoder.Decode` → 作るのに 4 ms 以上かかったものは `ThumbDiskCache.Save`（書き込み用ワーカーで JPEG、透過があれば PNG に保存）。「オンラインのみ」のファイルは開かず `Produce` へ回す。
+- `ImageDecoder.Decode`：WIC で直接サムネイルの大きさ（`ThumbSizing.Fit`：短い辺 = 要求サイズ）にデコードする。JPEG などの不透明な形式は縮小をコーデックに直結する（JPEG は 1/2・1/4・1/8 でデコードされ、シェルより数倍速い）。パレット・透過つきは先に Pbgra32 に変換してから縮小。EXIF の向き（`System.Photo.Orientation`）を反映。結果は Bgr32（透過が本当にあるときだけ Pbgra32）で `Freeze` 済み。失敗は null（→ シェル）。
+- `Produce`（シェル用 STA ワーカー上）：シェルのサムネイル → Open XML なら `OfficeCover`（ファイル内の縮小版）→ アイコン（拡張子ごとにキャッシュ）。タイムアウトしたらシステムイメージリストのアイコン。動画・Office・フォルダ・HEIC / AVIF・.ico などはこちら（ディスクキャッシュは Windows のサムネイルキャッシュ）。
+- `ThumbDiskCache`：キーは版（`Version`）・パス・ファイルの更新日時・サイズ・要求サイズ → `DiskCacheRules.RelativePathOf` でファイル名にする。起動 20 秒後と、上限の 1/8 を書くごとに `Trim`（上限超過なら使っていない順に 8 割まで削除。3 日以上前のファイルは読んだときに日時を更新）。**保存する画像の作り方（大きさ・品質）を変えたら `Version` を上げる。**
+
 `ThumbMode`：`Image`（枠いっぱいに切り抜き）/ `Shell`（全体を収める）/ `Icon`（中央に原寸）。キャッシュのキーはパス・更新日時・大きさ・要求サイズ（256 / 512 に丸める）・種類。
 
 ### 3.3 カスケード（`CascadeController`、§9）
@@ -255,6 +265,7 @@ App
 - JSON は snake_case（`JsonNamingPolicy.SnakeCaseLower`）、インデントつき。時刻は `LenientTimeConverter`（読めない値は null）。
 - `SettingsStore.Current` は**毎回コピー**を返す。変更は `Settings.Update(s => …)`（→ `Normalize` → `RequestSave`）。
 - `registered_folders.json` は imgtool と同じ形式のまま保つ。
+- ストア以外に、画像サムネイルのキャッシュ `thumbs\`（`ThumbDiskCache`、[§3.2](#32-カードの段階読み込み741)）がある。消えても作り直すだけのデータで、`DataStores` には入らない。
 
 ### 3.9 テーマ
 
@@ -263,7 +274,8 @@ App
 ## 4. スレッドと非同期の規約
 
 - **UI スレッドでブロッキング I/O をしない**。列挙・存在確認・JSON 読み込みは `Task.Run` か `FolderListingCache` の中で行う。
-- シェル / COM の呼び出しは `StaWorkerPool` 上でタイムアウトつき（`ThumbnailService` は 4 本・5 秒、`AppServices.Shell` は 1 本）。タイムアウトしたワーカーは放棄して作り直す（最大 16 本）。
+- シェル / COM の呼び出しは `StaWorkerPool` 上でタイムアウトつき（`ThumbnailService` は 4 本・5 秒、`AppServices.Shell` は 1 本）。タイムアウトしたワーカーは放棄して作り直す（最大 16 本）。タイムアウトは**呼び出しが始まってから**数える（キューで待つ時間は含めない。画像の多いフォルダで待ち行列が長いだけの要求を打ち切らないため）。60 秒たっても始まらない要求は `TimeoutException`。
+  - 画像のデコード（`ImageDecoder`）は COM の STA を必要としないが、同じ `StaWorkerPool` を使う：`ThumbnailService` のデコード用ワーカー（コア数 − 1 本を 2〜8 本に丸める、優先度 BelowNormal、5 秒）。ディスクキャッシュの書き込み・刈り込みは `ThumbDiskCache` の 1 本（優先度 Lowest、タイムアウトなし）。
   - 例外：ごみ箱への移動（`RecycleBin`）は操作ごとに専用の STA スレッドを作り、タイムアウトをつけない（シェルの進行状況・「使用中」などのダイアログが利用者の操作を待つため）。UI スレッドは `await` で待つだけで止まらない。
 - 遅い・切断されたネットワークドライブ対策：`Existence` のタイムアウト（登録フォルダ 2 秒、履歴 1 秒）、`VolumeThrottle`、5 秒で「応答がありません」（`HoverTimings.Slow`、`TabViewModel.IsSlow`）。
 - キャンセル：タブは `TabViewModel._loadCts`、カードは `Realize` / `Unrealize` の CTS、プレビューは `Preview.Cts`。`OperationCanceledException` は握りつぶして終わる。
@@ -285,6 +297,7 @@ App
 | 最近の履歴・よく使う項目の規則 | `Core/Ranking/`（`RecentMerger`、`FrequentRanker`） | `RankingTests` |
 | フォルダ列挙の規則（並び・隠し・フィルタ） | `Core/Listing/FolderListing.cs`（`FolderLister`） | `ListingTests`（`FolderListerTests`） |
 | カバー画像の選び方 | `Core/Listing/CoverFinder.cs` | `ListingTests`（`CoverFinderTests`） |
+| 画像サムネイルの作り方・速さ | アプリがデコードする形式：`Shell/ImageDecoder.cs` の `Extensions` → 大きさの規則：`Core/Listing/ThumbSizing.cs` → ディスクキャッシュ：`Shell/ThumbDiskCache.cs`（規則は `Core/Infrastructure/DiskCacheRules.cs`）→ 振り分けとワーカー数：`ThumbnailService.GetAsync` / `DecodePicture` | `ThumbCacheTests`。保存する画像が変わる変更は `ThumbDiskCache.Version` を上げる。App 層は自動テストなし → 画像の多いフォルダで手動確認（向きつきの JPEG、透過 PNG、壊れた画像、シェルに回る HEIC など）。刈り込みが消すのは `DiskCacheRules.IsCacheFileName` に合うファイルだけ、という条件を外さない |
 | カードの見た目・バッジ | `Views/CardView.xaml` + `CardViewModel`（`BadgeMode` など） | 色は `Themes/` のトークンを使う。バッジ行は左が 📌（ピン留め時だけ）、右がバッジ（`Viewbox` で縮む）。最小サイズ 120 で切れないか確認 |
 | カードグリッドの列数・サイズ | `Views/CardGrid.xaml.cs`（`GridMetrics`、§6.1）、サイズの範囲は `AppSettings.CardSizeMin` / `Max` / `Step` | |
 | カードの形を追加・変更 | `Core/Layout/CardShape.cs`（enum、`ToSetting` / `FromSetting`、`ThumbHeight`）→ `Views/MainWindow.xaml` のツールバーの `RadioButton` | `CardShapeTests`。ツールバーの幅を増やしたら `MainWindow` の `MinWidth`（いまは 660）で更新ボタンまで収まるか確認 |
@@ -315,12 +328,13 @@ App
 | `TextPreviewTests.cs` | `TextPreviewTests` | 文字コード判定、行・バイト上限、バイナリ |
 | `OfficeTextTests.cs` | `OfficeTextTests` | Word の段落・見出し・上限・壊れた / ロック中のファイル・キャンセル、Excel のセル・日付書式（1904 年基準を含む）・上限、オンラインのみは開かない |
 | `FileDragTests.cs` | `FileDragTests` | ドラッグ可否、DropList、自アプリ判定、しきい値 |
+| `ThumbCacheTests.cs` | `ThumbSizingTests` `DiskCacheRulesTests` | 画像をデコードする大きさ（短い辺・拡大しない・長い辺の上限）、ディスクキャッシュのファイル名、刈り込みで消すファイルの選択 |
 | `CardShapeTests.cs` | `CardShapeTests` | `card_shape` の正規化（未設定・不正値は `portrait`）と保存キー、サムネイルの高さ（3:4 / 1:1） |
 | `TestHelpers.cs` | `FakeClock` `FakeFileSystem` `TempDir` | テスト用の部品（新しいテストはまずこれを使う） |
 
 ## 7. 守ること・落とし穴
 
-- **ファイルを完全に削除しない・移動しない・上書きしない**（自分のデータファイルを除く）。消すのは右クリックの「削除（ごみ箱へ移動）」だけで、確認ダイアログのあと `RecycleBin` でごみ箱へ移す（ごみ箱に入らない項目は中止）。ドラッグも Copy | Link のみ。
+- **ファイルを完全に削除しない・移動しない・上書きしない**（自分のデータファイルを除く）。消すのは右クリックの「削除（ごみ箱へ移動）」だけで、確認ダイアログのあと `RecycleBin` でごみ箱へ移す（ごみ箱に入らない項目は中止）。ドラッグも Copy | Link のみ。自分のデータのうち画像サムネイルのキャッシュ（`thumbs\`）は上限を超えると古いものを消すが、消すのは自分が付けた名前（`DiskCacheRules.IsCacheFileName`）のファイルだけ。
 - **UI スレッドで待たない**（[§4](#4-スレッドと非同期の規約)）。シェル呼び出しは必ず STA ワーカー経由でタイムアウトをつける。
 - パスの比較は `PathTools.PathEquals` / `PathSet`（大文字小文字を区別せず正規化）。`==` で比べない。長いパスをシェルに渡すときは `PathTools.ForShell`。
 - `SettingsStore.Current` を書き換えても保存されない（コピーのため）。`Update` を使う。

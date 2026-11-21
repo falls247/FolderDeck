@@ -6,24 +6,34 @@ namespace FolderDeck.Shell;
 /// <summary>
 /// Dedicated STA worker threads for shell/COM calls (thumbnail extractors may assume STA).
 /// A call that exceeds its timeout is abandoned: the caller gets a <see cref="TimeoutException"/>
-/// and a fresh worker replaces the stuck one (R4).
+/// and a fresh worker replaces the stuck one (R4). The timeout covers the call itself, not the
+/// wait in the queue — a long queue (a folder full of pictures) is not a stuck shell.
 /// </summary>
 public sealed class StaWorkerPool : IDisposable
 {
     private const int MaxThreads = 16;
 
+    /// <summary>
+    /// A call that has not even started after this long gives up too: every worker is stuck and
+    /// no more may be created, so the caller should show its fallback rather than wait for ever.
+    /// </summary>
+    private static readonly TimeSpan QueueTimeout = TimeSpan.FromSeconds(60);
+
     private readonly BlockingCollection<WorkItem> _queue = new(new ConcurrentQueue<WorkItem>());
     private readonly string _name;
     private readonly int _size;
+    private readonly ThreadPriority _priority;
     private readonly object _gate = new();
     private int _alive;
+    private int _working; // alive and not abandoned
     private int _serial;
     private bool _disposed;
 
-    public StaWorkerPool(int size, string name)
+    public StaWorkerPool(int size, string name, ThreadPriority priority = ThreadPriority.Normal)
     {
         _size = Math.Max(1, size);
         _name = name;
+        _priority = priority;
         for (int i = 0; i < _size; i++)
         {
             StartWorker();
@@ -57,23 +67,47 @@ public sealed class StaWorkerPool : IDisposable
         using var reg = cancellationToken.Register(static s => ((WorkItem)s!).CancelIfNotStarted(), item);
         try
         {
-            object? result = timeout is null
-                ? await item.Completion.Task.ConfigureAwait(false)
-                : await item.Completion.Task.WaitAsync(timeout.Value).ConfigureAwait(false);
+            if (timeout is null)
+            {
+                return (T)(await item.Completion.Task.ConfigureAwait(false))!;
+            }
+
+            // Wait for a worker to pick the call up (or for its cancellation), then time the call.
+            await item.Started.Task.WaitAsync(QueueTimeout).ConfigureAwait(false);
+            object? result = await item.Completion.Task.WaitAsync(timeout.Value).ConfigureAwait(false);
             return (T)result!;
         }
         catch (TimeoutException)
         {
             var worker = item.Worker;
-            if (worker is not null && !item.Completion.Task.IsCompleted)
+            if (worker is null)
             {
-                worker.Abandoned = true;
-                AppLog.Warn($"{_name}: a shell call did not return within {timeout}; worker abandoned.");
-                StartWorker();
+                item.CancelIfNotStarted(); // still queued: don't run it for nobody
+            }
+            else if (!item.Completion.Task.IsCompleted)
+            {
+                AppLog.Warn($"{_name}: a call did not return within {timeout}; worker abandoned.");
+                Abandon(worker);
             }
 
             throw;
         }
+    }
+
+    private void Abandon(Worker worker)
+    {
+        lock (_gate)
+        {
+            if (worker.Abandoned)
+            {
+                return;
+            }
+
+            worker.Abandoned = true;
+            _working--;
+        }
+
+        StartWorker();
     }
 
     private void StartWorker()
@@ -86,11 +120,13 @@ public sealed class StaWorkerPool : IDisposable
             }
 
             _alive++;
+            _working++;
             var worker = new Worker();
             var thread = new Thread(() => Loop(worker))
             {
                 IsBackground = true,
                 Name = $"{_name}-{Interlocked.Increment(ref _serial)}",
+                Priority = _priority,
             };
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
@@ -125,9 +161,22 @@ public sealed class StaWorkerPool : IDisposable
         }
         finally
         {
+            bool refill;
             lock (_gate)
             {
                 _alive--;
+                if (!worker.Abandoned)
+                {
+                    _working--;
+                }
+
+                // An abandoned worker that could not be replaced (thread limit) is replaced now.
+                refill = !_disposed && !_queue.IsAddingCompleted && _working < _size;
+            }
+
+            if (refill)
+            {
+                StartWorker();
             }
         }
     }
@@ -145,6 +194,9 @@ public sealed class StaWorkerPool : IDisposable
 
         public TaskCompletionSource<object?> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        /// <summary>Completes when a worker takes the call, or when it is cancelled while queued.</summary>
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Worker? Worker { get; private set; }
 
         public bool TryStart(Worker worker)
@@ -161,6 +213,7 @@ public sealed class StaWorkerPool : IDisposable
             }
 
             Worker = worker;
+            Started.TrySetResult();
             return true;
         }
 
@@ -169,6 +222,7 @@ public sealed class StaWorkerPool : IDisposable
             if (Interlocked.CompareExchange(ref _state, 2, 0) == 0)
             {
                 Completion.TrySetCanceled(token);
+                Started.TrySetResult();
             }
         }
     }
