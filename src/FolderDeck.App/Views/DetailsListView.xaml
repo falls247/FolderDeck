@@ -17,7 +17,7 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource Brush.Muted}" />
             <Setter Property="FontFamily" Value="{StaticResource Font.UI}" />
-            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontSize" Value="{DynamicResource Size.Details.HeaderFont}" />
             <Setter Property="Padding" Value="8,0" />
             <Setter Property="HorizontalContentAlignment" Value="Left" />
             <Setter Property="Cursor" Value="Hand" />
@@ -90,7 +90,7 @@
         </Grid.RowDefinitions>
 
         <!-- Header. Margin: left = the rows' left padding; right = their right padding + the scroll bar. -->
-        <Border Grid.Row="0" Margin="12,8,12,0" Height="28" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
+        <Border Grid.Row="0" Margin="12,8,12,0" Height="{DynamicResource Size.Details.Header}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
             <!-- the * column is the empty space right of the last column (the rows have it too) -->
             <Grid ClipToBounds="True">
                 <Grid.ColumnDefinitions>

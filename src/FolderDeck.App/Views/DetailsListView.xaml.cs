@@ -40,8 +40,12 @@ public sealed partial class DetailsMetrics : ObservableObject
 /// </summary>
 public partial class DetailsListView : UserControl, IItemsView
 {
-    /// <summary>Height of a row. Every row has it (the reorder drag computes positions from it).</summary>
-    public const double RowHeight = 28;
+    /// <summary>
+    /// Height of a row as set (every row has it). It follows 文字の大きさ: the same value
+    /// <see cref="TextScale.Apply"/> gives the rows (resource Size.Details.Row). Layout rounding may
+    /// make the laid-out height differ slightly, so positions are stepped by a realized row's ActualHeight.
+    /// </summary>
+    public static double RowHeight => TextScale.DetailsRowHeight;
 
     /// <summary>Width of the last column when the rows can be removed (the ×), and when they cannot.</summary>
     public const double CloseColumn = 28;
@@ -466,8 +470,8 @@ public partial class DetailsListView : UserControl, IItemsView
 
     /// <summary>
     /// Where a drop at <paramref name="p"/> (list coordinates) inserts: at the row boundary nearest
-    /// to the pointer (above the first row = 0, below the last = Count). Every row is
-    /// <see cref="RowHeight"/> high, so one realized row is enough to know where all of them are
+    /// to the pointer (above the first row = 0, below the last = Count). Every row is as high as
+    /// any realized one, so one realized row is enough to know where all of them are
     /// (rows are virtualized: the one under the pointer is realized, the dragged one may be gone).
     /// </summary>
     private (int Index, Rect Marker)? HitTestInsertion(Point p)
@@ -480,6 +484,10 @@ public partial class DetailsListView : UserControl, IItemsView
         }
 
         // Where the first row starts (above the view once the list is scrolled), from any row in use.
+        // The pitch is that row's laid-out height, not RowHeight: with layout rounding a row of, say,
+        // 30 DIP is 30.4 DIP on a 125 % monitor, and the difference adds up over the rows between
+        // the realized one and the pointer (every row has the same Height, so they all round alike).
+        double rowHeight = RowHeight;
         double? firstTop = null;
         int count = VisualTreeHelper.GetChildrenCount(panel);
         for (int i = 0; i < count && firstTop is null; i++)
@@ -487,7 +495,12 @@ public partial class DetailsListView : UserControl, IItemsView
             if (VisualTreeHelper.GetChild(panel, i) is FrameworkElement { IsVisible: true } row
                 && RowsHost.ItemContainerGenerator.IndexFromContainer(row) is int at and >= 0)
             {
-                firstTop = row.TranslatePoint(default, this).Y - (at * RowHeight);
+                if (row.ActualHeight > 0)
+                {
+                    rowHeight = row.ActualHeight;
+                }
+
+                firstTop = row.TranslatePoint(default, this).Y - (at * rowHeight);
             }
         }
 
@@ -497,8 +510,8 @@ public partial class DetailsListView : UserControl, IItemsView
         }
 
         Point origin = panel.TranslatePoint(default, this);
-        int index = (int)Math.Clamp(Math.Round((p.Y - first) / RowHeight), 0, items.Count);
-        double lineY = first + (index * RowHeight);
+        int index = (int)Math.Clamp(Math.Round((p.Y - first) / rowHeight), 0, items.Count);
+        double lineY = first + (index * rowHeight);
         double top = RowsHost.TranslatePoint(default, this).Y; // the part of the list that shows rows
         double bottom = top + RowsHost.ActualHeight;
         if (lineY < top - 1 || lineY > bottom + 1)

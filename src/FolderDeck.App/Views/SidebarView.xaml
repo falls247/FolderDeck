@@ -2,8 +2,9 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:FolderDeck.ViewModels"
-             Focusable="False" Background="Transparent">
-    <!-- The sidebar: collapsible sections, each a header and its rows.
+             Focusable="False" Background="Transparent" FontSize="{DynamicResource Size.Sidebar.Font}">
+    <!-- The sidebar: collapsible sections, each a header and its rows. The text and the row heights
+         follow 文字の大きさ (Size.Sidebar.*, TextScale); icons keep their sizes.
          クイック アクセス: 最近の履歴 / よく使う項目 (a click opens or shows that tab).
          登録フォルダ: one row per folder (name only). Resting on a row opens the cascade beside it,
          a click opens the folder in a new tab, a drag moves the row (or hands the folder to another app).
@@ -12,7 +13,7 @@
         <!-- Header of a section (DataContext: SidebarSectionViewModel). The whole header folds or
              unfolds the section; Tag is an optional text after the title (a count). -->
         <Style x:Key="SectionHeader" TargetType="{x:Type Button}">
-            <Setter Property="Height" Value="30" />
+            <Setter Property="Height" Value="{DynamicResource Size.Sidebar.Row}" />
             <Setter Property="Foreground" Value="{DynamicResource Brush.Text}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Cursor" Value="Hand" />
@@ -55,7 +56,7 @@
         <!-- Row of クイック アクセス (DataContext: the fixed tab it opens; Tag: the icon glyph).
              Filled while that tab is the shown one, a dot while it is on the tab strip. -->
         <Style x:Key="QuickRow" TargetType="{x:Type Button}">
-            <Setter Property="Height" Value="30" />
+            <Setter Property="Height" Value="{DynamicResource Size.Sidebar.Row}" />
             <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
             <Setter Property="Foreground" Value="{DynamicResource Brush.Text}" />
             <Setter Property="Cursor" Value="Hand" />
@@ -97,7 +98,7 @@
 
         <!-- A row of 登録フォルダ or of PC (a drive): icon and name; a warning mark while it cannot be opened. -->
         <DataTemplate x:Key="SidebarRow" DataType="{x:Type vm:SidebarItemViewModel}">
-            <Border x:Name="Row" Height="30" CornerRadius="6" Padding="8,0,6,0" Background="Transparent" Cursor="Hand"
+            <Border x:Name="Row" Height="{DynamicResource Size.Sidebar.Row}" CornerRadius="6" Padding="8,0,6,0" Background="Transparent" Cursor="Hand"
                     ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="900" ToolTipService.Placement="Mouse"
                     MouseEnter="OnRowEnter" MouseLeave="OnRowLeave" MouseMove="OnRowMove"
                     MouseLeftButtonDown="OnRowLeftDown" MouseLeftButtonUp="OnRowLeftUp"
@@ -180,7 +181,7 @@
                               Focusable="False" Margin="6,2,6,8" />
             </ScrollViewer>
 
-            <TextBlock Margin="14,6,12,0" VerticalAlignment="Top" TextWrapping="Wrap" FontSize="12"
+            <TextBlock Margin="14,6,12,0" VerticalAlignment="Top" TextWrapping="Wrap" FontSize="{DynamicResource Size.Sidebar.HintFont}"
                        Foreground="{DynamicResource Brush.Muted}" IsHitTestVisible="False"
                        Text="登録フォルダはまだありません。見出しの右のボタンでフォルダを選ぶか、エクスプローラーからフォルダをドロップして追加してください。"
                        Visibility="{Binding HasNoRegistered, Converter={StaticResource BoolToVis}}" />

@@ -84,13 +84,14 @@
                     <ContentPresenter x:Name="OverlayHost" />
                 </Grid>
 
-                <!-- Footer: name, sub line, badges -->
+                <!-- Footer: name (always two lines high), sub line, badges. The text follows
+                     文字の大きさ (Size.Card.*, TextScale), so the footer, and the card, grow with it. -->
                 <StackPanel Grid.Row="1" Margin="10,8,10,9">
-                    <TextBlock x:Name="NameText" Text="{Binding Name}" FontSize="12.5" Foreground="{DynamicResource Brush.Text}"
+                    <TextBlock x:Name="NameText" Text="{Binding Name}" FontSize="{DynamicResource Size.Card.NameFont}" Foreground="{DynamicResource Brush.Text}"
                                TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
-                               LineHeight="16.875" LineStackingStrategy="BlockLineHeight"
-                               MinHeight="33.75" MaxHeight="33.75" />
-                    <TextBlock x:Name="SubLine" Text="{Binding SubText}" FontSize="11" Foreground="{DynamicResource Brush.Muted}"
+                               LineHeight="{DynamicResource Size.Card.NameLine}" LineStackingStrategy="BlockLineHeight"
+                               MinHeight="{DynamicResource Size.Card.NameBox}" MaxHeight="{DynamicResource Size.Card.NameBox}" />
+                    <TextBlock x:Name="SubLine" Text="{Binding SubText}" FontSize="{DynamicResource Size.Card.SubFont}" Foreground="{DynamicResource Brush.Muted}"
                                TextTrimming="CharacterEllipsis" Margin="0,2,0,0">
                         <TextBlock.Style>
                             <Style TargetType="{x:Type TextBlock}">

@@ -8,7 +8,7 @@
     <DebugType>embedded</DebugType>
     <Company>FolderDeck</Company>
     <Product>FolderDeck</Product>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <SatelliteResourceLanguages>ja</SatelliteResourceLanguages>
   </PropertyGroup>
 </Project>

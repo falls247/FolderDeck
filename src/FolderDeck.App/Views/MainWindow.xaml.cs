@@ -1104,4 +1104,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _cascade.CloseAll();
         _theme.Apply(theme); // swaps the colour dictionary and the title bars
     }
+
+    public void ApplyTextScale(int percent)
+    {
+        _cascade.CloseAll(); // its lists are placed by the rows, which change height
+        TextScale.Apply(percent);
+    }
 }

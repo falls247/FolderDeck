@@ -39,6 +39,27 @@
                 <TextBlock Text="「システム」は Windows の設定（アプリのモード）に合わせます。OK を押すと切り替わります。"
                            TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,6,0,0" />
 
+                <TextBlock Text="文字の大きさ" Style="{StaticResource Section}" />
+                <!-- one switch per step (SettingsViewModel.TextScaleChoices); the padding on the right is the last switch's margin -->
+                <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3,3,0,3" Background="{DynamicResource Brush.Surface2}"
+                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+                    <ItemsControl ItemsSource="{Binding TextScaleChoices}" Focusable="False">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="TextScale" MinWidth="56" Margin="0,0,3,0"
+                                             Content="{Binding Label}" IsChecked="{Binding IsSelected}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Border>
+                <TextBlock Text="サイドバー・カード・詳細表示・中身の一覧（オーバーレイ・フライアウト）の文字を大きくします（タブ・ツールバー・メニュー・プレビューは変わりません）。OK を押すと切り替わります。"
+                           TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,6,0,0" />
+
                 <TextBlock Text="表示と操作" Style="{StaticResource Section}" />
                 <CheckBox Content="隠しファイルを表示" IsChecked="{Binding ShowHidden}" />
                 <CheckBox Content="実行形式を開く前に確認する" IsChecked="{Binding ConfirmExecutables}" />

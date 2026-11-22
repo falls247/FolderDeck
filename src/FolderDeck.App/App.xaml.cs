@@ -53,8 +53,9 @@ public partial class App : Application
         _services = new AppServices(stores);
         AppLog.Info($"startup: data loaded at {Since()}");
 
-        // The theme chosen in the settings (until now: Windows' mode), before any window exists.
+        // The theme chosen in the settings (until now: Windows' mode) and 文字の大きさ, before any window exists.
         Theme.Apply(AppThemes.FromSetting(stores.Settings.Current.Theme));
+        TextScale.Apply(stores.Settings.Current.TextScale);
 
         var vm = new MainViewModel(_services);
         var window = new MainWindow(vm, Theme);

@@ -516,6 +516,7 @@ public class SettingsStoreTests
         store.Load();
         var s = store.Current;
         Assert.Equal(200, s.CardSize);
+        Assert.Equal(100, s.TextScale);
         Assert.True(s.ConfirmExecutables);
         Assert.True(s.IncludeWindowsRecent);
         Assert.False(s.ShowHidden);
@@ -697,6 +698,39 @@ public class SettingsStoreTests
     public void ClampCardSize(int input, int expected)
     {
         Assert.Equal(expected, AppSettings.ClampCardSize(input));
+    }
+
+    [Theory]
+    [InlineData(0, 100)]
+    [InlineData(100, 100)]
+    [InlineData(113, 110)]
+    [InlineData(117, 120)]
+    [InlineData(150, 150)]
+    [InlineData(151, 150)]
+    [InlineData(int.MaxValue, 150)]
+    public void ClampTextScale(int input, int expected)
+    {
+        Assert.Equal(expected, AppSettings.ClampTextScale(input));
+    }
+
+    [Fact]
+    public void TextScale_OffStepValueIsSnappedOnLoad_AndRoundTrips()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        File.WriteAllText(file, """{"version":2,"text_scale":137}""");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        Assert.Equal(140, store.Current.TextScale);
+
+        store.Update(s => s.TextScale = 120);
+        store.Flush();
+        Assert.Contains("\"text_scale\": 120", File.ReadAllText(file));
+
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        Assert.Equal(120, reloaded.Current.TextScale);
+        Assert.Equal(120, reloaded.Current.Clone().TextScale);
     }
 
     [Fact]
