@@ -76,8 +76,12 @@ public sealed class CascadeController
     private int _graceLevel = -1;
     private int _keyLevel = -1;
     private bool _menuOpen;
+    /// <summary>Nothing opens on hover: during a drag, Explorer's menu or a name's edit box (always <see cref="AnySuspension"/>).</summary>
     private bool _suspended;
     private bool _dragging;
+
+    /// <summary>A name's edit box is open (see <see cref="SetEditing"/>).</summary>
+    private bool _editing;
 
     /// <summary>Explorer's own menu is open (see <see cref="SetNativeMenuOpen"/>): the cascade is frozen.</summary>
     private bool _nativeMenu;
@@ -152,7 +156,7 @@ public sealed class CascadeController
     public void BeginDrag()
     {
         _dragging = true;
-        _suspended = true;
+        _suspended = AnySuspension;
         StopTimers();
         foreach (var level in _levels)
         {
@@ -177,8 +181,29 @@ public sealed class CascadeController
     {
         _dragging = false;
         CloseAll();
-        _suspended = false;
+        _suspended = AnySuspension;
     }
+
+    /// <summary>
+    /// The edit box of an item's name opens (true) or closes (false). While it is open the cascade
+    /// is closed and no hover opens anything (cards, rows of the details list, sidebar rows): a list
+    /// or a preview would cover the items, and Esc must reach the edit box. <see cref="CloseAll"/>
+    /// keeps working. A card under a pointer that has not moved opens again only after the pointer
+    /// re-enters it (as after a drag).
+    /// </summary>
+    public void SetEditing(bool editing)
+    {
+        if (editing)
+        {
+            CloseAll(); // does nothing during a drag or Explorer's menu…
+            StopTimers(); // …so the timers are stopped in every case
+        }
+
+        _editing = editing;
+        _suspended = AnySuspension;
+    }
+
+    private bool AnySuspension => _dragging || _nativeMenu || _editing;
 
     /// <summary>
     /// Explorer's own menu (「その他のメニュー（Windows）」) opens or closes. It runs on another thread
@@ -205,7 +230,7 @@ public sealed class CascadeController
         if (open)
         {
             _nativeMenu = true;
-            _suspended = true;
+            _suspended = AnySuspension;
             StopTimers();
             return;
         }
@@ -216,7 +241,7 @@ public sealed class CascadeController
         }
 
         _nativeMenu = false;
-        _suspended = _dragging;
+        _suspended = AnySuspension;
         if (_closeAfterNativeMenu)
         {
             _closeAfterNativeMenu = false;

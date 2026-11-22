@@ -789,6 +789,27 @@ public class SettingsStoreTests
     }
 
     [Fact]
+    public void OpenOnDoubleClick_DefaultsOff_MissingKeyIsOff_RoundTrips()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        File.WriteAllText(file, """{"version":2,"show_hidden":true}""");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        Assert.True(store.Current.ShowHidden);
+        Assert.False(store.Current.OpenOnDoubleClick);
+
+        store.Update(s => s.OpenOnDoubleClick = true);
+        store.Flush();
+        Assert.Contains("\"open_on_double_click\": true", File.ReadAllText(file));
+
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        Assert.True(reloaded.Current.OpenOnDoubleClick);
+        Assert.True(reloaded.Current.Clone().OpenOnDoubleClick);
+    }
+
+    [Fact]
     public void ItemMenu_DefaultsToApp_RoundTripsWindows_AndIsCloned()
     {
         using var tmp = new TempDir();

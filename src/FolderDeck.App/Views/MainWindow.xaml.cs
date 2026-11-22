@@ -23,6 +23,28 @@ public partial class MainWindow : Window, IMainView, ICardHost
     private readonly CascadeController _cascade;
     private readonly ContextMenuFactory _menus;
 
+    /// <summary>The edit box of an item's name (F2, 名前の変更, a new folder).</summary>
+    private readonly RenameEditor _rename;
+
+    /// <summary>
+    /// The window was activated while a name was being edited (or a folder made for it): the
+    /// activation's checks (<see cref="MainViewModel.OnActivatedAsync"/>) run once that is over,
+    /// because their reload would end the edit box with a half-typed name.
+    /// </summary>
+    private bool _activationPending;
+
+    /// <summary>Ctrl+Shift+N is making the folder whose edit box opens next: keys do nothing meanwhile, text is kept for the box.</summary>
+    private bool _creatingFolder;
+
+    /// <summary>
+    /// A committed name is being handled (<see cref="CommitRenameAsync"/>: its confirmation, the
+    /// shell, the reload, maybe the box again). Closing the confirmation activates the window: its
+    /// reload must not end a box that opens again meanwhile.
+    /// </summary>
+    private bool _committingRename;
+
+    private readonly System.Text.StringBuilder _typeAhead = new();
+
     /// <summary>
     /// Set when the sidebar was just shown or hidden: the toggle sits right of the sidebar and moves
     /// with it, so the further presses of a double click would land on whatever took its place.
@@ -48,6 +70,26 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _cascade = new CascadeController(this, vm, _menus);
         vm.View = this;
         CardView.Host = this;
+
+        // The edit box ends synchronously; the rename runs after the input that ended it (a press
+        // elsewhere, a lost focus) has been dealt with, so its confirmation never opens inside a
+        // mouse or focus event.
+        _rename = new RenameEditor(this, text => vm.Message.Info(text));
+        _rename.Ended += committed =>
+        {
+            _cascade.SetEditing(false);
+            if (!committed)
+            {
+                RunPendingActivation();
+            }
+        };
+        _rename.Committed += (card, text) =>
+        {
+            _committingRename = true; // before the dispatch: an activation may come before it runs
+            Dispatcher.BeginInvoke(() => _ = CommitRenameAsync(card, text));
+        };
+        _menus.RenameRequested = card => BeginRename(card);
+        _menus.NewFolderRequested = () => _ = CreateFolderAndRenameAsync();
 
         // The stores are loaded before the window is created: the sidebar opens as it was saved
         // (shown at its width, or hidden).
@@ -100,7 +142,18 @@ public partial class MainWindow : Window, IMainView, ICardHost
         SourceInitialized += (_, _) => _theme.ApplyTitleBar(this);
         SourceInitialized += (_, _) => WatchWindowMessages();
         Activated += OnActivatedReadDrives;
-        Activated += (_, _) => _ = vm.OnActivatedAsync(); // a cut of ours may have been pasted in Explorer
+        Activated += (_, _) =>
+        {
+            // A cut of ours may have been pasted in Explorer. Not under a name being edited (see _activationPending).
+            if (IsNameBusy)
+            {
+                _activationPending = true;
+                return;
+            }
+
+            _ = vm.OnActivatedAsync();
+        };
+        PreviewTextInput += OnPreviewTextInput;
         Closed += (_, _) => _hook?.Dispose();
         theme.ThemeChanged += () => _theme.ApplyTitleBar(this);
         PreviewKeyDown += OnPreviewKeyDown;
@@ -211,6 +264,27 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (_rename.IsOpen)
+        {
+            // Every key belongs to the name's edit box (Enter, Esc and the text): no F5, Ctrl+W,
+            // Alt+← or cascade key reloads or leaves the list from under it.
+            return;
+        }
+
+        if (_creatingFolder)
+        {
+            // The new folder's edit box is about to open: typing goes to it (OnPreviewTextInput),
+            // Backspace takes back what was typed, and no key navigates or deletes meanwhile.
+            // Letters are not marked handled: that would drop their text input.
+            if (e.Key == Key.Back && _typeAhead.Length > 0)
+            {
+                _typeAhead.Length--;
+            }
+
+            e.Handled = e.Key is Key.Enter or Key.Back;
+            return;
+        }
+
         bool inTextBox = Keyboard.FocusedElement is TextBox;
         Key key = e.Key == Key.System ? e.SystemKey : e.Key;
 
@@ -249,6 +323,14 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 e.Handled = true; // like Explorer: closes the shown tab, whatever its kind
                 _vm.CloseTabCommand.Execute(_vm.SelectedTab);
                 break;
+            case Key.N when !inTextBox && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift):
+                e.Handled = true; // like Explorer: a new folder in the folder shown, in its edit box
+                if (!e.IsRepeat)
+                {
+                    _ = CreateFolderAndRenameAsync();
+                }
+
+                break;
             case Key.Left when Keyboard.Modifiers == ModifierKeys.Alt:
             case Key.BrowserBack:
                 e.Handled = true;
@@ -264,6 +346,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
+        // A press anywhere else commits the name being edited (first: the branches below may handle
+        // the press). The items have no focus to take, so a lost focus alone would not end it.
+        _rename.CommitIfOutside(e.OriginalSource);
+
         if (e.ChangedButton == MouseButton.Left && _sidebarJustToggled)
         {
             // ClickCount > 1: same spot and within the double-click time of the press that toggled
@@ -292,7 +378,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     /// <summary>
     /// The selection keys (not in a text box): Ctrl+A, Esc (after the cascade had its turn),
-    /// Ctrl+C / Ctrl+X / Ctrl+V and Delete. Copy, cut and delete act on the selection only, never on
+    /// Ctrl+C / Ctrl+X / Ctrl+V, Delete and F2 (rename). Copy, cut, delete and rename act on the selection only, never on
     /// the item under the pointer (nor the row the cascade's keys highlight); a held key repeats
     /// nothing (one paste or one delete confirmation per press). Delete only recycles: Shift+Delete
     /// (Explorer's permanent delete) and Ctrl+Delete are not used. Returns true when the key was used.
@@ -303,6 +389,17 @@ public partial class MainWindow : Window, IMainView, ICardHost
         if (key == Key.Escape && modifiers == ModifierKeys.None)
         {
             return _vm.ClearSelection();
+        }
+
+        if (key == Key.F2 && modifiers == ModifierKeys.None)
+        {
+            // The one selected item (as Delete, never the item under the pointer); nothing selected: nothing.
+            if (!e.IsRepeat && _vm.RenameCandidate() is { } card)
+            {
+                BeginRename(card);
+            }
+
+            return true;
         }
 
         if (key == Key.Delete && modifiers == ModifierKeys.None)
@@ -411,12 +508,16 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _menus.ShowBlank(ContentHost);
     }
 
-    /// <summary>The element pressed is (inside) a card, a details row, a scroll bar, a button or a grip.</summary>
+    /// <summary>
+    /// The element pressed is (inside) a card, a details row, a scroll bar, a button, a grip or a
+    /// text box (the name's edit box: it sits in the list's adorner layer, outside the item view,
+    /// and its own presses and context menu are its business).
+    /// </summary>
     private static bool IsOnItemOrControl(object source)
     {
         for (var node = source as DependencyObject; node is not null; node = Parent(node))
         {
-            if (node is CardView or DetailsRowView or ScrollBar or ButtonBase or Thumb)
+            if (node is CardView or DetailsRowView or ScrollBar or ButtonBase or Thumb or TextBoxBase)
             {
                 return true;
             }
@@ -629,9 +730,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     /// <summary>
     /// A click with Ctrl and / or Shift selects (Ctrl flips the item, Shift takes the range, both add
-    /// the range); a plain click clears the selection and opens the item.
+    /// the range); a plain click clears the selection and opens the item. With the setting
+    /// ダブルクリックで開く a plain click selects the item alone and a double click opens it (the
+    /// item stays selected, as in Explorer).
     /// </summary>
-    public void ItemClick(CardViewModel vm, FrameworkElement element, ModifierKeys modifiers)
+    public void ItemClick(CardViewModel vm, FrameworkElement element, ModifierKeys modifiers, bool doubleClick)
     {
         _cascade.CloseAll();
         if (_vm.ClickSelect(vm, modifiers))
@@ -639,8 +742,135 @@ public partial class MainWindow : Window, IMainView, ICardHost
             return;
         }
 
+        if (_vm.OpensOnDoubleClick)
+        {
+            if (doubleClick)
+            {
+                _ = _vm.ActivateCardAsync(vm);
+            }
+            else
+            {
+                _vm.SelectOnly(vm);
+            }
+
+            return;
+        }
+
         _vm.ClearSelection();
         _ = _vm.ActivateCardAsync(vm);
+    }
+
+    public bool OpensOnDoubleClick => _vm.OpensOnDoubleClick;
+
+    // ---- the name's edit box (F2, 名前の変更, 新しいフォルダー) -------------------------------------
+
+    /// <summary>
+    /// Opens the edit box over <paramref name="card"/>'s name (scrolled into view first), with
+    /// <paramref name="text"/> or its name. Nothing opens for a card that cannot be renamed now
+    /// (said on the message line) or that the shown view does not have.
+    /// </summary>
+    private void BeginRename(CardViewModel card, string? text = null, string? typeAhead = null)
+    {
+        // The card shown now for the same item: a card held since a menu opened, or from before a
+        // reload, has been replaced by an equal one.
+        card = _vm.ShownCard(card.Path) ?? card;
+        if (_rename.IsOpen || !_vm.CanStartRename(card))
+        {
+            return;
+        }
+
+        _cascade.CloseAll();
+
+        // The scroll happens inside this call (Scrolled closes what hangs on the items): the box comes after it.
+        if (ActiveList.BringItemIntoView(card) is not { } view)
+        {
+            return;
+        }
+
+        if (_rename.Begin(view, card, text ?? card.Name, typeAhead))
+        {
+            _cascade.SetEditing(true);
+        }
+    }
+
+    /// <summary>
+    /// The edit box closed with a commit: renames, and opens the box again when the name has to
+    /// change (taken, extension declined) and the item is still shown (if not, the message of the
+    /// rename stays and the typed name is dropped).
+    /// </summary>
+    private async Task CommitRenameAsync(CardViewModel card, string text)
+    {
+        try
+        {
+            if (await _vm.RenameAsync(card, text) && _vm.ShownCard(card.Path) is not null)
+            {
+                BeginRename(card, text);
+            }
+        }
+        finally
+        {
+            _committingRename = false;
+            RunPendingActivation();
+        }
+    }
+
+    /// <summary>Ctrl+Shift+N and 新しいフォルダー: creates the folder, then opens its edit box with what was typed meanwhile.</summary>
+    private async Task CreateFolderAndRenameAsync()
+    {
+        if (_creatingFolder)
+        {
+            return;
+        }
+
+        _cascade.CloseAll();
+
+        // The keys typed meanwhile must reach no control: a toolbar button keeps the focus after a
+        // click (Space would press it, arrows would switch the view) and would eat the text input.
+        RenameEditor.FocusWindowItself(this);
+        _creatingFolder = true;
+        _typeAhead.Clear();
+        try
+        {
+            if (await _vm.CreateFolderAsync() is not { } card)
+            {
+                return;
+            }
+
+            // The reload puts the scroll position back at Loaded priority: bring the folder into view after that.
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+            string typed = _typeAhead.ToString();
+            _creatingFolder = false;
+            BeginRename(card, typeAhead: typed);
+        }
+        finally
+        {
+            _creatingFolder = false;
+            _typeAhead.Clear();
+            RunPendingActivation();
+        }
+    }
+
+    /// <summary>While Ctrl+Shift+N makes its folder, typed text waits for the folder's edit box.</summary>
+    private void OnPreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (_creatingFolder && !_rename.IsOpen)
+        {
+            _typeAhead.Append(e.Text);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>A name is edited, or a folder made for its edit box, or a committed name handled: an activation's reload waits.</summary>
+    private bool IsNameBusy => _rename.IsOpen || _creatingFolder || _committingRename;
+
+    /// <summary>The activation's checks held back while a name was edited (<see cref="_activationPending"/>) run now, if nothing is edited any more.</summary>
+    private void RunPendingActivation()
+    {
+        if (_activationPending && !IsNameBusy)
+        {
+            _activationPending = false;
+            _ = _vm.OnActivatedAsync();
+        }
     }
 
     /// <summary>

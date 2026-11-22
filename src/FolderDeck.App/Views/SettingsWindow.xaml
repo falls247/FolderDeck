@@ -31,9 +31,12 @@
         <TextBlock Text="「システム」は Windows の設定（アプリのモード）に合わせます。OK を押すと切り替わります。"
                    TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,6,0,0" />
 
-        <TextBlock Text="表示" Style="{StaticResource Section}" />
+        <TextBlock Text="表示と操作" Style="{StaticResource Section}" />
         <CheckBox Content="隠しファイルを表示" IsChecked="{Binding ShowHidden}" />
         <CheckBox Content="実行形式を開く前に確認する" IsChecked="{Binding ConfirmExecutables}" />
+        <CheckBox Content="ダブルクリックで開く" IsChecked="{Binding OpenOnDoubleClick}" />
+        <TextBlock Text="オンにすると、カード・詳細表示の行は 1 回のクリックでその項目だけを選び、ダブルクリックで開きます（サイドバーと一覧の行は 1 回のクリックのまま）。"
+                   TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="20,0,0,0" />
 
         <TextBlock Text="最近の履歴・よく使う項目" Style="{StaticResource Section}" />
         <CheckBox Content="Windows の最近使った項目を含める" IsChecked="{Binding IncludeWindowsRecent}" />

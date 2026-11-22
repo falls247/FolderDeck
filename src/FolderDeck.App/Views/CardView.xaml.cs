@@ -36,8 +36,16 @@ public interface ICardHost
     /// <summary>The pointer left the name column, or the element now shows another item.</summary>
     void RowMouseLeave(FrameworkElement nameColumn);
 
-    /// <summary>The item was clicked (decided on the release), with <paramref name="modifiers"/> held.</summary>
-    void ItemClick(CardViewModel vm, FrameworkElement element, ModifierKeys modifiers);
+    /// <summary>
+    /// The item was clicked (decided on the release), with <paramref name="modifiers"/> held.
+    /// <paramref name="doubleClick"/>: the second click of a double click on the same item, only
+    /// reported while <see cref="OpensOnDoubleClick"/> (otherwise the second press of a double click
+    /// is no click at all, so the item does not open twice).
+    /// </summary>
+    void ItemClick(CardViewModel vm, FrameworkElement element, ModifierKeys modifiers, bool doubleClick);
+
+    /// <summary>Items open on a double click (setting ダブルクリックで開く); read at every press.</summary>
+    bool OpensOnDoubleClick { get; }
 
     /// <summary>The item was right-clicked: its menu opens on <paramref name="element"/>.</summary>
     void ItemContextMenu(CardViewModel vm, FrameworkElement element);

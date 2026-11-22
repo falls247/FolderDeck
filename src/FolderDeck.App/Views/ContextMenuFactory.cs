@@ -34,6 +34,12 @@ public sealed class ContextMenuFactory
     /// <summary>Called before a menu command runs that leaves the cascade (open, navigate…).</summary>
     public Action? BeforeNavigate { get; set; }
 
+    /// <summary>名前の変更 of a card: the window opens the card's edit box (F2 does the same).</summary>
+    public Action<CardViewModel>? RenameRequested { get; set; }
+
+    /// <summary>新しいフォルダー of the blank area: the window creates it and opens its edit box (Ctrl+Shift+N does the same).</summary>
+    public Action? NewFolderRequested { get; set; }
+
     /// <summary>
     /// Explorer's own menu opens (true) or has closed (false). True is raised synchronously, before
     /// the menu is built: from the Click of 「その他のメニュー（Windows）」, or, with the setting
@@ -134,6 +140,16 @@ public sealed class ContextMenuFactory
                 BeforeNavigate?.Invoke(); // the confirmation and the reload replace the cascade
                 _ = _vm.DeleteAsync([item]);
             }));
+
+            // Only a card of the tab has an edit box (not a row of the cascade).
+            if (card is not null && MainViewModel.CanRename(item))
+            {
+                entries.Add(new("名前の変更", RenameGlyph, true, () =>
+                {
+                    BeforeNavigate?.Invoke(); // the edit box needs the items uncovered
+                    RenameRequested?.Invoke(card);
+                }));
+            }
         }
 
         if (registered is not null)
@@ -277,6 +293,13 @@ public sealed class ContextMenuFactory
         var shown = _vm.ShownFolderItem();
         if (shown is not null)
         {
+            // Explorer's Ctrl+Shift+N: the new folder opens its edit box (the shell's 新規作成 cannot,
+            // without a view of its own to edit in).
+            entries.Insert(1, new("新しいフォルダー", NewFolderGlyph, !_vm.IsFileOperationRunning, () =>
+            {
+                BeforeNavigate?.Invoke(); // the reload replaces the cascade
+                NewFolderRequested?.Invoke();
+            }));
             entries.Add(MenuEntry.Separator);
             entries.Add(new("エクスプローラーで表示", ExplorerGlyph, true, () => _ = _vm.ShowInExplorerAsync(shown)));
             entries.Add(new("パスをコピー", CopyGlyph, true, () => _vm.CopyPath(shown)));
@@ -521,6 +544,8 @@ public sealed class ContextMenuFactory
     private const string PasteGlyph = "\uE77F";
     private const string RefreshGlyph = "\uE72C";
     private const string DeleteGlyph = "\uE74D"; // Delete
+    private const string RenameGlyph = "\uE8AC"; // Rename
+    private const string NewFolderGlyph = "\uE8F4"; // NewFolder
     private const string ExplorerGlyph = "\uEC50"; // File Explorer
     private const string NativeMenuGlyph = "\uE712"; // More (…)
 

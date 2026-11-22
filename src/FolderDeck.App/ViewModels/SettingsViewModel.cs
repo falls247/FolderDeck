@@ -29,6 +29,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _openExplorerInNewTab;
 
+    [ObservableProperty]
+    private bool _openOnDoubleClick;
+
     /// <summary>Right-click menu of items: the app's or Explorer's. The two switches below show and set it.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsItemMenuApp), nameof(IsItemMenuWindows))]
@@ -57,6 +60,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _includeWindowsRecent = settings.IncludeWindowsRecent;
         _addToWindowsRecent = settings.AddToWindowsRecent;
         _openExplorerInNewTab = settings.OpenExplorerInNewTab;
+        _openOnDoubleClick = settings.OpenOnDoubleClick;
         _itemMenu = ItemMenuStyles.FromSetting(settings.ItemMenu);
         _recentLimitText = settings.RecentLimit.ToString(CultureInfo.InvariantCulture);
         _frequentLimitText = settings.FrequentLimit.ToString(CultureInfo.InvariantCulture);
@@ -158,6 +162,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.IncludeWindowsRecent = IncludeWindowsRecent;
         settings.AddToWindowsRecent = AddToWindowsRecent;
         settings.OpenExplorerInNewTab = OpenExplorerInNewTab;
+        settings.OpenOnDoubleClick = OpenOnDoubleClick;
         settings.ItemMenu = ItemMenuStyles.ToSetting(ItemMenu);
         settings.RecentLimit = RecentLimit;
         settings.FrequentLimit = FrequentLimit;

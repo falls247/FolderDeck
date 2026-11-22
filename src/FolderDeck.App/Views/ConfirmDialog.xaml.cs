@@ -40,6 +40,16 @@ public partial class ConfirmDialog : Window
             }
         };
         SourceInitialized += (_, _) => (Application.Current as App)?.Theme?.ApplyTitleBar(this);
+
+        // A key still held from what opened the dialog (the Enter that confirmed a name) repeats
+        // into it: only a new press answers (Button.OnKeyDown does not look at IsRepeat).
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.IsRepeat)
+            {
+                e.Handled = true;
+            }
+        };
     }
 
     private void OnPrimary(object sender, RoutedEventArgs e) => DialogResult = true;

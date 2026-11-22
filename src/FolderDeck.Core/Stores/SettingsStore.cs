@@ -184,6 +184,13 @@ public sealed class AppSettings
     public bool OpenExplorerInNewTab { get; set; }
 
     /// <summary>
+    /// Items of a tab (cards, rows of the details list) open on a double click; a single click
+    /// without Ctrl / Shift selects only that item. Off: a single click opens (the default).
+    /// Read at every click, so OK in the settings applies without a restart.
+    /// </summary>
+    public bool OpenOnDoubleClick { get; set; }
+
+    /// <summary>
     /// Right-click menu of items: <c>app</c> (the app's own menu) or <c>windows</c> (Explorer's
     /// menu with the app's entries on top of it).
     /// </summary>

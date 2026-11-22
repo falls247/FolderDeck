@@ -123,3 +123,4 @@ FILE_FLAGS_AND_ATTRIBUTES
 HANDLE
 GetLongPathName
 SetThreadErrorMode
+GetDoubleClickTime

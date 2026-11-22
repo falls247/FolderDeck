@@ -36,6 +36,71 @@ public interface IItemsView
     /// hit testing while a tab loads). Null outside the scroll area.
     /// </summary>
     FrameworkElement? RealizedItemAt(MouseEventArgs e);
+
+    /// <summary>
+    /// Scrolls <paramref name="item"/> into view and returns its realized item view
+    /// (<see cref="CardView"/> / <see cref="DetailsRowView"/>), or null (not one of the view's items,
+    /// the view is hidden or not laid out yet). The scroll happens inside this call, so
+    /// <see cref="Scrolled"/> is raised before it returns.
+    /// </summary>
+    FrameworkElement? BringItemIntoView(CardViewModel item);
+}
+
+/// <summary>The common part of <see cref="IItemsView.BringItemIntoView"/>.</summary>
+internal static class ItemsViewReveal
+{
+    /// <summary>
+    /// Brings the container at <paramref name="index"/> of <paramref name="rowsHost"/> (a row of
+    /// cards, a row of the details list) into view through its virtualizing panel, lays it out and
+    /// returns the item view of <paramref name="item"/> inside it.
+    /// </summary>
+    public static FrameworkElement? Reveal(ItemsControl rowsHost, VirtualizingStackPanel? panel, int index, CardViewModel item)
+    {
+        // BringIndexIntoViewPublic throws outside 0…Count-1.
+        if (panel is null || index < 0 || index >= rowsHost.Items.Count)
+        {
+            return null;
+        }
+
+        panel.BringIndexIntoViewPublic(index);
+        rowsHost.UpdateLayout(); // runs the scroll viewer's queued MakeVisible and realizes the container
+        return rowsHost.ItemContainerGenerator.ContainerFromIndex(index) is DependencyObject container
+            ? FindView(container, item)
+            : null;
+    }
+
+    private static FrameworkElement? FindView(DependencyObject node, CardViewModel item)
+    {
+        int count = VisualTreeHelper.GetChildrenCount(node);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(node, i);
+            switch (child)
+            {
+                case CardView card:
+                    if (ReferenceEquals(card.ViewModel, item))
+                    {
+                        return card;
+                    }
+
+                    continue; // an item view holds no other item views
+                case DetailsRowView row:
+                    if (ReferenceEquals(row.ViewModel, item))
+                    {
+                        return row;
+                    }
+
+                    continue;
+            }
+
+            if (FindView(child, item) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
 }
 
 /// <summary>The geometric search behind <see cref="IItemsView.RealizedItemAt"/>.</summary>

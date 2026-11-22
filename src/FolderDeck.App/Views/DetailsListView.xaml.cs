@@ -149,6 +149,34 @@ public partial class DetailsListView : UserControl, IItemsView
 
     public FrameworkElement? RealizedItemAt(MouseEventArgs e) => ItemsViewHitTest.Find(_scroll, RowsHost, e);
 
+    /// <summary>One row per item: the item's index is the row the panel brings into view.</summary>
+    public FrameworkElement? BringItemIntoView(CardViewModel item)
+    {
+        if (Items is not { } items || !IsVisible)
+        {
+            return null;
+        }
+
+        int index = -1;
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (ReferenceEquals(items[i], item))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        _rowsPanel ??= FindDescendant<VirtualizingStackPanel>(RowsHost);
+        if (_rowsPanel is null && index >= 0)
+        {
+            RowsHost.UpdateLayout(); // the items panel exists after the first measure
+            _rowsPanel = FindDescendant<VirtualizingStackPanel>(RowsHost);
+        }
+
+        return ItemsViewReveal.Reveal(RowsHost, _rowsPanel, index, item);
+    }
+
     public void ScrollTo(double offset)
     {
         if (_scroll is null)
