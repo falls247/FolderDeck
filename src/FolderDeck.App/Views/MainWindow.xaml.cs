@@ -1088,7 +1088,14 @@ public partial class MainWindow : Window, IMainView, ICardHost
     public bool ShowSettings(SettingsViewModel settings)
     {
         _cascade.CloseAll();
+
+        // No taller than the main window (it fits its height to the settings, which scroll beyond that).
         var window = new SettingsWindow(settings) { Owner = this };
+        if (ActualHeight > 0)
+        {
+            window.MaxHeight = ActualHeight;
+        }
+
         return window.ShowDialog() == true;
     }
 

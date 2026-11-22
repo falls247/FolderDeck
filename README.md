@@ -346,6 +346,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-fixture.ps1 -Outp
 
 ### 設定
 
+設定画面はメイン画面より高くなりません。収まらないときは設定の部分をスクロールします（OK・キャンセルはいつも見えています）。
+
 | 項目 | 内容 |
 |---|---|
 | テーマ（配色） | システム／ライト／ダーク。既定は「システム」で、Windows の設定（アプリのモード）に合わせ、起動中に Windows 側を切り替えても追従します。「ライト」「ダーク」は Windows の設定に関係なく固定します。OK を押すとすぐ切り替わります（`settings.json` の `theme`：`system`／`light`／`dark`） |
