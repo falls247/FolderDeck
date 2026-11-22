@@ -22,19 +22,19 @@ public interface ICardHost
     void CardMouseLeave(CardView card);
 
     /// <summary>
-    /// The pointer entered the name of an item shown as a row. <paramref name="nameCell"/> is both
-    /// what is hovered and what the folder's list is placed beside.
+    /// The pointer entered the name column of an item shown as a row. <paramref name="nameColumn"/> is
+    /// both what is hovered and what the folder's list is placed beside (at its right edge).
     /// </summary>
-    void RowMouseEnter(FrameworkElement nameCell, CardViewModel vm);
+    void RowMouseEnter(FrameworkElement nameColumn, CardViewModel vm);
 
     /// <summary>
-    /// The pointer moved on that name with no button held (and no press on the row since it came
+    /// The pointer moved on that name column with no button held (and no press on the row since it came
     /// there): after a list was closed under a resting pointer, a real move asks for it again.
     /// </summary>
-    void RowMouseMove(FrameworkElement nameCell, CardViewModel vm);
+    void RowMouseMove(FrameworkElement nameColumn, CardViewModel vm);
 
-    /// <summary>The pointer left the name, or the element now shows another item.</summary>
-    void RowMouseLeave(FrameworkElement nameCell);
+    /// <summary>The pointer left the name column, or the element now shows another item.</summary>
+    void RowMouseLeave(FrameworkElement nameColumn);
 
     /// <summary>The item was clicked (decided on the release), with <paramref name="modifiers"/> held.</summary>
     void ItemClick(CardViewModel vm, FrameworkElement element, ModifierKeys modifiers);

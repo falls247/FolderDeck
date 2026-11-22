@@ -184,6 +184,12 @@ public sealed class AppSettings
     public bool OpenExplorerInNewTab { get; set; }
 
     /// <summary>
+    /// Right-click menu of items: <c>app</c> (the app's own menu) or <c>windows</c> (Explorer's
+    /// menu with the app's entries on top of it).
+    /// </summary>
+    public string? ItemMenu { get; set; } = ItemMenuStyles.App;
+
+    /// <summary>
     /// Upper limit, in megabytes, of the thumbnail cache kept in the data folder (<c>thumbs</c>);
     /// 0 turns the disk cache off. Read at startup.
     /// </summary>
@@ -390,6 +396,7 @@ public sealed class AppSettings
         CardShape = CardShapes.ToSetting(CardShapes.FromSetting(CardShape));
         DetailsColumns = Layout.DetailsColumns.Normalize(DetailsColumns);
         Theme = AppThemes.ToSetting(AppThemes.FromSetting(Theme));
+        ItemMenu = ItemMenuStyles.ToSetting(ItemMenuStyles.FromSetting(ItemMenu));
         RecentLimit = Math.Clamp(RecentLimit, 10, 500);
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
         ThumbCacheMb = Math.Clamp(ThumbCacheMb, 0, ThumbCacheMbMax);

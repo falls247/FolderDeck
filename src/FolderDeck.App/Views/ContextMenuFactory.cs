@@ -2,13 +2,19 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Paths;
 using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
 using FolderDeck.ViewModels;
 
 namespace FolderDeck.Views;
 
-/// <summary>The app's own right-click menu (§11), shared by cards, overlay rows, flyout rows, headers and sidebar rows.</summary>
+/// <summary>
+/// The app's own right-click menu (§11), shared by cards, overlay rows, flyout rows, headers and
+/// sidebar rows. The entries of an item are built once (<see cref="MenuEntry"/>) and shown either as
+/// a WPF menu or, with the setting 「Windows のメニュー」, on top of Explorer's own menu.
+/// </summary>
 public sealed class ContextMenuFactory
 {
     private readonly MainViewModel _vm;
@@ -27,31 +33,48 @@ public sealed class ContextMenuFactory
     public Action? BeforeNavigate { get; set; }
 
     /// <summary>
-    /// Explorer's own menu (「その他のメニュー（Windows）」) opens (true) or has closed (false). True is
-    /// raised synchronously from the item's Click, before the menu is built; false follows every
-    /// outcome (also a menu that never showed or timed out), before the result is acted on.
+    /// Explorer's own menu opens (true) or has closed (false). True is raised synchronously, before
+    /// the menu is built: from the Click of 「その他のメニュー（Windows）」, or, with the setting
+    /// 「Windows のメニュー」, from the right click itself (<see cref="Show"/>). False follows every
+    /// outcome (also a menu that never showed or timed out), before the result is acted on (also
+    /// before a picked app entry runs or the WPF menu is shown instead).
     /// </summary>
     public event Action<bool>? NativeMenuChanged;
 
     /// <summary>Explorer menus asked for and not finished yet (normally 0 or 1).</summary>
     private int _nativeMenus;
 
+    /// <summary>How long a path whose Explorer menu timed out gets the WPF menu directly (「Windows のメニュー」).</summary>
+    private static readonly TimeSpan TimedOutSkip = TimeSpan.FromMinutes(5);
+
+    /// <summary>Paths whose Explorer menu timed out, with Environment.TickCount64 at the timeout (UI thread only).</summary>
+    private readonly Dictionary<string, long> _timedOut = new(PathTools.Comparer);
+
     /// <summary>
     /// The menu of one item, or with <paramref name="group"/> (more than one item: the selection the
     /// clicked item is part of, in display order) the short menu of the whole group: 切り取り,
-    /// コピー and パスをコピー. The caller decides the group (cascade rows and headers have none).
+    /// コピー, パスをコピー and 削除. The caller decides the group (cascade rows and headers have none).
+    /// With the setting 「Windows のメニュー」 an item Explorer's menu can be shown for gets that menu
+    /// with these entries on top (built off the UI thread; the cascade is frozen meanwhile).
     /// </summary>
     public void Show(ItemRef item, FrameworkElement target, IReadOnlyList<ItemRef>? group = null)
     {
         // Where Explorer's menu will appear, and whether it gets the extended entries: read now, at
         // the right click, not when its item is clicked.
         var at = NativeMenuPoint.Capture(target);
-        if (group is { Count: > 1 })
-        {
-            ShowGroup(group, target, at);
-            return;
-        }
+        var entries = group is { Count: > 1 }
+            ? GroupEntries(group, out var nativePaths, out bool nativeEnabled)
+            : ItemEntries(item, out nativePaths, out nativeEnabled);
+        ShowEntries(entries, target, at, nativePaths, nativeEnabled);
+    }
 
+    /// <summary>
+    /// The entries of one item. <paramref name="nativePaths"/>: what Explorer's menu is for (null
+    /// for a drive: its menu would offer フォーマット); <paramref name="nativeEnabled"/>: whether it
+    /// can be shown (a usable item that is not a root).
+    /// </summary>
+    private List<MenuEntry> ItemEntries(ItemRef item, out IReadOnlyList<string>? nativePaths, out bool nativeEnabled)
+    {
         var card = item.Card;
 
         // The 登録フォルダ row of the sidebar this menu is for (null for cards, rows and headers).
@@ -63,55 +86,52 @@ public sealed class ContextMenuFactory
         // offers to reconnect it) and have its path copied; only opening it here is off.
         bool drive = item.Context == ItemContext.Drive;
         bool topCard = card?.IsTopLevel == true;
-        var menu = new ContextMenu
-        {
-            PlacementTarget = target,
-            Placement = PlacementMode.MousePoint,
-        };
+        var entries = new List<MenuEntry>();
 
-        menu.Items.Add(Item("開く", "", !disabled, () =>
+        // The default entry of Explorer's menu (in place of the shell's open).
+        entries.Add(new("開く", OpenGlyph, !disabled, () =>
         {
             BeforeNavigate?.Invoke();
             _ = card is not null ? _vm.ActivateCardAsync(card) : _vm.OpenItemAsync(item);
-        }));
-        menu.Items.Add(Item("エクスプローラーで表示", "", !disabled || drive, () => _ = _vm.ShowInExplorerAsync(item)));
-        menu.Items.Add(Item("パスをコピー", "", !disabled || drive, () => _vm.CopyPath(item)));
-        AddClipboardItems(menu, [item], item);
+        }, IsDefault: true));
+        entries.Add(new("エクスプローラーで表示", ExplorerGlyph, !disabled || drive, () => _ = _vm.ShowInExplorerAsync(item)));
+        entries.Add(new("パスをコピー", CopyGlyph, !disabled || drive, () => _vm.CopyPath(item)));
+        AddClipboardEntries(entries, [item], item);
 
         bool pinned = _vm.IsPinned(item.Path);
         bool canRegister = item.IsFolder && item.Context != ItemContext.Sidebar && !_vm.IsRegistered(item.Path);
         if (!drive || canRegister)
         {
-            menu.Items.Add(new Separator());
+            entries.Add(MenuEntry.Separator);
         }
 
         if (!drive)
         {
-            menu.Items.Add(Item(pinned ? "ピン留めを外す" : "ピン留めする", pinned ? "" : "", !disabled, () => _vm.TogglePin(item)));
+            entries.Add(new(pinned ? "ピン留めを外す" : "ピン留めする", pinned ? UnpinGlyph : PinGlyph, !disabled, () => _vm.TogglePin(item)));
         }
 
         if (canRegister)
         {
             // Any folder that is not on the sidebar yet (a card of 最近の履歴 / よく使う項目, a card or
             // row inside a folder, a flyout header) can be put there.
-            menu.Items.Add(Item("登録フォルダに追加", "", !disabled, () => _ = _vm.AddToRegisteredAsync(item)));
+            entries.Add(new("登録フォルダに追加", AddGlyph, !disabled, () => _ = _vm.AddToRegisteredAsync(item)));
         }
 
         if (MainViewModel.CanDelete(item))
         {
-            menu.Items.Add(new Separator());
-            menu.Items.Add(Item("削除（ごみ箱へ移動）", "", true, () =>
+            entries.Add(MenuEntry.Separator);
+            entries.Add(new("削除（ごみ箱へ移動）", DeleteGlyph, true, () =>
             {
                 BeforeNavigate?.Invoke(); // the confirmation and the reload replace the cascade
-                _ = _vm.DeleteAsync(item);
+                _ = _vm.DeleteAsync([item]);
             }));
         }
 
         if (registered is not null)
         {
             // Also for a missing folder: that is how it gets off the sidebar.
-            menu.Items.Add(new Separator());
-            menu.Items.Add(Item("登録を解除", "", true, () =>
+            entries.Add(MenuEntry.Separator);
+            entries.Add(new("登録を解除", RemoveGlyph, true, () =>
             {
                 BeforeNavigate?.Invoke();
                 _vm.Unregister(registered);
@@ -123,23 +143,88 @@ public sealed class ContextMenuFactory
             switch (card.OwnerTab)
             {
                 case TabKind.Recent:
-                    menu.Items.Add(new Separator());
-                    menu.Items.Add(Item("履歴から外す", "", true, () => _vm.ExcludeFromRecent(card)));
+                    entries.Add(MenuEntry.Separator);
+                    entries.Add(new("履歴から外す", RemoveGlyph, true, () => _vm.ExcludeFromRecent(card)));
                     break;
                 case TabKind.Frequent when !pinned:
-                    menu.Items.Add(new Separator());
-                    menu.Items.Add(Item("一覧から外す", "", true, () => _vm.RemoveFromFrequent(card)));
+                    entries.Add(MenuEntry.Separator);
+                    entries.Add(new("一覧から外す", RemoveGlyph, true, () => _vm.RemoveFromFrequent(card)));
                     break;
             }
         }
 
-        if (!drive)
+        // Not on a drive row: a drive's menu would offer フォーマット.
+        nativePaths = drive ? null : [item.Path];
+        nativeEnabled = !disabled && TransferRules.IsTransferable(item.Path);
+        return entries;
+    }
+
+    /// <summary>
+    /// Several selected items: only what applies to all of them at once (切り取り, コピー, パスをコピー,
+    /// 削除). No default entry: Explorer's menu keeps the shell's open (the app cannot open several).
+    /// </summary>
+    private List<MenuEntry> GroupEntries(IReadOnlyList<ItemRef> group, out IReadOnlyList<string>? nativePaths, out bool nativeEnabled)
+    {
+        var entries = new List<MenuEntry>();
+        AddClipboardEntries(entries, group, pasteItem: null, separator: false);
+        entries.Add(new("パスをコピー", CopyGlyph, true, () => _vm.CopyPaths(group)));
+        if (group.All(MainViewModel.CanDelete))
         {
-            // Not on a drive row: a drive's menu would offer フォーマット.
-            AddNativeItem(menu, [item.Path], !disabled && TransferRules.IsTransferable(item.Path), at);
+            // One confirmation and one Recycle Bin operation for the whole selection.
+            entries.Add(MenuEntry.Separator);
+            entries.Add(new("削除（ごみ箱へ移動）", DeleteGlyph, true, () =>
+            {
+                BeforeNavigate?.Invoke(); // the confirmation and the reload replace the cascade
+                _ = _vm.DeleteAsync(group);
+            }));
+        }
+
+        // Explorer's menu of the whole selection (one menu for every item, as with a selection in
+        // Explorer): only when every item is usable and not a root.
+        nativePaths = group.Select(i => i.Path).ToList();
+        nativeEnabled = group.All(MainViewModel.CanCopy);
+        return entries;
+    }
+
+    /// <summary>
+    /// Explorer's menu with the entries on top when the setting asks for it and the items allow it;
+    /// else the WPF menu (with 「その他のメニュー（Windows）」 last in the app's mode only).
+    /// </summary>
+    private void ShowEntries(List<MenuEntry> entries, FrameworkElement target, NativeMenuPoint at, IReadOnlyList<string>? nativePaths, bool nativeEnabled)
+    {
+        bool windowsMenu = _vm.UsesWindowsItemMenu;
+        if (nativePaths is not null && nativeEnabled && windowsMenu && !TimedOutRecently(nativePaths))
+        {
+            if (_nativeMenus > 0)
+            {
+                // A second right click while Explorer's menu is being built: the shell would answer
+                // 「別のメニューを表示中」 and the WPF menu would open on top of the native one.
+                return;
+            }
+
+            _ = ShowNativeAsync(nativePaths, at, entries, target);
+            return;
+        }
+
+        var menu = Render(entries, target);
+        if (nativePaths is not null && !windowsMenu)
+        {
+            AddNativeItem(menu, nativePaths, nativeEnabled, at);
         }
 
         Open(menu);
+    }
+
+    /// <summary>The WPF menu of <paramref name="entries"/> (IsDefault is not shown there).</summary>
+    private static ContextMenu Render(IReadOnlyList<MenuEntry> entries, FrameworkElement target)
+    {
+        var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
+        foreach (var entry in entries)
+        {
+            menu.Items.Add(entry.IsSeparator ? new Separator() : Item(entry.Header!, entry.Glyph, entry.Enabled, entry.Action!));
+        }
+
+        return menu;
     }
 
     /// <summary>The menu of the blank area of the item list: 貼り付け (into the folder shown) and 最新の情報に更新.</summary>
@@ -153,16 +238,11 @@ public sealed class ContextMenuFactory
         Open(menu);
     }
 
-    /// <summary>Several selected items: only what applies to all of them at once.</summary>
-    private void ShowGroup(IReadOnlyList<ItemRef> group, FrameworkElement target, NativeMenuPoint at)
+    /// <summary>The menu of the PC section header: エクスプローラーで開く (This PC).</summary>
+    public void ShowPcSection(FrameworkElement target)
     {
         var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
-        AddClipboardItems(menu, group, pasteItem: null, separator: false);
-        menu.Items.Add(Item("パスをコピー", CopyGlyph, true, () => _vm.CopyPaths(group)));
-
-        // Explorer's menu of the whole selection (one menu for every item, as with a selection in
-        // Explorer): only when every item is usable and not a root.
-        AddNativeItem(menu, group.Select(i => i.Path).ToList(), group.All(MainViewModel.CanCopy), at);
+        menu.Items.Add(Item("エクスプローラーで開く", ExplorerGlyph, true, () => _ = _vm.OpenPcInExplorerAsync()));
         Open(menu);
     }
 
@@ -178,7 +258,15 @@ public sealed class ContextMenuFactory
         menu.Items.Add(Item("その他のメニュー（Windows）", NativeMenuGlyph, enabled, () => _ = ShowNativeAsync(paths, at)));
     }
 
-    private async Task ShowNativeAsync(IReadOnlyList<string> paths, NativeMenuPoint at)
+    /// <summary>
+    /// Explorer's menu for <paramref name="paths"/>; with <paramref name="app"/> (the setting
+    /// 「Windows のメニュー」) those entries go on top of it, and a picked one runs here, on the UI
+    /// thread. When Explorer's menu cannot be shown before it appears (unavailable, failed before
+    /// showing, or timed out while being built), the WPF menu of <paramref name="app"/> opens at the
+    /// same point instead; after a timeout with a short notice, and those paths then get the WPF
+    /// menu directly for <see cref="TimedOutSkip"/>.
+    /// </summary>
+    private async Task ShowNativeAsync(IReadOnlyList<string> paths, NativeMenuPoint at, IReadOnlyList<MenuEntry>? app = null, FrameworkElement? target = null)
     {
         // Synchronously, before anything is awaited: the cascade must be frozen before the menu
         // thread can take the foreground (the window's Deactivated would close it).
@@ -190,7 +278,8 @@ public sealed class ContextMenuFactory
         ShellMenuResult result;
         try
         {
-            result = await ShellContextMenu.ShowAsync(paths, at.X, at.Y, at.Extended, _vm.View?.WindowHandle ?? 0);
+            var appEntries = app?.Select(e => new ShellMenuAppEntry(e.Header ?? "", e.Enabled, e.IsSeparator, e.IsDefault)).ToArray();
+            result = await ShellContextMenu.ShowAsync(paths, at.X, at.Y, at.Extended, _vm.View?.WindowHandle ?? 0, appEntries);
         }
         catch (Exception ex)
         {
@@ -204,15 +293,121 @@ public sealed class ContextMenuFactory
             }
         }
 
+        if (app is not null)
+        {
+            // After the unfreeze, as a WPF entry's Click: its BeforeNavigate closes the cascade.
+            if (result.Outcome == ShellMenuOutcome.AppCommand)
+            {
+                if (result.AppIndex >= 0 && result.AppIndex < app.Count
+                    && app[result.AppIndex] is { IsSeparator: false, Enabled: true, Action: not null } entry)
+                {
+                    RunEntry(entry);
+                }
+
+                return;
+            }
+
+            if (result.Outcome == ShellMenuOutcome.TimedOut)
+            {
+                // Never shown and it will not appear later (the stage is cancelled before
+                // TrackPopupMenuEx). The paths skip Explorer's menu for a while, so that each right
+                // click does not freeze the cascade again and leave one more hung thread.
+                AppLog.Info("Explorer's menu timed out, the app's menu instead");
+                RememberTimedOut(paths);
+                _vm.Message.Info("エクスプローラーのメニューが時間内に準備できなかったため、アプリのメニューを出しました。");
+                OpenFallback(app, target, at);
+                return;
+            }
+
+            if (result.Outcome == ShellMenuOutcome.Unavailable
+                || (result.Outcome == ShellMenuOutcome.Failed && !result.Shown))
+            {
+                // Nothing appeared: the user still gets a menu, without a warning.
+                AppLog.Info($"Explorer's menu not shown ({result.Error}), the app's menu instead");
+                OpenFallback(app, target, at);
+                return;
+            }
+        }
+
         // After the unfreeze: the reload after a command closes the cascade, which a frozen one ignores.
         await _vm.OnShellMenuClosedAsync(result);
+    }
+
+    /// <summary>
+    /// Runs an entry picked in Explorer's menu. Outside a Click, an exception would not reach the
+    /// dispatcher's handler but vanish in the discarded task.
+    /// </summary>
+    private void RunEntry(MenuEntry entry)
+    {
+        try
+        {
+            entry.Action!();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("App menu entry failed", ex);
+            _vm.Message.Error("操作できませんでした。");
+        }
+    }
+
+    private void RememberTimedOut(IReadOnlyList<string> paths)
+    {
+        long now = Environment.TickCount64;
+        foreach (var path in paths)
+        {
+            _timedOut[path] = now;
+        }
+    }
+
+    /// <summary>
+    /// Whether one of <paramref name="paths"/> timed out within <see cref="TimedOutSkip"/> (expired
+    /// entries are dropped, so a shell extension that was only slow at startup gets another try).
+    /// </summary>
+    private bool TimedOutRecently(IReadOnlyList<string> paths)
+    {
+        if (_timedOut.Count == 0)
+        {
+            return false;
+        }
+
+        long now = Environment.TickCount64;
+        foreach (var expired in _timedOut.Where(p => now - p.Value >= (long)TimedOutSkip.TotalMilliseconds).Select(p => p.Key).ToList())
+        {
+            _timedOut.Remove(expired);
+        }
+
+        return paths.Any(_timedOut.ContainsKey);
+    }
+
+    /// <summary>
+    /// The WPF menu of <paramref name="entries"/> at the screen point of the right click (without
+    /// 「その他のメニュー（Windows）」), opened at once, without an await after the unfreeze.
+    /// </summary>
+    private void OpenFallback(IReadOnlyList<MenuEntry> entries, FrameworkElement? target, NativeMenuPoint at)
+    {
+        FrameworkElement? anchor = target is { IsVisible: true } && PresentationSource.FromVisual(target) is not null
+            ? target
+            : Application.Current.MainWindow;
+        if (anchor is null || PresentationSource.FromVisual(anchor) is null)
+        {
+            return;
+        }
+
+        var menu = Render(entries, anchor);
+        menu.Placement = PlacementMode.Relative;
+
+        // Physical pixels to DIP of the anchor.
+        var offset = anchor.PointFromScreen(new Point(at.X, at.Y));
+        menu.HorizontalOffset = offset.X;
+        menu.VerticalOffset = offset.Y;
+        Open(menu);
     }
 
     /// <summary>
     /// 切り取り and コピー when every item allows them, and 貼り付け into <paramref name="pasteItem"/>
     /// when that is a folder (or a usable drive row), enabled while the clipboard offers files.
     /// </summary>
-    private void AddClipboardItems(ContextMenu menu, IReadOnlyList<ItemRef> items, ItemRef? pasteItem, bool separator = true)
+    private void AddClipboardEntries(List<MenuEntry> entries, IReadOnlyList<ItemRef> items, ItemRef? pasteItem, bool separator = true)
     {
         bool cut = items.All(MainViewModel.CanCut);
         bool copy = items.All(MainViewModel.CanCopy);
@@ -224,22 +419,22 @@ public sealed class ContextMenuFactory
 
         if (separator)
         {
-            menu.Items.Add(new Separator());
+            entries.Add(MenuEntry.Separator);
         }
 
         if (cut)
         {
-            menu.Items.Add(Item("切り取り", CutGlyph, true, () => _vm.CopyToClipboard(items, cut: true)));
+            entries.Add(new("切り取り", CutGlyph, true, () => _vm.CopyToClipboard(items, cut: true)));
         }
 
         if (copy)
         {
-            menu.Items.Add(Item("コピー", CopyGlyph, true, () => _vm.CopyToClipboard(items, cut: false)));
+            entries.Add(new("コピー", CopyGlyph, true, () => _vm.CopyToClipboard(items, cut: false)));
         }
 
         if (pasteFolder is not null)
         {
-            menu.Items.Add(Item("貼り付け", PasteGlyph, _vm.CanPaste(pasteFolder), () =>
+            entries.Add(new("貼り付け", PasteGlyph, _vm.CanPaste(pasteFolder), () =>
             {
                 BeforeNavigate?.Invoke(); // the transfer reloads the list the cascade hangs on
                 _ = _vm.PasteAsync(pasteFolder);
@@ -254,12 +449,31 @@ public sealed class ContextMenuFactory
         menu.IsOpen = true;
     }
 
-    // Segoe Fluent Icons: Cut, Copy (also パスをコピー), Paste, Refresh, More.
+    // Segoe Fluent Icons (named in the comments where the constant's name does not say it).
+    private const string OpenGlyph = "\uE8E5"; // Open
+    private const string PinGlyph = "\uE718"; // Pin
+    private const string UnpinGlyph = "\uE77A"; // Unpin
+    private const string AddGlyph = "\uE710"; // Add
+    private const string RemoveGlyph = "\uE711"; // Cancel (remove from a list)
     private const string CutGlyph = "\uE8C6";
     private const string CopyGlyph = "\uE8C8";
     private const string PasteGlyph = "\uE77F";
     private const string RefreshGlyph = "\uE72C";
+    private const string DeleteGlyph = "\uE74D"; // Delete
+    private const string ExplorerGlyph = "\uEC50"; // File Explorer
     private const string NativeMenuGlyph = "\uE712"; // More (…)
+
+    /// <summary>
+    /// One entry of an item's menu, rendered as a WPF <see cref="MenuItem"/> or handed to Explorer's
+    /// menu (text only). A null <see cref="Header"/> is a separator. <see cref="IsDefault"/> is the
+    /// default (bold) entry of Explorer's menu.
+    /// </summary>
+    private sealed record MenuEntry(string? Header, string Glyph, bool Enabled, Action? Action, bool IsDefault = false)
+    {
+        public static MenuEntry Separator { get; } = new(null, "", false, null);
+
+        public bool IsSeparator => Header is null;
+    }
 
     /// <summary>The pointer in screen pixels and the Shift state when the app's menu was asked for.</summary>
     private readonly record struct NativeMenuPoint(int X, int Y, bool Extended)

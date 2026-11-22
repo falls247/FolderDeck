@@ -29,6 +29,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _openExplorerInNewTab;
 
+    /// <summary>Right-click menu of items: the app's or Explorer's. The two switches below show and set it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsItemMenuApp), nameof(IsItemMenuWindows))]
+    private ItemMenuStyle _itemMenu;
+
     [ObservableProperty]
     private string _recentLimitText;
 
@@ -52,6 +57,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _includeWindowsRecent = settings.IncludeWindowsRecent;
         _addToWindowsRecent = settings.AddToWindowsRecent;
         _openExplorerInNewTab = settings.OpenExplorerInNewTab;
+        _itemMenu = ItemMenuStyles.FromSetting(settings.ItemMenu);
         _recentLimitText = settings.RecentLimit.ToString(CultureInfo.InvariantCulture);
         _frequentLimitText = settings.FrequentLimit.ToString(CultureInfo.InvariantCulture);
         _thumbCacheMbText = settings.ThumbCacheMb.ToString(CultureInfo.InvariantCulture);
@@ -75,6 +81,19 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         get => Theme == AppTheme.Dark;
         set => SelectTheme(value, AppTheme.Dark);
+    }
+
+    // Same as the theme: only "checked" counts.
+    public bool IsItemMenuApp
+    {
+        get => ItemMenu == ItemMenuStyle.App;
+        set => SelectItemMenu(value, ItemMenuStyle.App);
+    }
+
+    public bool IsItemMenuWindows
+    {
+        get => ItemMenu == ItemMenuStyle.Windows;
+        set => SelectItemMenu(value, ItemMenuStyle.Windows);
     }
 
     public Func<string?>? ResetStatsAction { get; init; }
@@ -123,6 +142,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
+    private void SelectItemMenu(bool selected, ItemMenuStyle style)
+    {
+        if (selected)
+        {
+            ItemMenu = style;
+        }
+    }
+
     public void ApplyTo(AppSettings settings)
     {
         settings.Theme = AppThemes.ToSetting(Theme);
@@ -131,6 +158,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.IncludeWindowsRecent = IncludeWindowsRecent;
         settings.AddToWindowsRecent = AddToWindowsRecent;
         settings.OpenExplorerInNewTab = OpenExplorerInNewTab;
+        settings.ItemMenu = ItemMenuStyles.ToSetting(ItemMenu);
         settings.RecentLimit = RecentLimit;
         settings.FrequentLimit = FrequentLimit;
         settings.ThumbCacheMb = ThumbCacheMb;

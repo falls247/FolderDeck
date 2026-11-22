@@ -7,7 +7,7 @@
          クイック アクセス: 最近の履歴 / よく使う項目 (a click opens or shows that tab).
          登録フォルダ: one row per folder (name only). Resting on a row opens the cascade beside it,
          a click opens the folder in a new tab, a drag moves the row (or hands the folder to another app).
-         PC: one row per drive; the same hover and click, no drag. -->
+         PC: one row per drive; the same hover and click, no drag; right-click on the header: エクスプローラーで開く. -->
     <UserControl.Resources>
         <!-- Header of a section (DataContext: SidebarSectionViewModel). The whole header folds or
              unfolds the section; Tag is an optional text after the title (a count). -->
@@ -190,7 +190,8 @@
                     Visibility="Collapsed" IsHitTestVisible="False" />
         </Grid>
 
-        <Button Grid.Row="4" Margin="6,2,6,0" Style="{StaticResource SectionHeader}" DataContext="{Binding PcSection}" />
+        <Button Grid.Row="4" Margin="6,2,6,0" Style="{StaticResource SectionHeader}" DataContext="{Binding PcSection}"
+                MouseRightButtonUp="OnPcHeaderRightUp" ToolTip="クリックで折りたたむ / 開く（右クリックでエクスプローラーで開く）" />
 
         <!-- The drives. Not a drop target: a dragged 登録フォルダ row is refused here (the window's OnDragOver). -->
         <ScrollViewer x:Name="PcScroller" Grid.Row="5" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False"

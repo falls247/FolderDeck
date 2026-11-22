@@ -33,15 +33,34 @@ public enum ShellMenuOutcome
     /// <summary>The menu was not ready in time (a slow or hung shell extension). It will not appear later.</summary>
     TimedOut,
 
-    /// <summary>An unexpected error on the menu thread.</summary>
+    /// <summary>
+    /// An unexpected error on the menu thread. It may come before or after the menu showed (see
+    /// <see cref="ShellMenuResult.Shown"/>).
+    /// </summary>
     Failed,
+
+    /// <summary>
+    /// One of the caller's entries (put above the shell's) was picked: see
+    /// <see cref="ShellMenuResult.AppIndex"/>. Nothing was handed to the shell; the caller runs it.
+    /// </summary>
+    AppCommand,
 }
 
 /// <summary>
 /// <c>Verb</c> is the canonical verb of the invoked command when the handler names one
-/// (<c>open</c>, <c>properties</c>…), else null.
+/// (<c>open</c>, <c>properties</c>…), else null. <c>AppIndex</c> is, for
+/// <see cref="ShellMenuOutcome.AppCommand"/> only, the index of the picked entry in the list the
+/// caller passed (else -1). <c>Shown</c> is whether the menu was on screen (or had been) when the
+/// result was reported.
 /// </summary>
-public sealed record ShellMenuResult(ShellMenuOutcome Outcome, string? Verb, string? Error);
+public sealed record ShellMenuResult(ShellMenuOutcome Outcome, string? Verb, string? Error, int AppIndex = -1, bool Shown = false);
+
+/// <summary>
+/// An entry of the caller's own, put above the shell's entries. Win32 menus get the text only (no
+/// glyph). When an entry is <c>IsDefault</c>, the shell's <c>open</c> is taken out and this entry
+/// becomes the default (bold) one.
+/// </summary>
+public readonly record struct ShellMenuAppEntry(string Text, bool Enabled, bool IsSeparator, bool IsDefault);
 
 /// <summary>
 /// Shows Explorer's own context menu (<c>IContextMenu</c>) for files and folders, so that entries of
@@ -57,6 +76,14 @@ public sealed record ShellMenuResult(ShellMenuOutcome Outcome, string? Verb, str
 /// The entries for delete, rename, cut, copy and paste are removed: the app has its own, and the
 /// shell's delete can be permanent. Only one menu is open at a time.
 /// </para>
+/// <para>
+/// The caller may put its own entries at the top (<see cref="ShellMenuAppEntry"/>, then a
+/// separator, then the shell's). They get the ids from <see cref="AppFirstId"/> up, outside the
+/// range handed to the handlers, are never asked for a verb and are never invoked here: a picked
+/// one is reported as <see cref="ShellMenuOutcome.AppCommand"/>. With such entries the shell's
+/// <c>copyaspath</c> is taken out too (the app has its own パスをコピー), and the shell's
+/// <c>open</c> as well when one of them is the default. They are plain strings, not owner-drawn.
+/// </para>
 /// </summary>
 public static class ShellContextMenu
 {
@@ -64,6 +91,14 @@ public static class ShellContextMenu
     // range starts at 1.
     private const uint FirstId = 1;
     private const uint LastId = 0x7FFF;
+
+    // Ids of the caller's entries: far above LastId (some handlers go slightly past idCmdLast) and
+    // below the SC_* system command ids.
+    private const uint AppFirstId = 0xE000;
+    private const uint AppIdLimit = 0xF000;
+
+    /// <summary><c>fByPos</c> of SetMenuDefaultItem: the item is named by its command id.</summary>
+    private const uint SetDefaultByCommand = 0;
 
     private const uint CMF_NORMAL = 0x0000;
     private const uint CMF_EXTENDEDVERBS = 0x0100;
@@ -122,6 +157,14 @@ public static class ShellContextMenu
     private static readonly HashSet<string> RemovedVerbs =
         new(StringComparer.OrdinalIgnoreCase) { "delete", "rename", "cut", "copy", "paste" };
 
+    /// <summary>
+    /// Also taken out when the caller puts its own entries in: they duplicate the app's. Not
+    /// refused after a pick like <see cref="RemovedVerbs"/> (they are harmless). "open" is added
+    /// when a caller's entry is the default; it must never go into RemovedVerbs.
+    /// </summary>
+    private static readonly HashSet<string> RemovedWithAppEntries =
+        new(StringComparer.OrdinalIgnoreCase) { "copyaspath" };
+
     /// <summary>1 while a menu is being built or shown (not while a finished one still pumps).</summary>
     private static int _open;
 
@@ -134,10 +177,24 @@ public static class ShellContextMenu
     /// when the app's own menu opened). <paramref name="mainWindow"/> gets the foreground back
     /// afterwards, but only if nothing else took it meanwhile. Roots (drives, shares) are refused.
     /// </para>
+    /// <para>
+    /// <paramref name="appEntries"/> are put at the top of the menu (see the class remarks); the
+    /// caller runs a picked one itself (<see cref="ShellMenuOutcome.AppCommand"/>).
+    /// </para>
     /// </summary>
-    public static Task<ShellMenuResult> ShowAsync(IReadOnlyList<string> paths, int screenX, int screenY, bool extended, nint mainWindow)
+    public static Task<ShellMenuResult> ShowAsync(
+        IReadOnlyList<string> paths, int screenX, int screenY, bool extended, nint mainWindow,
+        IReadOnlyList<ShellMenuAppEntry>? appEntries = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
+        Debug.Assert(AppFirstId > LastId);
+
+        // A copy, as for the paths.
+        ShellMenuAppEntry[] app = appEntries?.ToArray() ?? [];
+        if (app.Length > AppIdLimit - AppFirstId)
+        {
+            throw new ArgumentException("Too many menu entries.", nameof(appEntries));
+        }
 
         // A copy: the caller's list must not change under the menu thread.
         var seen = new HashSet<string>(PathTools.Comparer);
@@ -161,7 +218,7 @@ public static class ShellContextMenu
             return Task.FromResult(new ShellMenuResult(ShellMenuOutcome.Unavailable, null, "別のメニューを表示中です。"));
         }
 
-        var session = new Session(targets, screenX, screenY, extended, mainWindow);
+        var session = new Session(targets, screenX, screenY, extended, mainWindow, app);
         session.Start();
         return session.Completion;
     }
@@ -215,11 +272,13 @@ public static class ShellContextMenu
     }
 
     /// <summary>
-    /// Takes the app's own operations out of the top level of the menu. An entry whose verb cannot
-    /// be read stays. Returns whether the handler named a verb for any entry at all: when it names
-    /// none, nothing can be recognised and the shell's delete may still be in the menu.
+    /// Takes the app's own operations out of the top level of the menu, and the verbs of
+    /// <paramref name="extra"/>. An entry whose verb cannot be read stays; the caller's entries
+    /// (ids above <see cref="LastId"/>) are not touched. Returns whether the handler named a verb
+    /// for any shell entry at all: when it names none, nothing can be recognised and the shell's
+    /// delete may still be in the menu.
     /// </summary>
-    private static bool RemoveVerbs(IContextMenu contextMenu, HMENU menu)
+    private static bool RemoveVerbs(IContextMenu contextMenu, HMENU menu, HashSet<string>? extra)
     {
         bool anyVerb = false;
         for (int i = PInvoke.GetMenuItemCount(menu) - 1; i >= 0; i--)
@@ -239,7 +298,7 @@ public static class ShellContextMenu
             }
 
             anyVerb = true;
-            if (RemovedVerbs.Contains(verb))
+            if (RemovedVerbs.Contains(verb) || extra?.Contains(verb) == true)
             {
                 PInvoke.DeleteMenu(menu, (uint)i, MENU_ITEM_FLAGS.MF_BYPOSITION);
             }
@@ -371,6 +430,9 @@ public static class ShellContextMenu
         private readonly int _y;
         private readonly bool _extended;
         private readonly nint _mainWindow;
+
+        /// <summary>The caller's entries, at the top of the menu (may be empty).</summary>
+        private readonly ShellMenuAppEntry[] _app;
         private readonly TaskCompletionSource<ShellMenuResult> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>
@@ -386,13 +448,14 @@ public static class ShellContextMenu
         private IContextMenu2? _menu2;
         private IContextMenu3? _menu3;
 
-        public Session(List<string> paths, int x, int y, bool extended, nint mainWindow)
+        public Session(List<string> paths, int x, int y, bool extended, nint mainWindow, ShellMenuAppEntry[] app)
         {
             _paths = paths;
             _x = x;
             _y = y;
             _extended = extended;
             _mainWindow = mainWindow;
+            _app = app;
         }
 
         public Task<ShellMenuResult> Completion => _result.Task;
@@ -436,8 +499,55 @@ public static class ShellContextMenu
             Complete(ShellMenuOutcome.TimedOut, null, TimedOutMessage);
         }
 
+        /// <summary>
+        /// Appends the caller's entries (and a separator after them) to the still empty menu.
+        /// <paramref name="shellIndex"/> is where the shell's entries go. False when the menu
+        /// could not be filled.
+        /// </summary>
+        private bool InsertAppEntries(HMENU menu, out uint shellIndex)
+        {
+            shellIndex = 0;
+            for (int i = 0; i < _app.Length; i++)
+            {
+                var entry = _app[i];
+                bool ok = entry.IsSeparator
+                    ? PInvoke.AppendMenu(menu, MENU_ITEM_FLAGS.MF_SEPARATOR, 0, null)
+                    : AppendString(
+                        menu,
+                        MENU_ITEM_FLAGS.MF_STRING | (entry.Enabled ? default : MENU_ITEM_FLAGS.MF_GRAYED),
+                        AppFirstId + (uint)i,
+                        entry.Text.Replace("&", "&&", StringComparison.Ordinal)); // no mnemonics
+                if (!ok)
+                {
+                    return false;
+                }
+            }
+
+            if (_app.Length > 0 && !PInvoke.AppendMenu(menu, MENU_ITEM_FLAGS.MF_SEPARATOR, 0, null))
+            {
+                return false;
+            }
+
+            int count = PInvoke.GetMenuItemCount(menu);
+            if (count < 0)
+            {
+                return false;
+            }
+
+            shellIndex = (uint)count;
+            return true;
+        }
+
+        private static unsafe bool AppendString(HMENU menu, MENU_ITEM_FLAGS flags, uint id, string text)
+        {
+            fixed (char* chars = text)
+            {
+                return PInvoke.AppendMenu(menu, flags, id, chars);
+            }
+        }
+
         /// <summary>Reports the result once; later calls are ignored. Any thread.</summary>
-        private void Complete(ShellMenuOutcome outcome, string? verb, string? error)
+        private void Complete(ShellMenuOutcome outcome, string? verb, string? error, int appIndex = -1)
         {
             if (Interlocked.Exchange(ref _completed, 1) != 0)
             {
@@ -448,7 +558,7 @@ public static class ShellContextMenu
 
             // Before the result: a continuation may ask for the next menu at once.
             Volatile.Write(ref _open, 0);
-            _result.TrySetResult(new ShellMenuResult(outcome, verb, error));
+            _result.TrySetResult(new ShellMenuResult(outcome, verb, error, appIndex, Volatile.Read(ref _stage) == StageShowing));
         }
 
         private unsafe void Run(Dispatcher dispatcher)
@@ -487,15 +597,33 @@ public static class ShellContextMenu
                     return;
                 }
 
+                // The caller's entries first; the shell's go below them.
+                if (!InsertAppEntries(menu, out uint shellIndex))
+                {
+                    Complete(ShellMenuOutcome.Unavailable, null, "メニューを作成できませんでした。");
+                    return;
+                }
+
                 // The count in the return value is not needed: TPM_RETURNCMD and the id range do.
-                HRESULT filled = contextMenu.QueryContextMenu(menu, 0, FirstId, LastId, CMF_NORMAL | (_extended ? CMF_EXTENDEDVERBS : 0u));
+                HRESULT filled = contextMenu.QueryContextMenu(menu, shellIndex, FirstId, LastId, CMF_NORMAL | (_extended ? CMF_EXTENDEDVERBS : 0u));
                 if (filled.Failed)
                 {
                     Complete(ShellMenuOutcome.Unavailable, null, MessageOf(filled));
                     return;
                 }
 
-                bool anyVerb = RemoveVerbs(contextMenu, menu);
+                HashSet<string>? extra = null;
+                if (_app.Length > 0)
+                {
+                    extra = new HashSet<string>(RemovedWithAppEntries, StringComparer.OrdinalIgnoreCase);
+                    if (Array.Exists(_app, e => e.IsDefault))
+                    {
+                        // By verb, here only: never refused after a pick (see RemovedWithAppEntries).
+                        extra.Add("open");
+                    }
+                }
+
+                bool anyVerb = RemoveVerbs(contextMenu, menu, extra);
                 if (!anyVerb && bound.FromItemArray)
                 {
                     // The item-array menu names no verbs, so the shell's delete (permanent on a
@@ -507,6 +635,14 @@ public static class ShellContextMenu
                 }
 
                 CollapseSeparators(menu);
+
+                // After the handlers and the removals: replaces the default the shell set.
+                int defaultEntry = Array.FindIndex(_app, e => e.IsDefault && e.Enabled && !e.IsSeparator);
+                if (defaultEntry >= 0)
+                {
+                    PInvoke.SetMenuDefaultItem(menu, AppFirstId + (uint)defaultEntry, SetDefaultByCommand);
+                }
+
                 if (PInvoke.GetMenuItemCount(menu) <= 0)
                 {
                     Complete(ShellMenuOutcome.Unavailable, null, "表示できる項目がありません。");
@@ -548,6 +684,18 @@ public static class ShellContextMenu
                 {
                     _menu2 = null;
                     _menu3 = null;
+                }
+
+                // Before the range check and the verb lookup: GetCommandString on an app id would
+                // hand the handler an offset it never gave out.
+                long appIndex = (long)picked - AppFirstId;
+                if (appIndex >= 0 && appIndex < _app.Length && !_app[appIndex].IsSeparator)
+                {
+                    // The foreground first: the caller's command may show a confirmation.
+                    GiveForegroundBack(owner);
+                    AppLog.Info($"Shell menu: app entry {appIndex} on {_paths.Count} item(s)");
+                    Complete(ShellMenuOutcome.AppCommand, null, null, (int)appIndex);
+                    return;
                 }
 
                 if (picked < FirstId || picked > LastId)

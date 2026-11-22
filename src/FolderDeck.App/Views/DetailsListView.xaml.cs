@@ -147,6 +147,8 @@ public partial class DetailsListView : UserControl, IItemsView
 
     public double VerticalOffset => _scroll?.VerticalOffset ?? 0;
 
+    public FrameworkElement? RealizedItemAt(MouseEventArgs e) => ItemsViewHitTest.Find(_scroll, RowsHost, e);
+
     public void ScrollTo(double offset)
     {
         if (_scroll is null)

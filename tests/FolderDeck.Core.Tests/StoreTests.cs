@@ -787,6 +787,43 @@ public class SettingsStoreTests
     }
 
     [Fact]
+    public void ItemMenu_DefaultsToApp_RoundTripsWindows_AndIsCloned()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        Assert.Equal("app", store.Current.ItemMenu);
+        Assert.Equal("app", new AppSettings().ItemMenu);
+
+        store.Update(s => s.ItemMenu = "windows");
+        store.Flush();
+        Assert.Contains("\"item_menu\": \"windows\"", File.ReadAllText(file));
+
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        Assert.Equal("windows", reloaded.Current.ItemMenu);
+
+        var copy = reloaded.Current.Clone();
+        copy.ItemMenu = "app";
+        Assert.Equal("windows", reloaded.Current.ItemMenu);
+    }
+
+    [Theory]
+    [InlineData("""{"version":2,"item_menu":"Explorer"}""", "app")]
+    [InlineData("""{"version":2,"item_menu":" WINDOWS "}""", "windows")]
+    [InlineData("""{"version":2}""", "app")]
+    public void ItemMenu_UnknownOrMissing_IsApp_CaseNormalized(string json, string expected)
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        File.WriteAllText(file, json);
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        Assert.Equal(expected, store.Current.ItemMenu);
+    }
+
+    [Fact]
     public void OpenExplorerInNewTab_MissingKey_IsOff()
     {
         using var tmp = new TempDir();

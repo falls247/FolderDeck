@@ -74,12 +74,14 @@ SHBindToParent
 SHCreateShellItemArrayFromIDLists
 BHID_SFUIObject
 ILFindLastID
+AppendMenu
 CreatePopupMenu
 DestroyMenu
 DeleteMenu
 GetMenuItemCount
 GetMenuItemInfo
 TrackPopupMenuEx
+SetMenuDefaultItem
 CMINVOKECOMMANDINFOEX
 EnumThreadWindows
 CMF_NORMAL
