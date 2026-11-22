@@ -22,8 +22,19 @@ internal static class ShellInterop
     /// <c>IShellItemImageFactory::GetImage</c>. Returns null when the shell cannot produce an image
     /// (no thumbnail handler, path too long, missing file…). Must run on an STA thread.
     /// </summary>
-    public static BitmapSource? GetShellImage(string path, int sizePx, SIIGBF flags)
+    public static BitmapSource? GetShellImage(string path, int sizePx, SIIGBF flags) => GetShellImage(path, sizePx, flags, out _);
+
+    /// <summary>WTS_E_EXTRACTIONPENDING: the thumbnail is still being made.</summary>
+    private const int ExtractionPending = unchecked((int)0x8004B205);
+
+    /// <param name="pending">
+    /// The shell answered that the thumbnail is still being made (WTS_E_EXTRACTIONPENDING), as a
+    /// cloud sync app's thumbnail provider (OneDrive) may at first for an online-only file: asking
+    /// again a moment later can get it.
+    /// </param>
+    public static BitmapSource? GetShellImage(string path, int sizePx, SIIGBF flags, out bool pending)
     {
+        pending = false;
         object? factoryObject = null;
         try
         {
@@ -44,6 +55,11 @@ internal static class ShellInterop
 
                 return FromHBitmap(new HBITMAP(bitmap.DangerousGetHandle()));
             }
+        }
+        catch (COMException ex) when (ex.HResult == ExtractionPending)
+        {
+            pending = true;
+            return null;
         }
         catch (Exception ex) when (ex is COMException or ArgumentException or UnauthorizedAccessException or InvalidCastException or FileNotFoundException or IOException)
         {

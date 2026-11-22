@@ -111,6 +111,15 @@ public sealed partial class PreviewViewModel : ObservableObject
         Content = PreviewContent.Table;
     }
 
+    /// <summary>Still loading: an online-only picture is being downloaded for the preview (the spinner stays).</summary>
+    public void ShowDownloading()
+    {
+        if (IsLoading)
+        {
+            StatusText = "ダウンロード中…";
+        }
+    }
+
     /// <summary>Nothing to show: says why (by default, that the file cannot be previewed).</summary>
     public void Fail(string? reason = null)
     {
