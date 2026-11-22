@@ -384,7 +384,7 @@ App
 
 - 並び方の変更：並べ替えメニュー（`MainWindow` が `CardSortModes.All` から組み立てる）→ `MainViewModel.SetSortMode` → `SaveSortMode`（`settings.json` の `sort_modes`。キーは `TabKinds.ToSetting`：`recent` / `frequent` / `folder`）→ `TabViewModel.ApplyOrder`。フォルダのタブは 1 つのキーを共有するので、開いているほかのフォルダのタブにも同じ並び方を適用する
   - 詳細表示では列の見出しのクリックでも変わる：`DetailsListView.HeaderClicked` → `MainWindow` → `SetSortMode(CardSortModes.Next(いまの並び方, 列))`。同じ列なら向きを反転、別の列なら名前・種類は昇順、更新日時・サイズは降順から始める。見出しからは「手動」に戻れない（戻すのはツールバーのメニュー）。並び方はタブのもので、表示モードとは独立（カード表示でもサイズ順・種類順を選べる）
-  - サイズ順はフォルダとサイズの分からない項目を、どちらの向きでも最後に置く。種類順のキーは**拡張子**で、行に出している種類の名前ではない（名前は `TypeNameCache` から後で届くので、それをキーにすると読み込み中に行が動く）。どちらも同順は名前の昇順（降順にしても逆にならない）
+  - サイズ順はフォルダとサイズの分からない項目を、どちらの向きでも最後に置く。種類順のキーは**拡張子**で、行に出している種類の名前ではない（名前は `TypeNameCache` から後で届くので、それをキーにすると読み込み中に行が動く）。どちらも同順は名前順で、向きも同じ（降順なら名前も降順）。フォルダの中ではフォルダが先に来て、フォルダどうしはサイズも拡張子もない同順なので、名前を昇順に固定すると見出しを押しても一覧の上のほうが変わらず、並べ替えが効いていないように見える
 - フィルター（固定タブの最上位）：`MainWindow.OnFilterClick`（`ItemFilters.Values` からメニュー）→ `MainViewModel.SetFilter` → `settings.json` の `filter_modes` → `TabViewModel.Filter` → `OnFilterChanged` → `Show`（`_orderedCards` を絞り込んで `Cards` へ）
 - ドラッグで並べ替え（固定タブの最上位）：`ItemPointerTracker` → `MainWindow.ItemDrag` → `FileDragOut.CreateData(reorder: true)` → `ActiveList.RunReorderDrag`（`IItemsView`。`CardGrid` はカードの間の縦線、`DetailsListView` は行の間の横線で入る位置を示す）→ `MainViewModel.MoveCard` →（フィルター中は `ItemFilters.MergeShownOrder` で、隠れているカードの位置を保ったまま全体の並びに戻す）→ `TabViewModel.SetBaseOrder` → `SaveManualOrder`（`CardOrderStore.Set`）。「手動」以外の並び方のときは「手動」に切り替える
 - サイドバーの並べ替え：`SidebarView.ItemDragRequested` → `MainWindow.OnSidebarDrag` → `SidebarView.RunReorderDrag`（ドロップを受けるのは登録フォルダの行の領域だけ。見出しやクイック アクセスの上では、ウィンドウが自アプリ由来のドラッグとして断る）→ `MainViewModel.MoveRegistered` → `RegisteredFoldersStore.Reorder` → `RefreshRegistered`
@@ -520,7 +520,7 @@ App
 | テストファイル | テストクラス | 主な対象 |
 |---|---|---|
 | `ListingTests.cs` | `NaturalComparerTests` `FolderListerTests` `CoverFinderTests` `FolderListingCacheTests` `ExistenceTests` | 自然順、列挙（隠し・システム属性、循環ジャンクション）、カバー探索（深さ・フォルダ数の上限、リパースポイント）、列挙キャッシュ、存在確認 |
-| `OrderingTests.cs` | `CardOrderingTests` `ManualOrderTests` `PathSetTests` `ExistenceProbeTests` | ピン固定の並べ替え、サイズ順（サイズなしは最後）・種類順（拡張子、大文字小文字を区別しない）と同順のときの名前順、並び方の設定値（9 つ）と見出しのクリックで次に行く並び方（`Next`）、ドラッグ順の適用、パス集合、存在確認と更新日時・ファイルのサイズ |
+| `OrderingTests.cs` | `CardOrderingTests` `ManualOrderTests` `PathSetTests` `ExistenceProbeTests` | ピン固定の並べ替え、サイズ順（サイズなしは最後）・種類順（拡張子、大文字小文字を区別しない）と同順のときの名前順（向きに合わせる。フォルダだけの一覧でもサイズ・種類の向きが変わる）、並び方の設定値（9 つ）と見出しのクリックで次に行く並び方（`Next`）、ドラッグ順の適用、パス集合、存在確認と更新日時・ファイルのサイズ |
 | `OrderStoreTests.cs` | `CardOrderStoreTests` `RegisteredFoldersReorderTests` `SortModeSettingsTests` | `card_order.json`、登録順の並べ替え、`sort_modes` |
 | `StoreTests.cs` | `JsonFileTests` `RegisteredFoldersStoreTests` `HistoryStoreTests` `PinAndExcludedStoreTests` `SettingsStoreTests` | 原子的書き込み・退避、各ストア、設定の既定値と正規化（タブ列 `open_tabs` / `selected_tab`・サイドバーの幅と折りたたみ・詳細表示の列の幅 `details_columns`（4 つのキー。`name` のない古いファイルは既定値）・右クリックのメニュー `item_menu`（既定 `app`、不明・なしは `app`、大文字小文字と空白の正規化、保存と `Clone`）・ダブルクリックで開く `open_on_double_click`（既定オフ、キーなしもオフ、保存）・旧 `registered` キーの片づけを含む）、version 1 からの移行と、旧版が書き戻したファイルの再移行 |
 | `ItemFilterTests.cs` | `ItemFilterTests` | フィルターの設定値の変換、絞り込み、絞り込み中のドラッグ順を全体へ戻す `MergeShownOrder`、`filter_modes` の正規化と保存 |

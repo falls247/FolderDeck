@@ -94,11 +94,13 @@ public static class CardOrdering
 
     /// <summary>
     /// By size; items without one (null: folders, files not read yet) go last in both directions.
-    /// Equal sizes are in natural name order, ascending in both directions.
+    /// Equal sizes, and the items without one, are in natural name order in the same direction:
+    /// inside a folder the folders all have no size, so a fixed name order there would make the
+    /// two directions look the same at the top of the list.
     /// </summary>
     public static IComparer<T> BySize<T>(Func<T, long?> sizeOf, Func<T, string> nameOf, bool descending)
     {
-        var byName = ByName(nameOf, descending: false);
+        var byName = ByName(nameOf, descending);
         return Comparer<T>.Create((a, b) =>
         {
             long? x = sizeOf(a);
@@ -116,11 +118,12 @@ public static class CardOrdering
     /// <summary>
     /// By type, whose key is the extension that <paramref name="typeOf"/> returns, compared without
     /// regard to case (".JPG" and ".jpg" are one type; no extension sorts first when ascending).
-    /// Items of one type are in natural name order, ascending in both directions.
+    /// Items of one type (all the folders, which have no extension) are in natural name order in
+    /// the same direction, so that the two directions differ for them too.
     /// </summary>
     public static IComparer<T> ByType<T>(Func<T, string> typeOf, Func<T, string> nameOf, bool descending)
     {
-        var byName = ByName(nameOf, descending: false);
+        var byName = ByName(nameOf, descending);
         return Comparer<T>.Create((a, b) =>
         {
             int c = string.Compare(typeOf(a), typeOf(b), StringComparison.OrdinalIgnoreCase);
