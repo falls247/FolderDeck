@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:FolderDeck.Views"
              Focusable="False"
-             Height="28"
+             Height="{DynamicResource Size.Details.Row}"
              ToolTipService.InitialShowDelay="900"
              ToolTipService.Placement="Mouse"
              ToolTip="{Binding ToolTipText}">
@@ -13,12 +13,14 @@
       name, which are cached per extension: it never asks for a thumbnail, a cover or child counts,
       so a folder of thousands of items costs nothing per row.
       The column widths come from DetailsListView.Metrics, which the header uses too.
+      The text and the row height follow 文字の大きさ (Size.Details.*, TextScale); every row has the
+      same height, DetailsListView.RowHeight, which the reorder drag computes positions from.
     -->
     <UserControl.Resources>
         <views:InverseBoolConverter x:Key="Not" />
 
         <Style x:Key="Cell" TargetType="{x:Type TextBlock}">
-            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontSize" Value="{DynamicResource Size.Details.CellFont}" />
             <Setter Property="Foreground" Value="{DynamicResource Brush.Muted}" />
             <Setter Property="Margin" Value="8,0" />
             <Setter Property="VerticalAlignment" Value="Center" />
@@ -103,7 +105,7 @@
                                 VerticalAlignment="Center"
                                 IsEnabled="{Binding IsDisabled, Converter={StaticResource Not}}"
                                 Visibility="{Binding IsPinned, Converter={StaticResource BoolToVis}}" Click="OnPinClick" />
-                        <TextBlock x:Name="NameText" Text="{Binding Name}" FontSize="12.5" Foreground="{DynamicResource Brush.Text}"
+                        <TextBlock x:Name="NameText" Text="{Binding Name}" FontSize="{DynamicResource Size.Details.NameFont}" Foreground="{DynamicResource Brush.Text}"
                                    TextTrimming="CharacterEllipsis" VerticalAlignment="Center">
                             <TextBlock.Style>
                                 <Style TargetType="{x:Type TextBlock}">
@@ -118,7 +120,7 @@
                     </DockPanel>
                 </Border>
                 <!-- 最近の履歴 / よく使う項目: when it was used and where it is (null inside folders) -->
-                <TextBlock Text="{Binding SubText}" FontSize="11.5" Foreground="{DynamicResource Brush.Muted}"
+                <TextBlock Text="{Binding SubText}" FontSize="{DynamicResource Size.Details.SubFont}" Foreground="{DynamicResource Brush.Muted}"
                            TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,8,0" />
             </DockPanel>
 

@@ -63,6 +63,12 @@ public sealed class AppSettings
     public const int CardSizeStep = 20;
     public const int CardSizeDefault = 200;
 
+    /// <summary>Range of <see cref="TextScale"/> (percent of the standard text size).</summary>
+    public const int TextScaleMin = 100;
+    public const int TextScaleMax = 150;
+    public const int TextScaleStep = 10;
+    public const int TextScaleDefault = 100;
+
     public const int ThumbCacheMbDefault = 512;
     public const int ThumbCacheMbMax = 8192;
 
@@ -154,6 +160,13 @@ public sealed class AppSettings
     public string? Theme { get; set; } = AppThemes.System;
 
     /// <summary>
+    /// 文字の大きさ in percent of the standard size (<see cref="TextScaleMin"/>–<see cref="TextScaleMax"/>,
+    /// steps of <see cref="TextScaleStep"/>): the text of the sidebar, the cards, the details list
+    /// and the cascade lists, and the rows that hold it. Applied at startup and on OK in the settings.
+    /// </summary>
+    public int TextScale { get; set; } = TextScaleDefault;
+
+    /// <summary>
     /// Sort mode per tab: <see cref="TabRecent"/> / <see cref="TabFrequent"/> / <see cref="TabFolder"/> →
     /// <c>manual</c>, <c>name_asc</c>, <c>name_desc</c>, <c>modified_asc</c>, <c>modified_desc</c>,
     /// <c>size_asc</c>, <c>size_desc</c>, <c>type_asc</c>, <c>type_desc</c>.
@@ -202,11 +215,16 @@ public sealed class AppSettings
     /// </summary>
     public int ThumbCacheMb { get; set; } = ThumbCacheMbDefault;
 
-    public static int ClampCardSize(int value)
+    public static int ClampCardSize(int value) => Snap(value, CardSizeMin, CardSizeMax, CardSizeStep);
+
+    public static int ClampTextScale(int value) => Snap(value, TextScaleMin, TextScaleMax, TextScaleStep);
+
+    /// <summary>Pulls <paramref name="value"/> into min…max, onto the nearest step from min.</summary>
+    private static int Snap(int value, int min, int max, int step)
     {
-        int clamped = Math.Clamp(value, CardSizeMin, CardSizeMax);
-        int steps = (int)Math.Round((clamped - CardSizeMin) / (double)CardSizeStep);
-        return CardSizeMin + (steps * CardSizeStep);
+        int clamped = Math.Clamp(value, min, max);
+        int steps = (int)Math.Round((clamped - min) / (double)step);
+        return min + (steps * step);
     }
 
     /// <summary>Sort mode of a tab; missing or unknown values are <see cref="CardSortMode.Manual"/>.</summary>
@@ -403,6 +421,7 @@ public sealed class AppSettings
         CardShape = CardShapes.ToSetting(CardShapes.FromSetting(CardShape));
         DetailsColumns = Layout.DetailsColumns.Normalize(DetailsColumns);
         Theme = AppThemes.ToSetting(AppThemes.FromSetting(Theme));
+        TextScale = ClampTextScale(TextScale);
         ItemMenu = ItemMenuStyles.ToSetting(ItemMenuStyles.FromSetting(ItemMenu));
         RecentLimit = Math.Clamp(RecentLimit, 10, 500);
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);

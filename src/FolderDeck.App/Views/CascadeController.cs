@@ -6,6 +6,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Input;
 using FolderDeck.Core.Listing;
 using FolderDeck.Services;
 using FolderDeck.Shell;
@@ -23,11 +24,30 @@ namespace FolderDeck.Views;
 /// place a child flyout would take. At most one preview is open; it is always the deepest thing
 /// in the cascade and closes with the level it belongs to.
 /// </para>
+/// <para>
+/// Menu aim (§9.6 rule 9): while the pointer is on its way from a list to the child flyout or
+/// preview open beside it, the rows it crosses neither open their child nor close the open one,
+/// and the gap does not count as outside (see <see cref="IsHeadingForChildOf"/>).
+/// </para>
 /// </summary>
 public sealed class CascadeController
 {
-    private const double CardGap = 8;
+    /// <summary>
+    /// Space (DIP) between what a flyout or preview is placed beside (the card, the parent flyout,
+    /// an anchor) and its visible card. Beside a card it used to be 8 (§9.5): 4 everywhere keeps the
+    /// way from the overlay to its child short.
+    /// <para>
+    /// The popup window starts <see cref="FlyoutView.ShadowMargin"/> before its card, so it reaches
+    /// over the parent's edge, and a layered window takes the pointer wherever its pixels are not
+    /// fully transparent (the shadow): there is no dead zone between the two, and a smaller gap would
+    /// only let the shadow take more of the right end of the parent's rows.
+    /// </para>
+    /// </summary>
     private const double FlyoutGap = 4;
+
+    /// <summary>How far (DIP) beyond the top and bottom of a child's card a pointer still counts as heading for it.</summary>
+    private const double AimSlack = 4;
+
     private const double OverlapShift = 24;
     private const double RowLead = 10;
     private const double WorkMargin = 16;
@@ -49,6 +69,9 @@ public sealed class CascadeController
     private readonly DispatcherTimer _foregroundTimer;
     private readonly PreviewTextCache _previewTexts = new();
 
+    /// <summary>Recent pointer moves over the main window and the cascade's popups (see <see cref="OnPointerMoved"/>).</summary>
+    private readonly MenuAim _aim = new();
+
     private CardView? _card;
 
     /// <summary>
@@ -69,6 +92,12 @@ public sealed class CascadeController
     private FrameworkElement? _pendingAnchor;
     private FrameworkElement? _pendingAnchorPlacement;
     private ICascadeAnchor? _pendingAnchorItem;
+    /// <summary>
+    /// Another card the pointer entered while heading for the open cascade's child (menu aim): the
+    /// cascade moves there (rule 4) only when the pointer is no longer on its way (see <see cref="OnOverlayTimer"/>).
+    /// Never set together with <see cref="_pendingAnchor"/> on purpose, but both are handled.
+    /// </summary>
+    private CardView? _pendingCard;
     private CardViewModel? _waitingFor;
     private PendingOpen? _pendingOpen;
     private PendingPreview? _pendingPreview;
@@ -124,6 +153,7 @@ public sealed class CascadeController
         };
         _menus.BeforeNavigate = CloseAll;
         _menus.NativeMenuChanged += SetNativeMenuOpen;
+        TrackPointer(_window);
     }
 
     /// <summary>
@@ -292,10 +322,21 @@ public sealed class CascadeController
         // WatchForeground (closes when another window comes to the front) and ActivateWindow.
         if (!ReferenceEquals(card, _card))
         {
+            if (IsOpen && IsHeadingForAnyChild())
+            {
+                // Crossing another card on the way to the open child (menu aim; a diagonal way from a
+                // low overlay row leaves the card through its bottom): rule 4 waits until the pointer
+                // rests on that card (see OnOverlayTimer) or leaves it.
+                _pendingCard = card;
+                RestartOverlay();
+                return;
+            }
+
             CloseAll(); // rule 4
             _card = card;
         }
 
+        _pendingCard = null; // back on the cascade's own card
         var vm = card.ViewModel;
         if (_levels.Count == 0 && vm is not null && vm.IsFolderLike && !vm.IsDisabled)
         {
@@ -307,6 +348,12 @@ public sealed class CascadeController
     {
         if (ReferenceEquals(card, _card))
         {
+            Restart(_exitTimer);
+        }
+        else if (ReferenceEquals(card, _pendingCard))
+        {
+            // Left the card it was crossing (into a flyout, back, or out): the exit decides as usual.
+            _pendingCard = null;
             Restart(_exitTimer);
         }
     }
@@ -470,6 +517,7 @@ public sealed class CascadeController
         _anchor = null;
         _anchorPlacement = null;
         _anchorItem = null;
+        _aim.Clear(); // the moves belong to this cascade (none are recorded while nothing is open)
         _generation++;
     }
 
@@ -520,6 +568,7 @@ public sealed class CascadeController
         _pendingOpen = null;
         _pendingPreview = null;
         ClearPendingAnchor();
+        _pendingCard = null;
         _graceLevel = -1;
         StopWaiting();
     }
@@ -617,6 +666,30 @@ public sealed class CascadeController
         if (_nativeMenu)
         {
             return; // frozen under Explorer's menu
+        }
+
+        if ((_pendingCard is not null || _pendingAnchor is not null) && IsHeadingForAnyChild())
+        {
+            RestartOverlay(); // still on its way to the open child (menu aim): ask again later
+            return;
+        }
+
+        if (_pendingCard is { } nextCard)
+        {
+            // The pointer is no longer heading for the child and is still on the card it was
+            // crossing: rule 4, then that card's overlay as if it had just rested there.
+            _pendingCard = null;
+            if (_suspended || !nextCard.IsMouseOver)
+            {
+                return;
+            }
+
+            CloseAll();
+            _card = nextCard;
+            if (nextCard.ViewModel is not { IsFolderLike: true, IsDisabled: false })
+            {
+                return; // as CardMouseEnter: only folder cards get an overlay
+            }
         }
 
         if (_pendingAnchor is { } pending && _pendingAnchorPlacement is { } pendingPlacement && _pendingAnchorItem is { } pendingItem)
@@ -767,6 +840,7 @@ public sealed class CascadeController
         };
         if (level.Flyout is { } flyout)
         {
+            TrackPointer(flyout); // its own window: the main window does not see these moves
             flyout.MouseEnter += (_, _) => OnFlyoutEnter(level);
             flyout.MouseLeave += (_, _) => Restart(_exitTimer);
             flyout.HeaderClicked += _ => OnHeaderClicked(level);
@@ -810,10 +884,11 @@ public sealed class CascadeController
     private void OnFlyoutEnter(Level level)
     {
         _exitTimer.Stop();
-        if (_pendingAnchor is not null)
+        if (_pendingAnchor is not null || _pendingCard is not null)
         {
-            // Reached the list: the anchor crossed on the way does not take the cascade.
+            // Reached the list: the anchor or card crossed on the way does not take the cascade.
             ClearPendingAnchor();
+            _pendingCard = null;
             _overlayTimer.Stop();
         }
 
@@ -866,6 +941,14 @@ public sealed class CascadeController
             return;
         }
 
+        if (IsHeadingForChildOf(p.Level))
+        {
+            // Crossing this row on the way to the open child (menu aim): ask again later.
+            _pendingOpen = p;
+            Restart(_openTimer);
+            return;
+        }
+
         OpenChild(level, p.Row);
     }
 
@@ -885,9 +968,17 @@ public sealed class CascadeController
         }
 
         var level = _levels[index];
-        // Still away from the active row (and not inside its child): close the child.
+        // Still away from the active row (and not inside its child): close the child, unless the
+        // pointer is on its way there (menu aim).
         if (level.ActiveRow is not null && !ReferenceEquals(level.List.HoveredRow, level.ActiveRow) && !IsInsideDeeper(index))
         {
+            if (IsHeadingForChildOf(index))
+            {
+                _graceLevel = index;
+                Restart(_graceTimer);
+                return;
+            }
+
             CloseFrom(index + 1);
         }
     }
@@ -907,6 +998,12 @@ public sealed class CascadeController
 
         if (IsPointerInside())
         {
+            return;
+        }
+
+        if (IsHeadingForAnyChild())
+        {
+            Restart(_exitTimer); // crossing the gap between a list and its child (menu aim)
             return;
         }
 
@@ -1150,7 +1247,7 @@ public sealed class CascadeController
             return;
         }
 
-        var placed = Place(level.Popup, level.Flyout, level.Flyout.CardElement, FlyoutView.CardWidth, FlyoutView.ShadowMargin, level.Index, level.RowRect, level.AnchorRect, level.PreferLeft);
+        var placed = Place(level.Popup, level.Flyout, level.Flyout.CardElement, FlyoutView.CardWidth, FlyoutView.ShadowMargin, level.RowRect, level.AnchorRect, level.PreferLeft);
         if (placed is not { } p)
         {
             return;
@@ -1173,10 +1270,10 @@ public sealed class CascadeController
 
     /// <summary>
     /// Moves a popup whose visible card is <paramref name="cardWidth"/> DIP wide next to
-    /// <paramref name="a"/> (the parent's card), level <paramref name="index"/> of the cascade.
+    /// <paramref name="a"/> (the parent's card, or the anchor), <see cref="FlyoutGap"/> away.
     /// </summary>
     private (HwndSource Source, int X, int Y, bool Left)? Place(
-        Popup popup, FrameworkElement root, FrameworkElement card, double cardWidth, double shadowMargin, int index, Rect row, Rect a, bool preferLeft)
+        Popup popup, FrameworkElement root, FrameworkElement card, double cardWidth, double shadowMargin, Rect row, Rect a, bool preferLeft)
     {
         if (PresentationSource.FromVisual(root) is not HwndSource source)
         {
@@ -1189,7 +1286,7 @@ public sealed class CascadeController
         double w = cardWidth * s;
         double h = Math.Max(1, card.ActualHeight) * s;
         double margin = shadowMargin * s;
-        double gap = (index == 1 ? CardGap : FlyoutGap) * s;
+        double gap = FlyoutGap * s;
 
         double rightX = a.Right + gap;
         double leftX = a.Left - gap - w;
@@ -1331,6 +1428,14 @@ public sealed class CascadeController
             return;
         }
 
+        if (!p.ByKey && IsHeadingForChildOf(p.Level))
+        {
+            // Crossing this row on the way to the open child or preview (menu aim): ask again later.
+            _pendingPreview = p;
+            Restart(_previewTimer);
+            return;
+        }
+
         OpenPreview(level, p.Row);
     }
 
@@ -1349,6 +1454,12 @@ public sealed class CascadeController
 
         if (preview.ParentIndex >= 0 && preview.ParentIndex < _levels.Count && ReferenceEquals(_levels[preview.ParentIndex].List.HoveredRow, preview.Row))
         {
+            return;
+        }
+
+        if (IsHeadingForChildOf(preview.ParentIndex))
+        {
+            Restart(_previewCloseTimer); // on the way to the preview (menu aim)
             return;
         }
 
@@ -1421,9 +1532,10 @@ public sealed class CascadeController
 
             // Reached the preview: keep it, and let nothing pending on its list replace it (nor a
             // neighbouring anchor crossed on the way, as in OnFlyoutEnter).
-            if (_pendingAnchor is not null)
+            if (_pendingAnchor is not null || _pendingCard is not null)
             {
                 ClearPendingAnchor();
+                _pendingCard = null;
                 _overlayTimer.Stop();
             }
 
@@ -1442,6 +1554,7 @@ public sealed class CascadeController
             }
         };
         view.MouseLeave += (_, _) => Restart(_exitTimer);
+        TrackPointer(view);
         view.Clicked += _ => OnPreviewClicked(preview);
         view.ContextMenuRequested += _ => ShowMenu(preview.Item, view.CardElement);
         view.DragRequested += _ => DragOut(row, "preview");
@@ -1469,7 +1582,7 @@ public sealed class CascadeController
             return;
         }
 
-        var placed = Place(preview.Popup, preview.View, preview.View.CardElement, PreviewView.CardWidth, PreviewView.ShadowMargin, preview.ParentIndex + 1, preview.RowRect, preview.AnchorRect, preview.PreferLeft);
+        var placed = Place(preview.Popup, preview.View, preview.View.CardElement, PreviewView.CardWidth, PreviewView.ShadowMargin, preview.RowRect, preview.AnchorRect, preview.PreferLeft);
         if (placed is not { } p)
         {
             return;
@@ -1477,6 +1590,7 @@ public sealed class CascadeController
 
         preview.TargetX = p.X;
         preview.TargetY = p.Y;
+        preview.DirectionLeft = p.Left;
         if (reveal && !preview.IsRevealed && !preview.AwaitsPicture)
         {
             preview.IsRevealed = true;
@@ -1787,6 +1901,97 @@ public sealed class CascadeController
         return -1;
     }
 
+    // ---- menu aim (§9.6 rule 9) ---------------------------------------------------------------
+    //
+    // On its way from a row to the child beside the list, the pointer usually crosses other rows
+    // of the same list (and the gap): folder rows below the open one, since folders sort first.
+    // Every decision about a list's rows and the exit is taken by a timer tick (open, grace, exit,
+    // preview, preview close), never at once, so each of those ticks asks IsHeadingForChildOf
+    // before it acts: while the pointer is heading for the child, the timer starts again instead,
+    // and its own interval is the re-check. Once the pointer rests or turns away, the next tick
+    // decides as before. No timer or state of its own: StopTimers, CloseAll and BeginDrag already
+    // cover everything that waits, and a tick under _nativeMenu returns before it asks.
+    // Switching to another card or anchor waits too: CardMouseEnter keeps the card in _pendingCard
+    // (rule 4 is deferred, not dropped), and OnOverlayTimer restarts while either _pendingCard or
+    // _pendingAnchor is set and the pointer is still heading for the child.
+
+    private void TrackPointer(UIElement element) =>
+        element.AddHandler(UIElement.PreviewMouseMoveEvent, new MouseEventHandler(OnPointerMoved), handledEventsToo: true);
+
+    /// <summary>
+    /// A pointer move over the main window or one of the cascade's popups (each is its own window,
+    /// so each is tracked), kept in screen pixels while something of the cascade is showing.
+    /// </summary>
+    private void OnPointerMoved(object sender, MouseEventArgs e)
+    {
+        if (IsOpen)
+        {
+            RecordPointer();
+        }
+    }
+
+    private void RecordPointer()
+    {
+        if (ShellInterop.TryGetCursorPos(out int x, out int y))
+        {
+            _aim.Record(x, y, Environment.TickCount64);
+        }
+    }
+
+    /// <summary>
+    /// The pointer is on its way to what is open beside level <paramref name="index"/> (its child
+    /// flyout or its preview; -1: beside the anchor): a decision about that level's rows (open
+    /// another row's child, close the child, preview another row) waits, and so does the exit.
+    /// False while it rests (it has not moved for <see cref="HoverTimings.AimMoving"/>), moves away
+    /// or along the list, and when nothing visible is open there. Asked only when a decision is due.
+    /// </summary>
+    private bool IsHeadingForChildOf(int index)
+    {
+        if (_suspended)
+        {
+            return false; // a drag, Explorer's menu or an edit box: nothing waits (StopTimers ran)
+        }
+
+        FrameworkElement? card = null;
+        bool left = false;
+        if (index + 1 < _levels.Count && _levels[index + 1].Flyout is { } flyout)
+        {
+            card = flyout.CardElement;
+            left = _levels[index + 1].DirectionLeft;
+        }
+        else if (_preview is { IsRevealed: true } preview && preview.ParentIndex == index)
+        {
+            card = preview.View.CardElement;
+            left = preview.DirectionLeft;
+        }
+
+        if (card is null || !card.IsVisible || PresentationSource.FromVisual(card) is null)
+        {
+            return false;
+        }
+
+        RecordPointer(); // where it is now, also when it was over a window that is not ours
+        Rect target = ScreenRect(card);
+        double slack = AimSlack * VisualTreeHelper.GetDpi(_window).DpiScaleX;
+        return _aim.IsHeadingFor(
+            target.Left, target.Top, target.Right, target.Bottom, left,
+            Environment.TickCount64, (long)HoverTimings.AimMoving.TotalMilliseconds, slack);
+    }
+
+    /// <summary>Outside the card and every list: on the way to one of the children (the exit waits).</summary>
+    private bool IsHeadingForAnyChild()
+    {
+        for (int i = -1; i < _levels.Count; i++)
+        {
+            if (IsHeadingForChildOf(i))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     // ---- helpers ------------------------------------------------------------------------------
 
     private static DispatcherTimer NewTimer(TimeSpan interval, Action tick)
@@ -1906,6 +2111,9 @@ public sealed class CascadeController
         public Rect AnchorRect { get; init; }
 
         public bool PreferLeft { get; init; }
+
+        /// <summary>It went to the left of what it is placed beside (as <see cref="Level.DirectionLeft"/>).</summary>
+        public bool DirectionLeft { get; set; }
 
         /// <summary>
         /// Kept invisible (and transparent to the pointer) until a picture comes; when none comes

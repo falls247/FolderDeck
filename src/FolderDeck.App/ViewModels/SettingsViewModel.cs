@@ -14,6 +14,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsThemeSystem), nameof(IsThemeLight), nameof(IsThemeDark))]
     private AppTheme _theme;
 
+    /// <summary>文字の大きさ in percent (<see cref="AppSettings.TextScale"/>). <see cref="TextScaleChoices"/> show and set it.</summary>
+    [ObservableProperty]
+    private int _textScale;
+
     [ObservableProperty]
     private bool _showHidden;
 
@@ -55,6 +59,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     public SettingsViewModel(AppSettings settings)
     {
         _theme = AppThemes.FromSetting(settings.Theme);
+        _textScale = AppSettings.ClampTextScale(settings.TextScale);
+        TextScaleChoices = Enumerable.Range(0, ((AppSettings.TextScaleMax - AppSettings.TextScaleMin) / AppSettings.TextScaleStep) + 1)
+            .Select(i => new TextScaleChoice(this, AppSettings.TextScaleMin + (i * AppSettings.TextScaleStep)))
+            .ToList();
         _showHidden = settings.ShowHidden;
         _confirmExecutables = settings.ConfirmExecutables;
         _includeWindowsRecent = settings.IncludeWindowsRecent;
@@ -99,6 +107,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         get => ItemMenu == ItemMenuStyle.Windows;
         set => SelectItemMenu(value, ItemMenuStyle.Windows);
     }
+
+    /// <summary>The 文字の大きさ switches, smallest first (100 % is 標準).</summary>
+    public IReadOnlyList<TextScaleChoice> TextScaleChoices { get; }
 
     public Func<string?>? ResetStatsAction { get; init; }
 
@@ -154,9 +165,18 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
+    partial void OnTextScaleChanged(int value)
+    {
+        foreach (var choice in TextScaleChoices)
+        {
+            choice.Refresh();
+        }
+    }
+
     public void ApplyTo(AppSettings settings)
     {
         settings.Theme = AppThemes.ToSetting(Theme);
+        settings.TextScale = TextScale;
         settings.ShowHidden = ShowHidden;
         settings.ConfirmExecutables = ConfirmExecutables;
         settings.IncludeWindowsRecent = IncludeWindowsRecent;
@@ -177,4 +197,36 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [RelayCommand]
     private void OpenDataFolder() => OpenDataFolderAction?.Invoke();
+}
+
+/// <summary>One 文字の大きさ switch of the settings dialog (a RadioButton).</summary>
+public sealed class TextScaleChoice : ObservableObject
+{
+    private readonly SettingsViewModel _owner;
+
+    internal TextScaleChoice(SettingsViewModel owner, int percent)
+    {
+        _owner = owner;
+        Percent = percent;
+        Label = percent.ToString(CultureInfo.InvariantCulture) + (percent == AppSettings.TextScaleDefault ? "%（標準）" : "%");
+    }
+
+    public int Percent { get; }
+
+    public string Label { get; }
+
+    // Same as the theme: only "checked" counts.
+    public bool IsSelected
+    {
+        get => _owner.TextScale == Percent;
+        set
+        {
+            if (value)
+            {
+                _owner.TextScale = Percent;
+            }
+        }
+    }
+
+    internal void Refresh() => OnPropertyChanged(nameof(IsSelected));
 }

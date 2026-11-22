@@ -29,6 +29,16 @@ public static class HoverTimings
     /// <summary>Time outside the card and every flyout before everything closes.</summary>
     public static readonly TimeSpan Exit = TimeSpan.FromMilliseconds(300);
 
+    /// <summary>
+    /// Menu aim: a pointer heading for an open child flyout or preview counts as still on its way
+    /// there only if it moved within this time. While it is on its way, the open, grace, exit,
+    /// preview and preview-close timers do not act when they fire but start again (their own
+    /// interval is the re-check).
+    /// Shorter than the shortest of them (T_open, 150 ms), so a pointer that stops gets the usual
+    /// decision at the next tick at the latest. Pointer moves come every few ms while it moves.
+    /// </summary>
+    public static readonly TimeSpan AimMoving = TimeSpan.FromMilliseconds(100);
+
     public static readonly TimeSpan OverlayFadeIn = TimeSpan.FromMilliseconds(150);
 
     public static readonly TimeSpan OverlayFadeOut = TimeSpan.FromMilliseconds(120);

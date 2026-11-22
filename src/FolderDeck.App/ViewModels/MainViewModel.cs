@@ -39,6 +39,9 @@ public interface IMainView
 
     /// <summary>Switches the colours to the theme chosen in the settings (system / light / dark).</summary>
     void ApplyTheme(AppTheme theme);
+
+    /// <summary>Resizes the text of the content areas to 文字の大きさ (<see cref="AppSettings.TextScale"/>, percent).</summary>
+    void ApplyTextScale(int percent);
 }
 
 public enum NavMode
@@ -2434,6 +2437,11 @@ public sealed partial class MainViewModel : ObservableObject
         if (before.Theme != after.Theme)
         {
             View?.ApplyTheme(AppThemes.FromSetting(after.Theme));
+        }
+
+        if (before.TextScale != after.TextScale)
+        {
+            View?.ApplyTextScale(after.TextScale);
         }
 
         _services.ShowHidden = after.ShowHidden;

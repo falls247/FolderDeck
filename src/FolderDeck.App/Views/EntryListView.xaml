@@ -3,7 +3,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:FolderDeck.ViewModels"
              Focusable="False">
-    <!-- Rows of the overlay and of every flyout (§9.4). Virtualized: 10,000 entries stay smooth. -->
+    <!-- Rows of the overlay and of every flyout (§9.4). Virtualized: 10,000 entries stay smooth.
+         The text and the row height follow 文字の大きさ (Size.List.*, TextScale). -->
     <Grid>
         <ListBox x:Name="List" ItemsSource="{Binding Rows}"
                  Background="Transparent" BorderThickness="0" Padding="0" Focusable="False"
@@ -40,7 +41,7 @@
                     <Setter Property="Template">
                         <Setter.Value>
                             <ControlTemplate TargetType="{x:Type ListBoxItem}">
-                                <Border x:Name="Bd" Height="24" Padding="4,0,2,0" Background="Transparent" CornerRadius="4"
+                                <Border x:Name="Bd" Height="{DynamicResource Size.List.Row}" Padding="4,0,2,0" Background="Transparent" CornerRadius="4"
                                         BorderBrush="{StaticResource Overlay.Divider}" BorderThickness="0,0,0,1">
                                     <ContentPresenter VerticalAlignment="Center" />
                                 </Border>
@@ -74,7 +75,7 @@
                         </Grid.ColumnDefinitions>
                         <Image Source="{Binding Icon}" Width="16" Height="16" HorizontalAlignment="Left" VerticalAlignment="Center"
                                RenderOptions.BitmapScalingMode="HighQuality" />
-                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" TextTrimming="CharacterEllipsis"
+                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="{DynamicResource Size.List.Font}" TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center" />
                         <TextBlock x:Name="Chevron" Grid.Column="2" Text="&#xE76C;" FontFamily="{StaticResource Font.Icons}"
                                    FontSize="9" Margin="6,0,2,0" VerticalAlignment="Center" Opacity="0.8" Visibility="Collapsed" />
@@ -93,7 +94,7 @@
                     Visibility="{Binding ShowStatus, Converter={StaticResource BoolToVis}}">
             <ContentControl Style="{StaticResource Spinner}" Width="14" Height="14" Margin="0,0,8,0" Foreground="{StaticResource Overlay.Muted}"
                             Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}" />
-            <TextBlock Text="{Binding StatusText}" FontSize="12" TextWrapping="Wrap">
+            <TextBlock Text="{Binding StatusText}" FontSize="{DynamicResource Size.List.Font}" TextWrapping="Wrap">
                 <TextBlock.Style>
                     <Style TargetType="{x:Type TextBlock}">
                         <Setter Property="Foreground" Value="{StaticResource Overlay.Muted}" />

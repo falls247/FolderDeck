@@ -33,8 +33,11 @@ public sealed class RenameEditor
     /// <summary>Lines a card's box may grow to before its text scrolls.</summary>
     private const int CardMaxLines = 6;
 
-    /// <summary>About one line of the box's 12.5 px text (style RenameBox).</summary>
+    /// <summary>About one line of the box's 12.5 px text (style RenameBox) at 100 % (it follows <see cref="TextScale"/>).</summary>
     private const double LineHeight = 17;
+
+    /// <summary>Height of the box over a details row's name at 100 % (the row is 28).</summary>
+    private const double RowBoxHeight = 24;
 
     private readonly Window _window;
     private readonly Action<string> _say;
@@ -90,7 +93,7 @@ public sealed class RenameEditor
                 place = () =>
                 {
                     double x = Math.Max(0, rowName.TranslatePoint(default, column).X - 4);
-                    double height = Math.Min(24, column.ActualHeight);
+                    double height = Math.Min(TextScale.RowHeight(RowBoxHeight, TextScale.RenameFont), column.ActualHeight);
                     return new Rect(x, (column.ActualHeight - height) / 2, Math.Max(60, column.ActualWidth - x - 4), height);
                 };
                 wrap = false;
@@ -110,7 +113,7 @@ public sealed class RenameEditor
             TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
             VerticalContentAlignment = wrap ? VerticalAlignment.Top : VerticalAlignment.Center,
             MaxLength = ItemNames.MaxLength,
-            MaxHeight = wrap ? CardMaxLines * LineHeight + 6 : double.PositiveInfinity,
+            MaxHeight = wrap ? (CardMaxLines * LineHeight * TextScale.Factor) + 6 : double.PositiveInfinity,
         };
         box.SetResourceReference(FrameworkElement.StyleProperty, "RenameBox");
 

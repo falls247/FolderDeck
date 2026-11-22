@@ -23,6 +23,33 @@
 
     <sys:Double x:Key="Size.Font">13</sys:Double>
 
+    <!--
+      文字の大きさ: text and row sizes of the content areas at 100 %. Views read them with
+      DynamicResource; Views/TextScale.cs (Apply) overrides them in the application resources.
+      Keep these values equal to the base constants there.
+    -->
+    <sys:Double x:Key="Size.Sidebar.Font">13</sys:Double>
+    <sys:Double x:Key="Size.Sidebar.HintFont">12</sys:Double>
+    <sys:Double x:Key="Size.Sidebar.Row">30</sys:Double>
+    <sys:Double x:Key="Size.Card.NameFont">12.5</sys:Double>
+    <sys:Double x:Key="Size.Card.NameLine">16.875</sys:Double>
+    <sys:Double x:Key="Size.Card.NameBox">33.75</sys:Double>
+    <sys:Double x:Key="Size.Card.SubFont">11</sys:Double>
+    <sys:Double x:Key="Size.Details.HeaderFont">12</sys:Double>
+    <sys:Double x:Key="Size.Details.Header">28</sys:Double>
+    <sys:Double x:Key="Size.Details.NameFont">12.5</sys:Double>
+    <sys:Double x:Key="Size.Details.SubFont">11.5</sys:Double>
+    <sys:Double x:Key="Size.Details.CellFont">12</sys:Double>
+    <sys:Double x:Key="Size.Details.Row">28</sys:Double>
+    <sys:Double x:Key="Size.List.Font">12</sys:Double>
+    <sys:Double x:Key="Size.List.Row">24</sys:Double>
+    <sys:Double x:Key="Size.Overlay.HeaderFont">11</sys:Double>
+    <sys:Double x:Key="Size.Flyout.TitleFont">12.5</sys:Double>
+    <sys:Double x:Key="Size.Flyout.TitleLine">17</sys:Double>
+    <sys:Double x:Key="Size.Flyout.TitleBox">51</sys:Double>
+    <sys:Double x:Key="Size.Flyout.CountFont">11</sys:Double>
+    <sys:Double x:Key="Size.Rename.Font">12.5</sys:Double>
+
     <!-- Implicit text defaults -->
     <Style TargetType="{x:Type ToolTip}">
         <Setter Property="Background" Value="{DynamicResource Brush.Surface}" />
@@ -342,7 +369,7 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Padding" Value="2,1" />
         <Setter Property="FontFamily" Value="{StaticResource Font.UI}" />
-        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontSize" Value="{DynamicResource Size.Rename.Font}" />
         <Setter Property="AcceptsReturn" Value="False" />
         <Setter Property="AcceptsTab" Value="False" />
         <Setter Property="Template">
