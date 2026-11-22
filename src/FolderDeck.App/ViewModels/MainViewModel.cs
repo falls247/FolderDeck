@@ -1228,6 +1228,244 @@ public sealed partial class MainViewModel : ObservableObject
         await ReloadAfterFileChangeAsync();
     }
 
+    // ---- rename and new folder (F2, Ctrl+Shift+N) ------------------------------------------------
+
+    /// <summary>
+    /// The item can be renamed in its edit box: a card inside a folder (the rule of
+    /// <see cref="CanDelete"/> without the cascade's rows, which have no edit box), usable, not busy
+    /// and not a drive root.
+    /// </summary>
+    public static bool CanRename(ItemRef item) =>
+        item.Context is ItemContext.InnerCard
+        && item.Card is { IsDisabled: false, IsBusy: false }
+        && !PathTools.IsRoot(item.Path);
+
+    /// <summary>
+    /// F2: the one selected card, or null (nothing selected: the key does nothing; several selected:
+    /// said on the message line). Whether it can be renamed is <see cref="CanStartRename"/>'s call.
+    /// </summary>
+    public CardViewModel? RenameCandidate()
+    {
+        var cards = SelectedTab.SelectedCards();
+        if (cards.Count > 1)
+        {
+            Message.Info("名前を変更する項目を 1 つだけ選んでください。");
+            return null;
+        }
+
+        return cards.Count == 1 ? cards[0] : null;
+    }
+
+    /// <summary>The edit box may open for <paramref name="card"/> now; says why not on the message line.</summary>
+    public bool CanStartRename(CardViewModel card)
+    {
+        if (card.Context != ItemContext.InnerCard)
+        {
+            Message.Info("この一覧の項目は名前を変更できません（変更できるのはフォルダの中の項目だけです）。");
+            return false;
+        }
+
+        if (!CanRename(card.ToItemRef()) || !SelectedTab.Cards.Contains(card))
+        {
+            Message.Info("この項目は名前を変更できません。");
+            return false;
+        }
+
+        if (SelectedTab.IsLoading)
+        {
+            Message.Info("フォルダの読み込みが終わってから変更してください。");
+            return false;
+        }
+
+        if (_fileOpBusy)
+        {
+            Message.Info("前の操作が終わってから実行してください。");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The edit box of <paramref name="card"/> closed with <paramref name="typed"/>: renames the item
+    /// when the name changed (one shell operation, on Explorer's undo stack), then lists the folder
+    /// again with the renamed item selected. Returns true when the edit box should open again with
+    /// the typed name: another item has it, or the user declined to change the extension. A name
+    /// that cannot be used is said on the message line and the edit ends (the caller checks it on
+    /// Enter with <see cref="ItemNames.Check"/> and keeps the box open instead).
+    /// </summary>
+    public async Task<bool> RenameAsync(CardViewModel card, string typed)
+    {
+        // Compared before cleaning too: an untouched name with a leading space (made by another
+        // tool) would otherwise come out "changed" by the cleaning alone.
+        string name = ItemNames.Clean(typed);
+        if (string.Equals(typed, card.Name, StringComparison.Ordinal)
+            || string.Equals(name, card.Name, StringComparison.Ordinal)
+            || name.Length == 0)
+        {
+            return false; // unchanged, or emptied: the old name stays (as in Explorer)
+        }
+
+        var problem = ItemNames.Check(name);
+        if (problem != NameProblem.None)
+        {
+            Message.Info(ItemNames.MessageOf(problem));
+            return false;
+        }
+
+        if (!CanRename(card.ToItemRef()))
+        {
+            return false;
+        }
+
+        if (_fileOpBusy)
+        {
+            Message.Info("前の操作が終わってから実行してください。");
+            return false;
+        }
+
+        if (card.Kind == CardKind.File && ItemNames.ExtensionChanged(card.Name, name))
+        {
+            bool change = View?.Confirm(
+                "拡張子を変更しますか？",
+                "拡張子を変更すると、ファイルが使えなくなる可能性があります。",
+                $"{card.Name} → {name}",
+                "変更する",
+                danger: false) ?? false;
+            if (!change)
+            {
+                return true;
+            }
+
+            if (_fileOpBusy)
+            {
+                Message.Info("前の操作が終わってから実行してください。");
+                return false;
+            }
+        }
+
+        string folder = PathTools.ParentOf(card.Path);
+        _fileOpBusy = true;
+        ShellOpResult result;
+        try
+        {
+            card.IsBusy = true;
+            result = await ShellFileOps.RenameAsync(card.Path, name, View?.WindowHandle ?? 0);
+        }
+        finally
+        {
+            card.IsBusy = false;
+            _fileOpBusy = false;
+        }
+
+        switch (result.Outcome)
+        {
+            case ShellOpOutcome.NameTaken:
+                Message.Info($"同じ名前の項目がすでにあります：{name}");
+                return true;
+            case ShellOpOutcome.Canceled:
+                Message.Info($"「{card.Name}」の名前の変更を中止しました。");
+                return false;
+            case ShellOpOutcome.Failed:
+                Message.Error($"「{card.Name}」の名前を変更できませんでした：{result.Error ?? "不明なエラー"}");
+                return false;
+        }
+
+        await ReloadAfterFileChangeAsync();
+
+        // The old path left the selection with the reload. Anything selected now was chosen while
+        // the rename ran (the press that committed the name was a click on another item): kept.
+        if (SelectedTab.Selection.Count == 0)
+        {
+            SelectInShownFolder(folder, result.NewPath);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The card of the shown tab for <paramref name="path"/> (cards are made anew by every load, so
+    /// one held since a menu opened may have been replaced), or null when it is not shown.
+    /// </summary>
+    public CardViewModel? ShownCard(string path) =>
+        SelectedTab.Cards.FirstOrDefault(c => PathTools.PathEquals(c.Path, path));
+
+    /// <summary>
+    /// Ctrl+Shift+N and the blank area's 新しいフォルダー: creates 「新しいフォルダー」 (or the next free
+    /// 「新しいフォルダー (n)」) in the folder the shown tab lists, lists it again and selects the new
+    /// folder. Returns its card for the edit box, or null (no folder on screen, a running file
+    /// operation, a failure: said on the message line; the user went elsewhere meanwhile).
+    /// </summary>
+    public async Task<CardViewModel?> CreateFolderAsync()
+    {
+        string? folder = PasteFolderOf(null);
+        if (folder is null)
+        {
+            Message.Info(HasTab && SelectedTab.FolderTargetPath is not null && SelectedTab.IsLoading
+                ? "フォルダの読み込みが終わってから作成してください。"
+                : "この一覧には新しいフォルダーを作成できません。");
+            return null;
+        }
+
+        if (_fileOpBusy)
+        {
+            Message.Info("前の操作が終わってから実行してください。");
+            return null;
+        }
+
+        // The name the shown items leave free; a hidden item with it makes the shell pick the next one.
+        string name = ItemNames.NextNewFolderName(SelectedTab.Cards.Select(c => c.Name));
+        _fileOpBusy = true;
+        ShellOpResult result;
+        try
+        {
+            result = await ShellFileOps.NewFolderAsync(folder, name, View?.WindowHandle ?? 0);
+        }
+        finally
+        {
+            _fileOpBusy = false;
+        }
+
+        if (result.Outcome != ShellOpOutcome.Done || result.NewPath is null)
+        {
+            if (result.Outcome == ShellOpOutcome.Canceled)
+            {
+                Message.Info("新しいフォルダーの作成を中止しました。");
+            }
+            else
+            {
+                Message.Error($"新しいフォルダーを作成できませんでした：{result.Error ?? "不明なエラー"}");
+            }
+
+            return null;
+        }
+
+        await ReloadAfterFileChangeAsync();
+        return SelectInShownFolder(folder, result.NewPath);
+    }
+
+    /// <summary>
+    /// After a reload: selects <paramref name="path"/> alone when the shown tab still lists
+    /// <paramref name="folder"/>, and returns its card (null otherwise).
+    /// </summary>
+    private CardViewModel? SelectInShownFolder(string folder, string? path)
+    {
+        var tab = SelectedTab;
+        if (path is null || !PathTools.PathEquals(tab.TransferTargetPath, folder))
+        {
+            return null;
+        }
+
+        var card = tab.Cards.FirstOrDefault(c => PathTools.PathEquals(c.Path, path));
+        if (card is null)
+        {
+            return null;
+        }
+
+        tab.Selection.Replace([card.Path]);
+        return card;
+    }
+
     /// <summary>The confirmation's body and path lines: as before for one item, the count and the first paths for several.</summary>
     private static (string Body, string Paths) DeleteConfirmText(IReadOnlyList<ItemRef> items)
     {
@@ -1376,7 +1614,10 @@ public sealed partial class MainViewModel : ObservableObject
     private static readonly TimeSpan SourceProbeTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan CutCheckTimeout = TimeSpan.FromSeconds(2);
 
-    /// <summary>A paste or a delete to the Recycle Bin is running (one at a time: the window asks before it closes meanwhile).</summary>
+    /// <summary>
+    /// A paste, a delete to the Recycle Bin, a rename or a new folder is running (one at a time: the
+    /// window asks before it closes meanwhile).
+    /// </summary>
     private bool _fileOpBusy;
 
     /// <summary>The paths of this app's pending cut (null: none) and the clipboard sequence number it was written with.</summary>
@@ -1425,6 +1666,25 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Items of a tab open on a double click and a plain click only selects (setting ダブルクリックで開く).
+    /// Read at every click, so OK in the settings applies without a restart.
+    /// </summary>
+    public bool OpensOnDoubleClick => Settings.OpenOnDoubleClick;
+
+    /// <summary>
+    /// A plain click when items open on a double click: the item alone becomes the selection and
+    /// the anchor of a following Shift+click. A missing or unanswering item is never selected.
+    /// </summary>
+    public void SelectOnly(CardViewModel card)
+    {
+        var tab = SelectedTab;
+        if (HasTab && !card.IsDisabled && tab.Cards.Contains(card))
+        {
+            tab.Selection.Replace([card.Path]);
+        }
     }
 
     /// <summary>Ctrl+A: every enabled item of the shown list. Returns true when the selection changed.</summary>

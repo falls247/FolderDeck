@@ -17,81 +17,94 @@
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
     </Window.Resources>
-    <StackPanel Margin="22,8,22,16">
-        <TextBlock Text="テーマ（配色）" Style="{StaticResource Section}" />
-        <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3" Background="{DynamicResource Brush.Surface2}"
-                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
-            <StackPanel Orientation="Horizontal">
-                <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="Theme" Content="システム" IsChecked="{Binding IsThemeSystem}"
-                             ToolTip="Windows の設定（アプリのモード：ライト／ダーク）に合わせます" />
-                <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="Theme" Content="ライト" IsChecked="{Binding IsThemeLight}" Margin="3,0,0,0" />
-                <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="Theme" Content="ダーク" IsChecked="{Binding IsThemeDark}" Margin="3,0,0,0" />
+    <!-- The window is at most as tall as the main window (MainWindow.ShowSettings sets MaxHeight):
+         the settings scroll above the OK / キャンセル row, which always stays in view. -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <StackPanel Margin="22,8,22,0">
+                <TextBlock Text="テーマ（配色）" Style="{StaticResource Section}" />
+                <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3" Background="{DynamicResource Brush.Surface2}"
+                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="Theme" Content="システム" IsChecked="{Binding IsThemeSystem}"
+                                     ToolTip="Windows の設定（アプリのモード：ライト／ダーク）に合わせます" />
+                        <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="Theme" Content="ライト" IsChecked="{Binding IsThemeLight}" Margin="3,0,0,0" />
+                        <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="Theme" Content="ダーク" IsChecked="{Binding IsThemeDark}" Margin="3,0,0,0" />
+                    </StackPanel>
+                </Border>
+                <TextBlock Text="「システム」は Windows の設定（アプリのモード）に合わせます。OK を押すと切り替わります。"
+                           TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,6,0,0" />
+
+                <TextBlock Text="表示と操作" Style="{StaticResource Section}" />
+                <CheckBox Content="隠しファイルを表示" IsChecked="{Binding ShowHidden}" />
+                <CheckBox Content="実行形式を開く前に確認する" IsChecked="{Binding ConfirmExecutables}" />
+                <CheckBox Content="ダブルクリックで開く" IsChecked="{Binding OpenOnDoubleClick}" />
+                <TextBlock Text="オンにすると、カード・詳細表示の行は 1 回のクリックでその項目だけを選び、ダブルクリックで開きます（サイドバーと一覧の行は 1 回のクリックのまま）。"
+                           TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="20,0,0,0" />
+
+                <TextBlock Text="最近の履歴・よく使う項目" Style="{StaticResource Section}" />
+                <CheckBox Content="Windows の最近使った項目を含める" IsChecked="{Binding IncludeWindowsRecent}" />
+                <CheckBox Content="開いたファイルを Windows の最近使った項目にも追加する" IsChecked="{Binding AddToWindowsRecent}" />
+                <Grid Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="最近の履歴の表示件数（10〜500）" VerticalAlignment="Center" />
+                    <TextBox Grid.Column="1" Style="{StaticResource Input}" Text="{Binding RecentLimitText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
+                    <TextBlock Grid.Row="1" Text="よく使う項目の表示件数（10〜200）" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Style="{StaticResource Input}" Text="{Binding FrequentLimitText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
+                </Grid>
+
+                <TextBlock Text="エクスプローラー" Style="{StaticResource Section}" />
+                <CheckBox IsChecked="{Binding OpenExplorerInNewTab}">
+                    <TextBlock Text="エクスプローラーで表示するとき、開いているエクスプローラーに新しいタブで開く（Windows 11）" TextWrapping="Wrap" />
+                </CheckBox>
+                <TextBlock Text="エクスプローラーが開いていないとき、またはタブに対応していない Windows では、新しいウィンドウで開きます。"
+                           TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="20,0,0,0" />
+
+                <TextBlock Text="右クリックのメニュー" Style="{StaticResource Section}" />
+                <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3" Background="{DynamicResource Brush.Surface2}"
+                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="ItemMenu" Content="アプリのメニュー" IsChecked="{Binding IsItemMenuApp}" />
+                        <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="ItemMenu" Content="Windows のメニュー" IsChecked="{Binding IsItemMenuWindows}" Margin="3,0,0,0" />
+                    </StackPanel>
+                </Border>
+                <TextBlock Text="「Windows のメニュー」は、項目の右クリックでエクスプローラーのメニュー（7-Zip・送る・プロパティなど）を出し、その上にアプリの項目を並べます。ドライブ・空いているところ・使えない項目や、エクスプローラーのメニューが 5 秒以内に準備できなかったときは、アプリのメニューを出します（準備できなかった項目は、しばらくアプリのメニューになります）。"
+                           TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,6,0,0" />
+
+                <TextBlock Text="データ" Style="{StaticResource Section}" />
+                <Grid Margin="0,0,0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="画像サムネイルのキャッシュ上限（MB、0〜8192。0 で保存しない）" VerticalAlignment="Center" TextWrapping="Wrap" />
+                    <TextBox Grid.Column="1" Style="{StaticResource Input}" Text="{Binding ThumbCacheMbText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
+                </Grid>
+                <TextBlock Text="一度表示した画像のサムネイルをデータフォルダの thumbs に保存し、次からすぐ表示します。変更は次回の起動から有効です。"
+                           TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,0,0,8" />
+                <WrapPanel>
+                    <Button Style="{StaticResource Btn}" Content="よく使う項目の統計をリセット" Command="{Binding ResetStatsCommand}" Margin="0,0,8,8" />
+                    <Button Style="{StaticResource Btn}" Content="データフォルダを開く" Command="{Binding OpenDataFolderCommand}" Margin="0,0,8,8" />
+                </WrapPanel>
+                <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Foreground="{DynamicResource Brush.Ok}" Margin="0,2,0,0" />
+                <TextBlock Text="{Binding Error}" TextWrapping="Wrap" Foreground="{DynamicResource Brush.Danger}" Margin="0,2,0,0" />
             </StackPanel>
-        </Border>
-        <TextBlock Text="「システム」は Windows の設定（アプリのモード）に合わせます。OK を押すと切り替わります。"
-                   TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,6,0,0" />
+        </ScrollViewer>
 
-        <TextBlock Text="表示" Style="{StaticResource Section}" />
-        <CheckBox Content="隠しファイルを表示" IsChecked="{Binding ShowHidden}" />
-        <CheckBox Content="実行形式を開く前に確認する" IsChecked="{Binding ConfirmExecutables}" />
-
-        <TextBlock Text="最近の履歴・よく使う項目" Style="{StaticResource Section}" />
-        <CheckBox Content="Windows の最近使った項目を含める" IsChecked="{Binding IncludeWindowsRecent}" />
-        <CheckBox Content="開いたファイルを Windows の最近使った項目にも追加する" IsChecked="{Binding AddToWindowsRecent}" />
-        <Grid Margin="0,8,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="90" />
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-            <TextBlock Text="最近の履歴の表示件数（10〜500）" VerticalAlignment="Center" />
-            <TextBox Grid.Column="1" Style="{StaticResource Input}" Text="{Binding RecentLimitText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
-            <TextBlock Grid.Row="1" Text="よく使う項目の表示件数（10〜200）" VerticalAlignment="Center" />
-            <TextBox Grid.Row="1" Grid.Column="1" Style="{StaticResource Input}" Text="{Binding FrequentLimitText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
-        </Grid>
-
-        <TextBlock Text="エクスプローラー" Style="{StaticResource Section}" />
-        <CheckBox IsChecked="{Binding OpenExplorerInNewTab}">
-            <TextBlock Text="エクスプローラーで表示するとき、開いているエクスプローラーに新しいタブで開く（Windows 11）" TextWrapping="Wrap" />
-        </CheckBox>
-        <TextBlock Text="エクスプローラーが開いていないとき、またはタブに対応していない Windows では、新しいウィンドウで開きます。"
-                   TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="20,0,0,0" />
-
-        <TextBlock Text="右クリックのメニュー" Style="{StaticResource Section}" />
-        <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3" Background="{DynamicResource Brush.Surface2}"
-                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
-            <StackPanel Orientation="Horizontal">
-                <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="ItemMenu" Content="アプリのメニュー" IsChecked="{Binding IsItemMenuApp}" />
-                <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="ItemMenu" Content="Windows のメニュー" IsChecked="{Binding IsItemMenuWindows}" Margin="3,0,0,0" />
-            </StackPanel>
-        </Border>
-        <TextBlock Text="「Windows のメニュー」は、項目の右クリックでエクスプローラーのメニュー（7-Zip・送る・プロパティなど）を出し、その上にアプリの項目を並べます。ドライブ・空いているところ・使えない項目や、エクスプローラーのメニューが 5 秒以内に準備できなかったときは、アプリのメニューを出します（準備できなかった項目は、しばらくアプリのメニューになります）。"
-                   TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,6,0,0" />
-
-        <TextBlock Text="データ" Style="{StaticResource Section}" />
-        <Grid Margin="0,0,0,2">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="90" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="画像サムネイルのキャッシュ上限（MB、0〜8192。0 で保存しない）" VerticalAlignment="Center" TextWrapping="Wrap" />
-            <TextBox Grid.Column="1" Style="{StaticResource Input}" Text="{Binding ThumbCacheMbText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
-        </Grid>
-        <TextBlock Text="一度表示した画像のサムネイルをデータフォルダの thumbs に保存し、次からすぐ表示します。変更は次回の起動から有効です。"
-                   TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,0,0,8" />
-        <WrapPanel>
-            <Button Style="{StaticResource Btn}" Content="よく使う項目の統計をリセット" Command="{Binding ResetStatsCommand}" Margin="0,0,8,8" />
-            <Button Style="{StaticResource Btn}" Content="データフォルダを開く" Command="{Binding OpenDataFolderCommand}" Margin="0,0,8,8" />
-        </WrapPanel>
-        <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Foreground="{DynamicResource Brush.Ok}" Margin="0,2,0,0" />
-        <TextBlock Text="{Binding Error}" TextWrapping="Wrap" Foreground="{DynamicResource Brush.Danger}" Margin="0,2,0,0" />
-
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="22,16,22,16">
             <Button Style="{StaticResource Btn.Primary}" Content="OK" MinWidth="100" Margin="0,0,8,0" IsDefault="True" Click="OnOk" />
             <Button Style="{StaticResource Btn}" Content="キャンセル" MinWidth="100" IsCancel="True" />
         </StackPanel>
-    </StackPanel>
+    </Grid>
 </Window>

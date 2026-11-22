@@ -260,7 +260,7 @@ public static class FileTransfer
     }
 
     /// <summary>File-system path of a shell item, or null when it has none or cannot be read.</summary>
-    private static unsafe string? FileSystemPath(IShellItem? item)
+    internal static unsafe string? FileSystemPath(IShellItem? item)
     {
         if (item is null)
         {
@@ -288,9 +288,10 @@ public static class FileTransfer
         }
     }
 
-    private static bool IsCancel(int hr) => hr is ErrorCancelled or EAbort or CopyEngineUserCancelled;
+    /// <summary>A cancel by the user or the shell (also for <see cref="ShellFileOps"/>).</summary>
+    internal static bool IsCancel(int hr) => hr is ErrorCancelled or EAbort or CopyEngineUserCancelled;
 
-    private static void Release(object? comObject)
+    internal static void Release(object? comObject)
     {
         if (comObject is not null && Marshal.IsComObject(comObject))
         {

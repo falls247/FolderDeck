@@ -125,6 +125,39 @@ public partial class CardGrid : UserControl, IItemsView
 
     public FrameworkElement? RealizedItemAt(MouseEventArgs e) => ItemsViewHitTest.Find(_scroll, RowsHost, e);
 
+    /// <summary>The row of the card (its index divided by the columns) is what the panel brings into view.</summary>
+    public FrameworkElement? BringItemIntoView(CardViewModel item)
+    {
+        if (Items is not { } items || _columns < 1 || !IsVisible)
+        {
+            return null;
+        }
+
+        int index = -1;
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (ReferenceEquals(items[i], item))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        if (index < 0)
+        {
+            return null; // tested before dividing: -1 / n is 0
+        }
+
+        _rowsPanel ??= FindDescendant<VirtualizingStackPanel>(RowsHost);
+        if (_rowsPanel is null)
+        {
+            RowsHost.UpdateLayout(); // the items panel exists after the first measure
+            _rowsPanel = FindDescendant<VirtualizingStackPanel>(RowsHost);
+        }
+
+        return ItemsViewReveal.Reveal(RowsHost, _rowsPanel, index / _columns, item);
+    }
+
     public void ScrollTo(double offset)
     {
         if (_scroll is null)

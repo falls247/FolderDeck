@@ -131,24 +131,39 @@ public class CardOrderingTests
     private sealed record Sized(string Name, long? Size = null);
 
     [Fact]
-    public void BySize_UnknownSizesGoLast_TiesAreByNameAscending()
+    public void BySize_UnknownSizesGoLast_TiesFollowTheDirection()
     {
         Sized[] items = [new("dir2"), new("b.txt", 10), new("big.bin", 500), new("a.txt", 10), new("dir1"), new("zero", 0)];
         var asc = CardOrdering.ComparerFor<Sized>(CardSortMode.SizeAsc, i => i.Name, _ => null, i => i.Size);
         var desc = CardOrdering.ComparerFor<Sized>(CardSortMode.SizeDesc, i => i.Name, _ => null, i => i.Size);
         Assert.Equal(["zero", "a.txt", "b.txt", "big.bin", "dir1", "dir2"], items.OrderBy(i => i, asc).Select(i => i.Name));
-        Assert.Equal(["big.bin", "a.txt", "b.txt", "zero", "dir1", "dir2"], items.OrderBy(i => i, desc).Select(i => i.Name));
+        Assert.Equal(["big.bin", "b.txt", "a.txt", "zero", "dir2", "dir1"], items.OrderBy(i => i, desc).Select(i => i.Name));
     }
 
     [Fact]
-    public void ByType_ComparesExtensionsIgnoringCase_TiesAreByNameAscending()
+    public void ByType_ComparesExtensionsIgnoringCase_TiesFollowTheDirection()
     {
         string[] names = ["b.JPG", "notes.txt", "a.jpg", "folder", "c.Jpg", "z.bmp"];
         static string Ext(string name) => Path.GetExtension(name);
         var asc = CardOrdering.ComparerFor<string>(CardSortMode.TypeAsc, n => n, _ => null, typeOf: Ext);
         var desc = CardOrdering.ComparerFor<string>(CardSortMode.TypeDesc, n => n, _ => null, typeOf: Ext);
         Assert.Equal(["folder", "z.bmp", "a.jpg", "b.JPG", "c.Jpg", "notes.txt"], names.OrderBy(n => n, asc));
-        Assert.Equal(["notes.txt", "a.jpg", "b.JPG", "c.Jpg", "z.bmp", "folder"], names.OrderBy(n => n, desc));
+        Assert.Equal(["notes.txt", "c.Jpg", "b.JPG", "a.jpg", "z.bmp", "folder"], names.OrderBy(n => n, desc));
+    }
+
+    [Fact]
+    public void InsideAFolder_FoldersOnlyStillFlipWithSizeAndType()
+    {
+        // A folder of folders: none has a size or an extension, so only the name order can show
+        // the direction (it used to stay ascending, and the header click seemed to do nothing).
+        string[] folders = ["b", "a", "c"];
+        foreach (var (asc, desc) in new[] { (CardSortMode.SizeAsc, CardSortMode.SizeDesc), (CardSortMode.TypeAsc, CardSortMode.TypeDesc) })
+        {
+            var up = CardOrdering.FoldersFirst(_ => true, CardOrdering.ComparerFor<string>(asc, n => n, _ => null, _ => null, _ => string.Empty)!);
+            var down = CardOrdering.FoldersFirst(_ => true, CardOrdering.ComparerFor<string>(desc, n => n, _ => null, _ => null, _ => string.Empty)!);
+            Assert.Equal(["a", "b", "c"], folders.OrderBy(n => n, up));
+            Assert.Equal(["c", "b", "a"], folders.OrderBy(n => n, down));
+        }
     }
 
     [Theory]

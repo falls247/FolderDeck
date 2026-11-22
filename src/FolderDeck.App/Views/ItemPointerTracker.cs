@@ -33,6 +33,28 @@ public sealed class ItemPointerTracker
     private bool _dragCandidate;
     private Point _pressedAt;
 
+    /// <summary>The press is the second one of a double click on the item that got the first click.</summary>
+    private bool _doubleClick;
+
+    /// <summary>
+    /// The item the last plain click on this element went to, and when that click was pressed
+    /// (<see cref="InputEventArgs.Timestamp"/>). WPF counts a double click by time and distance only,
+    /// whatever was pressed, so the second press must find the same item (a reused element shows
+    /// another one) and a first press recent enough to be the one before it (not an old click with
+    /// the first press of this double click on something else: a row of the card's overlay).
+    /// </summary>
+    private CardViewModel? _lastClicked;
+
+    private int _lastClickPressedAt;
+
+    /// <summary>The current press: its time, and whether Ctrl / Shift made it a selection click.</summary>
+    private int _pressTime;
+
+    private bool _pressSelecting;
+
+    /// <summary>The double-click time of Windows, in milliseconds (read once).</summary>
+    private static readonly int DoubleClickTime = (int)Windows.Win32.PInvoke.GetDoubleClickTime();
+
     /// <param name="element">The element whose mouse events are forwarded; menus are placed on it.</param>
     /// <param name="item">The item the element shows now (it changes when a container is reused).</param>
     /// <param name="ownsPress">
@@ -60,6 +82,7 @@ public sealed class ItemPointerTracker
         var source = e.OriginalSource as DependencyObject;
         bool rightHeld = e.RightButton == MouseButtonState.Pressed;
         bool onButton = CardView.FindAncestor<ButtonBase>(source) is not null;
+        _doubleClick = false;
         if (_rocker.LeftDown(rightHeld, e.Handled || onButton ? null : _item()))
         {
             _pressed = false;
@@ -77,7 +100,18 @@ public sealed class ItemPointerTracker
 
         // A double click must not run twice (§6.8): only the first press counts. A Ctrl / Shift
         // press only changes the selection, so a quick second one must count (to toggle back).
-        _pressed = e.ClickCount == 1 || (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
+        // When items open on a double click, the first click selects and the second press counts
+        // too: on the item of the first click it opens it, on another one it is a first click.
+        bool selecting = (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
+        bool byDoubleClick = e.ClickCount == 2 && !selecting && CardView.Host?.OpensOnDoubleClick == true;
+        _doubleClick = byDoubleClick
+            && _lastClicked is not null
+            && ReferenceEquals(_lastClicked, _item())
+            && unchecked(e.Timestamp - _lastClickPressedAt) is >= 0 and var elapsed
+            && elapsed <= DoubleClickTime;
+        _pressTime = e.Timestamp;
+        _pressSelecting = selecting;
+        _pressed = e.ClickCount == 1 || selecting || byDoubleClick;
         _pressedAt = e.GetPosition(_element);
         _dragCandidate = _pressed && !e.Handled && !onButton && _ownsPress?.Invoke(source) != true;
     }
@@ -101,7 +135,14 @@ public sealed class ItemPointerTracker
             e.Handled = true;
             if (_item() is { } item)
             {
-                CardView.Host?.ItemClick(item, _element, Keyboard.Modifiers);
+                bool doubleClick = _doubleClick;
+                _doubleClick = false;
+
+                // Only a plain click can be the first of a double click; after a double click the
+                // next quick press starts over (no triple click).
+                _lastClicked = doubleClick || _pressSelecting ? null : item;
+                _lastClickPressedAt = _pressTime;
+                CardView.Host?.ItemClick(item, _element, Keyboard.Modifiers, doubleClick);
             }
         }
     }
@@ -135,7 +176,12 @@ public sealed class ItemPointerTracker
     }
 
     /// <summary>The element shows another item (or none): a gesture armed on the old one is forgotten.</summary>
-    public void ItemChanged() => _rocker.Cancel();
+    public void ItemChanged()
+    {
+        _rocker.Cancel();
+        _lastClicked = null;
+        _doubleClick = false;
+    }
 
     /// <summary>
     /// Starts a drag once the pointer moved past the system drag distance with the button held.
