@@ -176,6 +176,45 @@ public sealed class PreviewTests : IDisposable
     public void Cloud_only_files_are_told_by_their_attributes(int attributes, bool expected) =>
         Assert.Equal(expected, FileContent.IsCloudOnly((FileAttributes)attributes));
 
+    [Theory]
+    [InlineData(0x400000 | 0x400 | 0x20, true)] // OneDrive online-only placeholder
+    [InlineData(0x400000 | (int)FileAttributes.Offline, true)]
+    [InlineData(0x40000, false)] // RECALL_ON_OPEN alone: archive storage, not a sync app's placeholder
+    [InlineData((int)FileAttributes.Offline, false)]
+    [InlineData((int)(FileAttributes.Archive | FileAttributes.ReparsePoint | FileAttributes.SparseFile), false)] // already downloaded
+    public void Only_cloud_placeholders_are_downloadable(int attributes, bool expected) =>
+        Assert.Equal(expected, FileContent.IsDownloadable((FileAttributes)attributes));
+
+    [Fact]
+    public async Task Download_reads_a_file_to_its_end_and_reports_files_it_cannot_read()
+    {
+        string local = Path.Combine(_dir, "photo.jpg");
+        File.WriteAllBytes(local, new byte[(3 << 20) + 5]); // more than one read buffer
+        Assert.Equal(DownloadResult.Done, await FileContent.DownloadAsync(local, CancellationToken.None));
+        Assert.Equal(DownloadResult.Failed, await FileContent.DownloadAsync(Path.Combine(_dir, "missing.jpg"), CancellationToken.None));
+        Assert.False(FileContent.IsDownloadable(local));
+    }
+
+    [Theory]
+    [InlineData(unchecked((int)0x80070189), DownloadResult.Refused)] // blocked in "Automatic file downloads"
+    [InlineData(unchecked((int)0x8007018E), DownloadResult.Refused)] // cancelled in Windows' notification
+    [InlineData(unchecked((int)0x80070184), DownloadResult.Unreachable)] // offline
+    [InlineData(unchecked((int)0x8007016A), DownloadResult.Unreachable)] // sync app not running
+    [InlineData(unchecked((int)0x80070185), DownloadResult.Failed)] // the sync app's generic failure
+    [InlineData(unchecked((int)0x80040189), DownloadResult.Failed)] // same code, not a Win32 error
+    public void Download_failures_are_told_apart_by_the_sync_apps_error(int hresult, DownloadResult expected) =>
+        Assert.Equal(expected, FileContent.DownloadFailureOf(hresult));
+
+    [Fact]
+    public async Task Download_stops_when_cancelled()
+    {
+        string local = Path.Combine(_dir, "photo.jpg");
+        File.WriteAllBytes(local, new byte[1024]);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => FileContent.DownloadAsync(local, cancelled.Token));
+    }
+
     [Fact]
     public void Session_marker_round_trips_and_is_gone_after_a_clean_exit()
     {

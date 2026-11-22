@@ -1689,8 +1689,20 @@ public sealed class CascadeController
             }
 
             // A picture: the shell's thumbnail (images, Office's or another app's handler, video
-            // frames) or, for Open XML files, the thumbnail saved inside the file.
-            var result = await _services.Thumbnails.GetAsync(row.Path, ThumbSource.File, pixels, ThumbnailService.IconPixelsBase, row.ModifiedUtc, row.Length, preview.Cts.Token);
+            // frames) or, for Open XML files, the thumbnail saved inside the file. An online-only
+            // picture without one is downloaded first (ThumbnailService.DownloadAsync); closing the
+            // preview cancels its token and so the download.
+            bool downloadStarted = false;
+            var downloading = new Progress<ThumbResult>(_ =>
+            {
+                downloadStarted = true; // reported here (UI thread) before the result comes back
+                if (ReferenceEquals(_preview, preview))
+                {
+                    preview.Model.ShowDownloading();
+                }
+            });
+            var result = await _services.Thumbnails.GetAsync(
+                row.Path, ThumbSource.File, pixels, ThumbnailService.IconPixelsBase, row.ModifiedUtc, row.Length, preview.Cts.Token, downloading, urgent: true);
             if (!ReferenceEquals(_preview, preview))
             {
                 return;
@@ -1723,7 +1735,11 @@ public sealed class CascadeController
             }
             else
             {
-                FailPreview(preview, emptyNote);
+                string? note = emptyNote ?? await CloudNoteAsync(row, downloadStarted, _services.Thumbnails);
+                if (ReferenceEquals(_preview, preview))
+                {
+                    FailPreview(preview, note);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -1737,6 +1753,26 @@ public sealed class CascadeController
                 FailPreview(preview, null);
             }
         }
+    }
+
+    /// <summary>
+    /// Why an online-only picture shows nothing (null when it is not one, or for no particular
+    /// reason): the app's downloads were refused (cancelled in Windows' notification, or the app
+    /// blocked), it is too large to be downloaded for a preview, downloads are paused (offline), or
+    /// its download failed. The attributes are read on a worker (a network path may be slow).
+    /// </summary>
+    private static async Task<string?> CloudNoteAsync(EntryRowViewModel row, bool downloadStarted, ThumbnailService thumbnails)
+    {
+        if (row.PreviewKind != PreviewKind.Image || !await Task.Run(() => FileContent.IsDownloadable(row.Path)))
+        {
+            return null;
+        }
+
+        return thumbnails.DownloadsRefused ? "ダウンロードが取り消されたかブロックされています（FolderDeck を起動し直すまでダウンロードしません）"
+            : row.Length > ThumbnailService.MaxDownloadBytes ? "大きいファイルのためダウンロードしません"
+            : thumbnails.DownloadsPaused ? "ダウンロードできません（オフライン、または同期アプリが動いていません）"
+            : downloadStarted ? "ダウンロードできませんでした"
+            : null;
     }
 
     /// <summary>

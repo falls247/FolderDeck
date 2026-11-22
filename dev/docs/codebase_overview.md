@@ -17,7 +17,7 @@
 | §2.3 | その他 | tools と BAT（文字コードの注意） |
 | §3 | 主要な処理の流れ | 呼び出しの順序をメンバー名でたどる |
 | §3.1 | タブの読み込み | `TabViewModel.LoadAsync`、`NavLocation`、`_baseCards` / `_orderedCards` / `Cards`（フィルター） |
-| §3.2 | カードの段階読み込み | `Realize` / `Unrealize`、`DetailGate`、`ThumbnailService`（画像は `ImageDecoder` + `ThumbDiskCache`、ほかはシェル）、詳細表示の行は読み込まない |
+| §3.2 | カードの段階読み込み | `Realize` / `Unrealize`、`DetailGate`、`ThumbnailService`（画像は `ImageDecoder` + `ThumbDiskCache`、ほかはシェル、「オンラインのみ」の画像はダウンロード）、詳細表示の行は読み込まない |
 | §3.3 | カスケード | `CascadeController`：オーバーレイ・フライアウト・タイマー・開閉の判断、カード起点とアンカー起点（`ICascadeAnchor`：サイドバーの行、詳細表示の行の名前の列）、詳細表示のファイルの行のプレビュー（`ICascadeAnchor.File`、階層なしのプレビュー `ParentIndex` -1、`IsOpen`）、Ctrl / Shift を押したときに閉じる一覧、エクスプローラーのメニューを出している間の凍結（`SetNativeMenuOpen`）、メニュー エイム（子へ向かう間は開閉・切り替えを待つ。`MenuAim`、`IsHeadingForChildOf`、`_pendingCard`） |
 | §3.4 | プレビュー | 起点 2 つ（カスケードの行・詳細表示の行の名前の列 → `OpenPreviewAt`）、`PreviewTextCache` → Office / テキスト抜粋 → サムネイル |
 | §3.5 | 開く・移動する | `OpenFileAsync`、利用記録、項目のポインター操作（`ItemPointerTracker`）、右クリックの操作、右クリックのメニューの 2 つの出し方（設定 `item_menu`：WPF のアプリのメニュー / エクスプローラーのメニューの上にアプリの項目、`ShowEntries`、出せなかったときの WPF のメニュー `OpenFallback`）、空白の右クリック＝表示中のフォルダのメニュー（`ShowBlank` / `BlankEntries`、`ShownFolderItem`、エクスプローラーの背景メニュー `ShowBackgroundAsync`）、空白に落ちた項目の右クリック（`RealizedItemAt`）、右ボタンを押したままの左クリック、ごみ箱への削除（メニューと Delete キー、複数は 1 つの操作）、選択（Ctrl / Shift のクリック、`SelectionModel`）、切り取り・コピー・貼り付け（`ShellClipboard`、`PasteAsync` → `FileTransfer`）、エクスプローラーのメニュー（「その他のメニュー（Windows）」、`ShellContextMenu`）、名前の変更と新しいフォルダー（F2・Ctrl + Shift + N、`RenameEditor`、`ShellFileOps`）、ダブルクリックで開く（設定 `open_on_double_click`） |
@@ -147,7 +147,7 @@ App
 | | `CoverFinder.cs` | フォルダカードのカバー画像の探索（§6.4） |
 | | `TtlCache.cs` | 汎用の TTL キャッシュ（件数上限つき） |
 | | `PreviewKinds.cs` | 拡張子 → `PreviewKind`（None / Image / Presentation / WordDocument / Spreadsheet / Text）。**対象拡張子の一覧はここ** |
-| | `FileContent.cs` | `IsCloudOnly`：OneDrive の「オンラインのみ」を属性だけで判定（開かない） |
+| | `FileContent.cs` | `IsCloudOnly`：OneDrive の「オンラインのみ」を属性だけで判定（開かない）。`IsDownloadable`：読むと同期アプリがダウンロードするプレースホルダー（RECALL_ON_DATA_ACCESS）か。`DownloadAsync`：最後まで非同期に読んでダウンロードさせる（画像のサムネイル専用） |
 | | `TextPreview.cs` | テキストの先頭 60 行 / 64 KB。BOM → UTF-8 → Shift_JIS の順に判定、バイナリは null |
 | | `OfficeText.cs` | Word / Excel 抜粋の公開 API（`ReadWord` / `ReadSheet`）と結果の record |
 | | `OpenXmlPackage.cs`（internal） | zip を共有モードで開く、DTD 禁止、展開量の上限（zip 爆弾対策） |
@@ -192,7 +192,7 @@ App
 | | `SessionMonitor.cs` | `lifecycle:` ログ（閉じた理由）と前回の異常終了の報告（イベントログも調べる） |
 | Shell | `ShellInterop.cs` | Win32 / COM 呼び出しの集約：シェル画像（`IShellItemImageFactory`）、`GetDIBits`、システムイメージリスト、モニターと DPI、`SHAddToRecentDocs` など |
 | | `StaWorkerPool.cs` | シェル / COM と画像デコード用の STA ワーカー（スレッドの優先度を指定できる）。タイムアウトは呼び出しが始まってから数える（キューで待つ時間は含めない）。タイムアウトした呼び出しは放棄し、ワーカーを作り直す |
-| | `ThumbnailService.cs` | カードとプレビューの画像（`ThumbSource` / `ThumbMode` / `LruCache`）。画像ファイルは自前でデコード（`DecodePicture`）、それ以外はシェル（`Produce`）（[§3.2](#32-カードの段階読み込み741)） |
+| | `ThumbnailService.cs` | カードとプレビューの画像（`ThumbSource` / `ThumbMode` / `LruCache`）。画像ファイルは自前でデコード（`DecodePicture`）、それ以外はシェル（`Produce`）。「オンラインのみ」の画像はシェルにサムネイルがなければダウンロードする（`DownloadAsync`）（[§3.2](#32-カードの段階読み込み741)） |
 | | `ImageDecoder.cs` | 画像ファイルを WIC で直接サムネイルの大きさにデコード（`CanDecode` / `Decode`）。対象の拡張子、JPEG のコーデック内縮小、EXIF の向き、透過の判定 |
 | | `ThumbDiskCache.cs`（internal） | `ImageDecoder` が作ったサムネイルをデータフォルダの `thumbs` に保存・読み出し・刈り込み（`TryRead` / `Save` / `Trim`）。規則は Core の `DiskCacheRules` |
 | | `IconCache.cs` | 一覧の行のアイコン（拡張子ごとに共有できるものは共有） |
@@ -280,8 +280,9 @@ App
 2. フォルダ：`DetailGate`（同時 8 件）の中で `Listings.GetAsync` → `ApplyListing`（件数バッジ、`DetailsLoaded` を発火）→ `CoverFinder.Find`（結果は `Covers` に保存）
 3. 画像：カバー画像があれば `ThumbnailService.GetAsync(CoverImage)`、なければ `GetAsync(Folder)`。ファイルは `GetEntry` で大きさと日時を取ってから `GetAsync(File)`
 
-`ThumbnailService.GetAsync`：メモリの LRU → 画像ファイル（`ImageDecoder.CanDecode`：jpg / jpeg / jpe / jfif / png / bmp / gif / tif / tiff / webp。フォルダ自身は対象外）なら `DecodePicture` → 画像が得られなければ `Produce`。
-- `DecodePicture`（デコード用ワーカー上）：`ThumbDiskCache.TryRead`（データフォルダの `thumbs`）→ なければ `ImageDecoder.Decode` → 作るのに 4 ms 以上かかったものは `ThumbDiskCache.Save`（書き込み用ワーカーで JPEG、透過があれば PNG に保存）。「オンラインのみ」のファイルは開かず `Produce` へ回す。
+`ThumbnailService.GetAsync`：メモリの LRU → 画像ファイル（`ImageDecoder.CanDecode`：jpg / jpeg / jpe / jfif / png / bmp / gif / tif / tiff / webp。フォルダ自身は対象外）なら `DecodePicture` → 画像が得られなければ `Produce`（ここまでが `ProduceAsync`）→ `File` で `Image` が得られず、「オンラインのみ」の画像（`PreviewKind.Image` かつ `FileContent.IsDownloadable`）なら `FromCloudAsync`：シェルが「作成中」（WTS_E_EXTRACTIONPENDING。`GetShellImage` の `pending`）と答えていれば 1.5 秒後にシェルのサムネイルをもう一度 → だめなら `DownloadAsync`（100 MB 以下）でダウンロードしてから `ProduceAsync(downloaded: true)`。
+- `DownloadAsync`：シェル・デコード用のワーカーの外（非同期 I/O）で、`_downloads`（カード。同時 2 件）か `_previewDownloads`（`urgent` = プレビュー。1 件）の順番を待ってから読む。トークンが取り消されると（カードの `Unrealize`、プレビューを閉じる）読むのをやめる（同期アプリには不要になったことが伝わる。実際に通信を止めるかは同期アプリ次第で、OneDrive は未確認）。1 件 2 分で打ち切る。始まるときに `downloading`（`IProgress<ThumbResult>`。UI スレッドで作れば UI スレッドで呼ばれる）へアイコンを渡す：カードはアイコンを出し、プレビューは「ダウンロード中…」。結果（`DownloadResult`。`FileContent.DownloadFailureOf` が同期アプリのエラーから分類）が `Refused`（ブロック・通知での取り消し）なら `_downloadsRefused` でそのセッションはもうダウンロードしない、`Unreachable`（オフライン・同期アプリ停止）なら 2 分止める（`DownloadsPaused`）、失敗・時間切れは `_failedDownloads` に記録してカードからは試さない（`urgent` のプレビューは試す。`Clear` = F5 で消える）。自分で取り消した読み取りは、同期アプリがどのエラーで終えても `OperationCanceledException`（`FileContent.DownloadAsync` がトークンを先に確かめる）なので、拒否と取り違えない。アプリが自分で読まない形式（HEIC など）はダウンロード後に絵が出なかった回数を `_extensionMisses` で数え、2 件続けば以後その形式はダウンロードしない。`DownloadAsync` の結果（`Fetch`）が `Never`（拒否・大きすぎ・その形式は無理）ならアイコンをメモリにキャッシュする（`Remember`）。`NotNow` ならしない（あとで絵が出るように）。フォルダの表紙（`CoverImage`）はダウンロードしない。
+- `DecodePicture`（デコード用ワーカー上）：`ThumbDiskCache.TryRead`（データフォルダの `thumbs`）→ なければ `ImageDecoder.Decode` → 作るのに 4 ms 以上かかったもの、またはダウンロードしたもの（`downloaded`）は `ThumbDiskCache.Save`（書き込み用ワーカーで JPEG、透過があれば PNG に保存）。「オンラインのみ」のファイルは、ディスクキャッシュにあればそれを返し（キーは属性と同じくメタデータだけで作れる）、なければ開かず `Produce` へ回す。
 - `ImageDecoder.Decode`：WIC で直接サムネイルの大きさ（`ThumbSizing.Fit`：短い辺 = 要求サイズ）にデコードする。JPEG などの不透明な形式は縮小をコーデックに直結する（JPEG は 1/2・1/4・1/8 でデコードされ、シェルより数倍速い）。パレット・透過つきは先に Pbgra32 に変換してから縮小。EXIF の向き（`System.Photo.Orientation`）を反映。結果は Bgr32（透過が本当にあるときだけ Pbgra32）で `Freeze` 済み。失敗は null（→ シェル）。
 - `Produce`（シェル用 STA ワーカー上）：シェルのサムネイル → Open XML なら `OfficeCover`（ファイル内の縮小版）→ アイコン（拡張子ごとにキャッシュ）。タイムアウトしたらシステムイメージリストのアイコン。動画・Office・フォルダ・HEIC / AVIF・.ico などはこちら（ディスクキャッシュは Windows のサムネイルキャッシュ）。
 - `ThumbDiskCache`：キーは版（`Version`）・パス・ファイルの更新日時・サイズ・要求サイズ → `DiskCacheRules.RelativePathOf` でファイル名にする。起動 20 秒後と、上限の 1/8 を書くごとに `Trim`（上限超過なら使っていない順に 8 割まで削除。3 日以上前のファイルは読んだときに日時を更新）。**保存する画像の作り方（大きさ・品質）を変えたら `Version` を上げる。**
@@ -329,7 +330,7 @@ App
 起点は 2 つで、どちらも `OpenPreviewAt(parentIndex, row, item, …)` で開く（`item` はクリックとメニューの対象の `ItemRef`。`Preview.Item`）：カスケードの行（`OnRowHovered` → preview タイマー → `OpenPreview` → `OpenPreviewAt(parent.Index, row, ItemOf(row), …)`。階層の横）と、詳細表示のファイルの行の名前の列（`OpenRoot` → `OpenPreviewAt(-1, …)`。階層なし、[§3.3](#33-カスケードcascadecontroller9)）。中身の読み込みは同じ：
 `OpenPreviewAt` → `LoadPreviewAsync`：
 1. Word / Excel / テキスト：`PreviewTextCache.GetAsync` →（`OfficeText.ReadWord` / `ReadSheet` / `TextPreview.Read`）→ `ShowExcerpt`
-2. 抜粋がない・ほかの種類：`ThumbnailService.GetAsync(File)`。`Image` / `Shell` なら表示、アイコンしかなければ「プレビューできない」扱い
+2. 抜粋がない・ほかの種類：`ThumbnailService.GetAsync(File)`。`Image` / `Shell` なら表示、アイコンしかなければ「プレビューできない」扱い（「オンラインのみ」の画像は `CloudNoteAsync` が理由を出す：取り消し・ブロック / 大きすぎる / 一時停止中 / ダウンロードできなかった）。「オンラインのみ」の画像はダウンロードを待つ間 `PreviewViewModel.ShowDownloading`（`downloading` の `Progress`）。プレビューは `urgent` でカードのダウンロードの後ろに並ばない
 3. レイアウト（シートのグリッド、「（以下省略）」）は `PreviewView.xaml.cs`
 
 `ParentIndex` が -1 のとき：`LoadPreviewAsync` の `wanted`（絵が届いたとき、ポインターがまだ元の行にあるか）はアンカー（`_anchor.IsMouseOver` と `_anchorItem.File.Row`）を見る。`OnPreviewCloseTimer` は階層の行を見ず、ポインターがプレビューの上になければ閉じる。`_levels[ParentIndex]` を引く前には必ず `ParentIndex >= 0` を確かめる。
@@ -541,7 +542,7 @@ App
 | `ItemFilterTests.cs` | `ItemFilterTests` | フィルターの設定値の変換、絞り込み、絞り込み中のドラッグ順を全体へ戻す `MergeShownOrder`、`filter_modes` の正規化と保存 |
 | `RankingTests.cs` | `RecentMergerTests` `FrequentRankerTests` `FormattingTests` | 最近の履歴の統合、スコア、表示用の書式 |
 | `PathToolsTests.cs` | `PathToolsTests` | 入力の整形、正規化、相対パス、比較 |
-| `PreviewTests.cs` | `PreviewTests` | 埋め込み縮小版（`OfficeThumbnail`）、オンラインのみの判定、`SessionMarker` |
+| `PreviewTests.cs` | `PreviewTests` | 埋め込み縮小版（`OfficeThumbnail`）、オンラインのみ・ダウンロードできるファイルの判定、`FileContent.DownloadAsync`（読み切り・取り消し）、`DownloadFailureOf`（同期アプリのエラーの分類）、`SessionMarker` |
 | `TextPreviewTests.cs` | `TextPreviewTests` | 文字コード判定、行・バイト上限、バイナリ |
 | `OfficeTextTests.cs` | `OfficeTextTests` | Word の段落・見出し・上限・壊れた / ロック中のファイル・キャンセル、Excel のセル・日付書式（1904 年基準を含む）・上限、オンラインのみは開かない |
 | `FileDragTests.cs` | `FileDragTests` | ドラッグ可否、DropList、自アプリ判定、しきい値 |
@@ -603,6 +604,7 @@ App
   - PlacementTarget を付けると、WPF は前面のウィンドウにたどれるとき（メイン ウィンドウがアクティブなとき）target のウィンドウを Popup の所有者にする。`OpenOn` は作った直後に所有者を外す（`ShellInterop.ClearOwner`）。所有されたままだと、フライアウトの中の行から開いた WPF のメニューやツールチップがフライアウトの所有になり、フライアウトが先に閉じると一緒に破棄されて `Closed` が来ない（`_menuOpen` が戻らず、一覧が閉じなくなる）。
 - WPF の ContextMenu も、PlacementTarget の左上のモニターの DPI で描かれる。ウィンドウが DPI の違うモニターにまたがっていると、右クリックした点のモニターと倍率が合わないことがある（未対応。またいだときだけ）。
 - 文字の大きさ：`Size.*` のキーは `TextScale.cs` の定数と `Themes/Styles.xaml` の既定値の 2 か所にある。片方だけ変えると、起動直後（`Apply` の前）と後で見た目が変わる、または `Apply` が上書きして効かない。`DetailsListView.RowHeight` は定数ではなく `TextScale` に従う。行の高さは整数の DIP に丸めてあるが、レイアウトの丸めでデバイス ピクセルにそろうので（125 % で 30 DIP の行は 30.4 DIP）、行を順に数えて位置を出す処理（`DetailsListView.HitTestInsertion`）は実体化した行の `ActualHeight` を使う。カードの高さも一定ではない（フッターが文字とともに伸びる。`GridMetrics` は幅・サムネイル・アイコンだけを決め、位置は実際のレイアウトから取る）。
+- **「オンラインのみ」のファイルを読むのは `ThumbnailService.DownloadAsync` だけ**（画像のサムネイル・プレビュー用。利用者の求め）。ほかに中身を読む処理（Office・テキスト・埋め込み縮小版など）を足すときは `FileContent.IsCloudOnly` で避ける（読むとダウンロードが始まる）。ダウンロードは画像だけ・カードとプレビューだけ（表紙はしない）・100 MB 以下に限る。ダウンロードに失敗・取り消し・大きすぎた画像のアイコンはキャッシュしない（`IsCloudOnlyIcon`）。
 - シェルが返すビットマップの上下と非乗算アルファの扱いは `ShellInterop` に閉じている（`docs/specification.md`「実装メモ」）。安易に反転しない。
 - `tools/dev.ps1` は UTF-8（BOM 付き）、BAT は ASCII のみ。
 - **csproj の `FolderDeckInvalidateR2ROnModeChange` を消さない**。self-contained（composite：`FolderDeck.r2r.dll` + 中身のない部品の dll）と framework-dependent（非 composite）は、ReadyToRun の中間出力 `obj\Release\net10.0-windows\win-x64\R2R` を共有する。SDK の `_CreateR2RImages` は IL より新しければ作り直さないので、このターゲットがないと `publish.bat` の直後の `publish.bat framework` が composite の部品だけを同梱し、起動直後に coreclr が fail fast する（0xc0000602、`app.log` は 1 行も出ない。`DOTNET_ReadyToRun=0` では起きないので、R2R を疑う）。ターゲットは SDK の内部名（`_CreateR2RImages`、`_ReadyToRunOutputPath`）に依存し、名前が変わると黙って動かなくなる。SDK を上げたら `publish.bat` → `publish.bat framework` の順に作り、2 回目のログに `ReadyToRun: mode changed` が出ること・その exe が起動することを確かめる。`-p:SelfContained` 以外で R2R の作り方を変える引数（`PublishReadyToRunComposite` など）を足すときは、モードの文字列（`_FolderDeckR2RMode`）にも入れる。

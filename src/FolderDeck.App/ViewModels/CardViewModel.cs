@@ -419,7 +419,16 @@ public sealed partial class CardViewModel : ObservableObject
             }
         }
 
-        var result = await _services.Thumbnails.GetAsync(Path, ThumbSource.File, _thumbPx, _iconPx, ModifiedUtc, Length ?? 0, ct);
+        // An online-only picture is downloaded for its thumbnail: meanwhile the card shows its icon.
+        var downloading = new Progress<ThumbResult>(icon =>
+        {
+            if (!ct.IsCancellationRequested)
+            {
+                Thumbnail = icon.Image;
+                ThumbMode = icon.Mode;
+            }
+        });
+        var result = await _services.Thumbnails.GetAsync(Path, ThumbSource.File, _thumbPx, _iconPx, ModifiedUtc, Length ?? 0, ct, downloading);
         ct.ThrowIfCancellationRequested();
         Thumbnail = result.Image;
         ThumbMode = result.Mode;
