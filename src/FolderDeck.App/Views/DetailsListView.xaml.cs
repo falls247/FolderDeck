@@ -17,6 +17,9 @@ namespace FolderDeck.Views;
 public sealed partial class DetailsMetrics : ObservableObject
 {
     [ObservableProperty]
+    private GridLength _nameWidth = new(DetailsColumns.Defaults[DetailsColumns.Name]);
+
+    [ObservableProperty]
     private GridLength _modifiedWidth = new(DetailsColumns.Defaults[DetailsColumns.Modified]);
 
     [ObservableProperty]
@@ -49,9 +52,6 @@ public partial class DetailsListView : UserControl, IItemsView
     /// the app's ScrollBar style gives it). The header's margin in XAML mirrors the same numbers.
     /// </summary>
     private const double HorizontalChrome = 12 + 2 + 10;
-
-    /// <summary>What the 名前 column keeps while the others are resized or the window shrinks.</summary>
-    private const double MinNameWidth = 120;
 
     /// <summary>Height of the band at the top / bottom edge that scrolls while dragging, and the fastest step.</summary>
     private const double AutoScrollZone = 40;
@@ -133,7 +133,7 @@ public partial class DetailsListView : UserControl, IItemsView
     }
 
     /// <summary>
-    /// The stored widths of the resizable columns (<see cref="DetailsColumns"/> keys). They are
+    /// The stored widths of the columns, 名前 included (<see cref="DetailsColumns"/> keys). They are
     /// drawn through <see cref="DetailsColumns.Fit"/>, so a narrow window shows them smaller
     /// without changing what is stored.
     /// </summary>
@@ -225,9 +225,10 @@ public partial class DetailsListView : UserControl, IItemsView
         var widths = _resize?.Widths ?? Columns ?? DetailsColumns.Defaults;
         double available = ActualWidth - HorizontalChrome - end;
         var shown = available > 0
-            ? DetailsColumns.Fit(available, widths, MinNameWidth)
+            ? DetailsColumns.Fit(available, widths)
             : DetailsColumns.Normalize(widths); // not laid out yet
 
+        Metrics.NameWidth = HeaderName.Width = new GridLength(shown[DetailsColumns.Name]);
         Metrics.ModifiedWidth = HeaderModified.Width = new GridLength(shown[DetailsColumns.Modified]);
         Metrics.TypeWidth = HeaderType.Width = new GridLength(shown[DetailsColumns.Type]);
         Metrics.SizeWidth = HeaderSize.Width = new GridLength(shown[DetailsColumns.Size]);
@@ -265,10 +266,17 @@ public partial class DetailsListView : UserControl, IItemsView
     }
 
     /// <summary>
-    /// A grip is dragged: the column to its right gets wider when the grip moves left (the columns
-    /// are anchored to the right edge, 名前 gives or takes the difference). The drag works on the
-    /// widths as they are shown, measured against the list (which does not move), and is reported
-    /// once at the end.
+    /// A grip is dragged. Each grip sits on the right edge of a column and resizes that column (the
+    /// one on its left), as in Explorer: the columns to its left do not move, so the grip follows the
+    /// pointer. Only the dragged column and the empty space right of the last column change; the
+    /// column grows at most into that space (when there is none, another column such as 名前 has to
+    /// be narrowed first). The new width is measured from the width as shown and the pointer
+    /// against the list (which does not move), and is reported once at the end.
+    /// While dragging, the list is drawn exactly as it will be once the width is stored: the stored
+    /// widths with only the dragged one replaced, through <see cref="DetailsColumns.Fit"/>. So when
+    /// the window is too narrow for the stored widths (名前 shown narrower than stored), narrowing
+    /// another column gives the space back to 名前 first and the grip stays put until 名前 is back to
+    /// its stored width; the other stored widths are never changed by a drag.
     /// </summary>
     private void OnGripDragStarted(object sender, DragStartedEventArgs e)
     {
@@ -279,13 +287,17 @@ public partial class DetailsListView : UserControl, IItemsView
 
         var shown = new Dictionary<string, double>(StringComparer.Ordinal)
         {
+            [DetailsColumns.Name] = Metrics.NameWidth.Value,
             [DetailsColumns.Modified] = Metrics.ModifiedWidth.Value,
             [DetailsColumns.Type] = Metrics.TypeWidth.Value,
             [DetailsColumns.Size] = Metrics.SizeWidth.Value,
         };
         if (shown.TryGetValue(key, out double start))
         {
-            _resize = new ColumnResize(key, start, Mouse.GetPosition(this).X, shown);
+            double filler = Math.Max(0, ActualWidth - HorizontalChrome - Metrics.EndWidth.Value - shown.Values.Sum());
+            double maxWidth = Math.Min(DetailsColumns.MaxOf(key), Math.Max(start, Math.Floor(start + filler)));
+            var stored = DetailsColumns.Normalize(Columns ?? DetailsColumns.Defaults);
+            _resize = new ColumnResize(key, start, Mouse.GetPosition(this).X, maxWidth, stored[key], stored);
         }
     }
 
@@ -296,12 +308,11 @@ public partial class DetailsListView : UserControl, IItemsView
             return;
         }
 
-        // 名前 keeps its minimum: the column cannot take more than what the others leave.
-        double others = resize.Widths.Where(w => w.Key != resize.Key).Sum(w => w.Value);
-        double room = ActualWidth - HorizontalChrome - Metrics.EndWidth.Value - MinNameWidth - others;
-        double max = Math.Max(DetailsColumns.Min, Math.Min(DetailsColumns.Max, room));
-        double width = resize.StartWidth - (Mouse.GetPosition(this).X - resize.StartX);
-        resize.Widths[resize.Key] = Math.Round(Math.Clamp(width, DetailsColumns.Min, max));
+        // Math.Max keeps Clamp's bounds ordered; the outer Min keeps the column inside the empty space.
+        double min = DetailsColumns.MinOf(resize.Key);
+        double width = resize.StartWidth + (Mouse.GetPosition(this).X - resize.StartX);
+        resize.Widths[resize.Key] = Math.Min(
+            resize.MaxWidth, Math.Round(Math.Clamp(width, min, Math.Max(min, resize.MaxWidth))));
         UpdateColumns();
     }
 
@@ -313,7 +324,7 @@ public partial class DetailsListView : UserControl, IItemsView
         }
 
         _resize = null;
-        if (!e.Canceled && resize.Widths[resize.Key] != resize.StartWidth)
+        if (!e.Canceled && resize.Widths[resize.Key] != resize.StoredWidth)
         {
             ColumnResized?.Invoke(resize.Key, resize.Widths[resize.Key]);
         }
@@ -546,7 +557,9 @@ public partial class DetailsListView : UserControl, IItemsView
     }
 
     /// <summary>State of the running column resize.</summary>
-    private sealed class ColumnResize(string key, double startWidth, double startX, Dictionary<string, double> widths)
+    private sealed class ColumnResize(
+        string key, double startWidth, double startX, double maxWidth, double storedWidth,
+        Dictionary<string, double> widths)
     {
         public string Key { get; } = key;
 
@@ -555,7 +568,16 @@ public partial class DetailsListView : UserControl, IItemsView
         /// <summary>Pointer position (list coordinates) when the grip was pressed.</summary>
         public double StartX { get; } = startX;
 
-        /// <summary>The widths as shown when the drag began, with the dragged column's changing.</summary>
+        /// <summary>The widest the column may get: its start width plus the empty space right of the last column.</summary>
+        public double MaxWidth { get; } = maxWidth;
+
+        /// <summary>The stored width of the dragged column when the drag began (an unmoved grip reports nothing).</summary>
+        public double StoredWidth { get; } = storedWidth;
+
+        /// <summary>
+        /// The stored widths (normalized) when the drag began, with the dragged column's changing; drawn
+        /// through <see cref="DetailsColumns.Fit"/> like the stored ones, so the preview matches the result.
+        /// </summary>
         public Dictionary<string, double> Widths { get; } = widths;
     }
 

@@ -84,8 +84,8 @@ public sealed partial class MainViewModel : ObservableObject
     private CardShape _cardShape = CardShape.Portrait;
 
     /// <summary>
-    /// Widths of the resizable columns of the details list (<c>details_columns</c>: always the three
-    /// known keys). Replaced, never changed in place, by <see cref="SetDetailsColumnWidth"/>.
+    /// Widths of the columns of the details list (<c>details_columns</c>: always the four known keys,
+    /// name / modified / type / size). Replaced, never changed in place, by <see cref="SetDetailsColumnWidth"/>.
     /// </summary>
     [ObservableProperty]
     private IReadOnlyDictionary<string, double> _detailsColumns = DetailsColumnRules.Defaults;
@@ -1517,6 +1517,19 @@ public sealed partial class MainViewModel : ObservableObject
         bool usable = item.IsFolder && !item.IsDisabled && item.Card?.IsDisabled != true;
         return usable && PathTools.IsFullyQualified(item.Path) ? item.Path : null;
     }
+
+    /// <summary>
+    /// The folder the shown tab lists, as an item of its own, for the menu of the blank area
+    /// (エクスプローラーで表示, パスをコピー, 登録フォルダに追加 and Explorer's background menu). Null
+    /// where <see cref="TabViewModel.TransferTargetPath"/> is (the top lists, no tab, loading, a
+    /// failed load). No ItemContext of its own: a root is a Drive (using it is not recorded in the
+    /// history, as for a drive row), any other folder a FlyoutHeader (the folder itself, never cut
+    /// or deleted). Those three commands branch on no other context.
+    /// </summary>
+    public ItemRef? ShownFolderItem() =>
+        SelectedTab.TransferTargetPath is { } path
+            ? new ItemRef(path, IsFolder: true, SelectedTab.Location, PathTools.IsRoot(path) ? ItemContext.Drive : ItemContext.FlyoutHeader)
+            : null;
 
     /// <summary>A paste into <paramref name="folder"/> can start now (the clipboard offers files).</summary>
     public bool CanPaste(string? folder) => folder is not null && !_fileOpBusy && ShellClipboard.HasFiles();

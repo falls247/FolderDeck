@@ -13,7 +13,9 @@ namespace FolderDeck.Views;
 /// <summary>
 /// The app's own right-click menu (§11), shared by cards, overlay rows, flyout rows, headers and
 /// sidebar rows. The entries of an item are built once (<see cref="MenuEntry"/>) and shown either as
-/// a WPF menu or, with the setting 「Windows のメニュー」, on top of Explorer's own menu.
+/// a WPF menu or, with the setting 「Windows のメニュー」, on top of Explorer's own menu. The blank
+/// area of the item list gets the menu of the folder shown the same way (on top of Explorer's
+/// background menu of that folder).
 /// </summary>
 public sealed class ContextMenuFactory
 {
@@ -49,6 +51,13 @@ public sealed class ContextMenuFactory
 
     /// <summary>Paths whose Explorer menu timed out, with Environment.TickCount64 at the timeout (UI thread only).</summary>
     private readonly Dictionary<string, long> _timedOut = new(PathTools.Comparer);
+
+    /// <summary>
+    /// As <see cref="_timedOut"/>, for folders whose background menu timed out. Kept apart: the item
+    /// menu of a folder and its background menu are built by different extensions (Directory and
+    /// Directory\Background), so one timing out says nothing about the other.
+    /// </summary>
+    private readonly Dictionary<string, long> _timedOutBackground = new(PathTools.Comparer);
 
     /// <summary>
     /// The menu of one item, or with <paramref name="group"/> (more than one item: the selection the
@@ -188,12 +197,16 @@ public sealed class ContextMenuFactory
 
     /// <summary>
     /// Explorer's menu with the entries on top when the setting asks for it and the items allow it;
-    /// else the WPF menu (with 「その他のメニュー（Windows）」 last in the app's mode only).
+    /// else the WPF menu (with 「その他のメニュー（Windows）」 last in the app's mode only). With
+    /// <paramref name="background"/> Explorer's menu is the background menu of the one folder in
+    /// <paramref name="nativePaths"/> (the blank area), not the menu of those items.
     /// </summary>
-    private void ShowEntries(List<MenuEntry> entries, FrameworkElement target, NativeMenuPoint at, IReadOnlyList<string>? nativePaths, bool nativeEnabled)
+    private void ShowEntries(
+        List<MenuEntry> entries, FrameworkElement target, NativeMenuPoint at, IReadOnlyList<string>? nativePaths, bool nativeEnabled,
+        bool background = false)
     {
         bool windowsMenu = _vm.UsesWindowsItemMenu;
-        if (nativePaths is not null && nativeEnabled && windowsMenu && !TimedOutRecently(nativePaths))
+        if (nativePaths is not null && nativeEnabled && windowsMenu && !TimedOutRecently(nativePaths, background))
         {
             if (_nativeMenus > 0)
             {
@@ -202,14 +215,14 @@ public sealed class ContextMenuFactory
                 return;
             }
 
-            _ = ShowNativeAsync(nativePaths, at, entries, target);
+            _ = ShowNativeAsync(nativePaths, at, entries, target, background);
             return;
         }
 
         var menu = Render(entries, target);
         if (nativePaths is not null && !windowsMenu)
         {
-            AddNativeItem(menu, nativePaths, nativeEnabled, at);
+            AddNativeItem(menu, nativePaths, nativeEnabled, at, background);
         }
 
         Open(menu);
@@ -227,15 +240,54 @@ public sealed class ContextMenuFactory
         return menu;
     }
 
-    /// <summary>The menu of the blank area of the item list: 貼り付け (into the folder shown) and 最新の情報に更新.</summary>
+    /// <summary>
+    /// The menu of the blank area of the item list: the menu of the folder shown, as Explorer's
+    /// blank area. 貼り付け (into that folder) and 最新の情報に更新, then エクスプローラーで表示,
+    /// パスをコピー and 登録フォルダに追加 for the folder itself, and Explorer's background menu of it
+    /// (新規作成, プロパティ…): last as 「その他のメニュー（Windows）」, or with the setting
+    /// 「Windows のメニュー」 below these entries. Without a folder on screen (the top lists, while it
+    /// loads, a failed load) only 貼り付け (off) and 最新の情報に更新, in the WPF menu.
+    /// </summary>
     public void ShowBlank(FrameworkElement target)
     {
-        var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
+        var at = NativeMenuPoint.Capture(target);
+        var entries = BlankEntries(out var nativePaths);
+        ShowEntries(entries, target, at, nativePaths, nativeEnabled: nativePaths is not null, background: true);
+    }
+
+    /// <summary>
+    /// The entries of the blank area. <paramref name="nativePaths"/>: the folder shown, whose
+    /// background menu Explorer's menu is (null without one). No default entry: a background has none.
+    /// The actions keep the folder of the right click (RunEntry may run them after the menu closed).
+    /// </summary>
+    private List<MenuEntry> BlankEntries(out IReadOnlyList<string>? nativePaths)
+    {
         string? folder = _vm.PasteFolderOf(null);
-        menu.Items.Add(Item("貼り付け", PasteGlyph, _vm.CanPaste(folder), () => _ = _vm.PasteAsync(folder!)));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(Item("最新の情報に更新", RefreshGlyph, true, () => _vm.RefreshCommand.Execute(null)));
-        Open(menu);
+        var entries = new List<MenuEntry>
+        {
+            new("貼り付け", PasteGlyph, _vm.CanPaste(folder), () =>
+            {
+                BeforeNavigate?.Invoke(); // the transfer reloads the list
+                _ = _vm.PasteAsync(folder!);
+            }),
+            MenuEntry.Separator,
+            new("最新の情報に更新", RefreshGlyph, true, () => _vm.RefreshCommand.Execute(null)),
+        };
+
+        var shown = _vm.ShownFolderItem();
+        if (shown is not null)
+        {
+            entries.Add(MenuEntry.Separator);
+            entries.Add(new("エクスプローラーで表示", ExplorerGlyph, true, () => _ = _vm.ShowInExplorerAsync(shown)));
+            entries.Add(new("パスをコピー", CopyGlyph, true, () => _vm.CopyPath(shown)));
+            if (!_vm.IsRegistered(shown.Path))
+            {
+                entries.Add(new("登録フォルダに追加", AddGlyph, true, () => _ = _vm.AddToRegisteredAsync(shown)));
+            }
+        }
+
+        nativePaths = shown is null ? null : [shown.Path];
+        return entries;
     }
 
     /// <summary>The menu of the PC section header: エクスプローラーで開く (This PC).</summary>
@@ -250,12 +302,13 @@ public sealed class ContextMenuFactory
     /// The last item: 「その他のメニュー（Windows）」, Explorer's own menu for <paramref name="paths"/>
     /// (entries of shell extensions such as 7-Zip, 送る, プログラムから開く, プロパティ). The shell's
     /// delete, rename, cut, copy and paste are left out of it by <see cref="ShellContextMenu"/>
-    /// (the app has its own; the shell's delete can be permanent).
+    /// (the app has its own; the shell's delete can be permanent). With <paramref name="background"/>
+    /// it is the background menu of the folder in <paramref name="paths"/> (新規作成, プロパティ…).
     /// </summary>
-    private void AddNativeItem(ContextMenu menu, IReadOnlyList<string> paths, bool enabled, NativeMenuPoint at)
+    private void AddNativeItem(ContextMenu menu, IReadOnlyList<string> paths, bool enabled, NativeMenuPoint at, bool background = false)
     {
         menu.Items.Add(new Separator());
-        menu.Items.Add(Item("その他のメニュー（Windows）", NativeMenuGlyph, enabled, () => _ = ShowNativeAsync(paths, at)));
+        menu.Items.Add(Item("その他のメニュー（Windows）", NativeMenuGlyph, enabled, () => _ = ShowNativeAsync(paths, at, background: background)));
     }
 
     /// <summary>
@@ -264,9 +317,12 @@ public sealed class ContextMenuFactory
     /// thread. When Explorer's menu cannot be shown before it appears (unavailable, failed before
     /// showing, or timed out while being built), the WPF menu of <paramref name="app"/> opens at the
     /// same point instead; after a timeout with a short notice, and those paths then get the WPF
-    /// menu directly for <see cref="TimedOutSkip"/>.
+    /// menu directly for <see cref="TimedOutSkip"/>. With <paramref name="background"/> it is the
+    /// background menu of the one folder in <paramref name="paths"/>.
     /// </summary>
-    private async Task ShowNativeAsync(IReadOnlyList<string> paths, NativeMenuPoint at, IReadOnlyList<MenuEntry>? app = null, FrameworkElement? target = null)
+    private async Task ShowNativeAsync(
+        IReadOnlyList<string> paths, NativeMenuPoint at, IReadOnlyList<MenuEntry>? app = null, FrameworkElement? target = null,
+        bool background = false)
     {
         // Synchronously, before anything is awaited: the cascade must be frozen before the menu
         // thread can take the foreground (the window's Deactivated would close it).
@@ -279,7 +335,10 @@ public sealed class ContextMenuFactory
         try
         {
             var appEntries = app?.Select(e => new ShellMenuAppEntry(e.Header ?? "", e.Enabled, e.IsSeparator, e.IsDefault)).ToArray();
-            result = await ShellContextMenu.ShowAsync(paths, at.X, at.Y, at.Extended, _vm.View?.WindowHandle ?? 0, appEntries);
+            nint mainWindow = _vm.View?.WindowHandle ?? 0;
+            result = await (background
+                ? ShellContextMenu.ShowBackgroundAsync(paths[0], at.X, at.Y, at.Extended, mainWindow, appEntries)
+                : ShellContextMenu.ShowAsync(paths, at.X, at.Y, at.Extended, mainWindow, appEntries));
         }
         catch (Exception ex)
         {
@@ -313,7 +372,7 @@ public sealed class ContextMenuFactory
                 // TrackPopupMenuEx). The paths skip Explorer's menu for a while, so that each right
                 // click does not freeze the cascade again and leave one more hung thread.
                 AppLog.Info("Explorer's menu timed out, the app's menu instead");
-                RememberTimedOut(paths);
+                RememberTimedOut(paths, background);
                 _vm.Message.Info("エクスプローラーのメニューが時間内に準備できなかったため、アプリのメニューを出しました。");
                 OpenFallback(app, target, at);
                 return;
@@ -350,12 +409,13 @@ public sealed class ContextMenuFactory
         }
     }
 
-    private void RememberTimedOut(IReadOnlyList<string> paths)
+    private void RememberTimedOut(IReadOnlyList<string> paths, bool background)
     {
+        var timedOut = background ? _timedOutBackground : _timedOut;
         long now = Environment.TickCount64;
         foreach (var path in paths)
         {
-            _timedOut[path] = now;
+            timedOut[path] = now;
         }
     }
 
@@ -363,20 +423,21 @@ public sealed class ContextMenuFactory
     /// Whether one of <paramref name="paths"/> timed out within <see cref="TimedOutSkip"/> (expired
     /// entries are dropped, so a shell extension that was only slow at startup gets another try).
     /// </summary>
-    private bool TimedOutRecently(IReadOnlyList<string> paths)
+    private bool TimedOutRecently(IReadOnlyList<string> paths, bool background)
     {
-        if (_timedOut.Count == 0)
+        var timedOut = background ? _timedOutBackground : _timedOut;
+        if (timedOut.Count == 0)
         {
             return false;
         }
 
         long now = Environment.TickCount64;
-        foreach (var expired in _timedOut.Where(p => now - p.Value >= (long)TimedOutSkip.TotalMilliseconds).Select(p => p.Key).ToList())
+        foreach (var expired in timedOut.Where(p => now - p.Value >= (long)TimedOutSkip.TotalMilliseconds).Select(p => p.Key).ToList())
         {
-            _timedOut.Remove(expired);
+            timedOut.Remove(expired);
         }
 
-        return paths.Any(_timedOut.ContainsKey);
+        return paths.Any(timedOut.ContainsKey);
     }
 
     /// <summary>

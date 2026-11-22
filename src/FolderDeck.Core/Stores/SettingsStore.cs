@@ -145,8 +145,8 @@ public sealed class AppSettings
     public string? CardShape { get; set; } = CardShapes.Portrait;
 
     /// <summary>
-    /// Widths (DIP) of the resizable columns of the details list: <c>modified</c>, <c>type</c>,
-    /// <c>size</c> (see <see cref="Layout.DetailsColumns"/>; the 名前 column takes the rest).
+    /// Widths (DIP) of the columns of the details list: <c>name</c>, <c>modified</c>, <c>type</c>,
+    /// <c>size</c> (see <see cref="Layout.DetailsColumns"/>; a missing key loads as its default).
     /// </summary>
     public Dictionary<string, double>? DetailsColumns { get; set; }
 

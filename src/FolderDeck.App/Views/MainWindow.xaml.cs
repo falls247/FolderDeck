@@ -382,7 +382,9 @@ public partial class MainWindow : Window, IMainView, ICardHost
     }
 
     /// <summary>
-    /// A right click on the blank area that nothing else took: 貼り付け and 最新の情報に更新. A click
+    /// A right click on the blank area that nothing else took: the menu of the folder shown
+    /// (貼り付け, 最新の情報に更新, its own entries and Explorer's background menu of it; only the first
+    /// two without a folder on screen, see <see cref="ContextMenuFactory.ShowBlank"/>). A click
     /// that only reached the blank area because the items view does not hit test (while the tab
     /// loads) but lies on a realized item still gets that item's menu.
     /// </summary>
@@ -603,12 +605,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// <summary>
     /// A row of the details list: the name column is both what the pointer rests on and what the
     /// list is placed beside (at the column's right edge), so resting on the other columns opens
-    /// nothing. Only a folder has a list; on any other row nothing is armed and a list that is open
-    /// closes as on leaving its row.
+    /// nothing. A folder opens its list, a previewable file its preview; on any other row nothing is
+    /// armed and a list that is open closes as on leaving its row.
     /// </summary>
     public void RowMouseEnter(FrameworkElement nameColumn, CardViewModel vm)
     {
-        if (CardAnchor.For(vm) is { } anchor)
+        if (CardAnchor.For(vm, _vm.Services.Icons) is { } anchor)
         {
             _cascade.AnchorMouseEnter(nameColumn, nameColumn, anchor);
         }
@@ -617,7 +619,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// <summary>The pointer moved on a name column without a button held: arms the row again after everything was closed under it.</summary>
     public void RowMouseMove(FrameworkElement nameColumn, CardViewModel vm)
     {
-        if (CardAnchor.For(vm) is { } anchor)
+        if (CardAnchor.For(vm, _vm.Services.Icons) is { } anchor)
         {
             _cascade.AnchorMouseMove(nameColumn, nameColumn, anchor, Mouse.GetPosition(this));
         }

@@ -71,6 +71,7 @@ IShellFolder
 IShellItemArray
 SHParseDisplayName
 SHBindToParent
+SHBindToObject
 SHCreateShellItemArrayFromIDLists
 BHID_SFUIObject
 ILFindLastID
