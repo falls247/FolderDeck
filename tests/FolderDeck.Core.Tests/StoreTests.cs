@@ -679,8 +679,10 @@ public class SettingsStoreTests
         Assert.True(s.ConfirmExecutables);
         Assert.NotNull(s.Window);
 
-        // details_columns: exactly the three known keys, a missing one at its default, a value out of range clamped
-        Assert.Equal(["modified", "type", "size"], s.DetailsColumns!.Keys);
+        // details_columns: exactly the four known keys, a missing one at its default (a file written
+        // before the name had a width loads with the default), a value out of range clamped
+        Assert.Equal(["name", "modified", "type", "size"], s.DetailsColumns!.Keys);
+        Assert.Equal(DetailsColumns.Defaults[DetailsColumns.Name], s.DetailsColumns[DetailsColumns.Name]);
         Assert.Equal(DetailsColumns.Defaults[DetailsColumns.Modified], s.DetailsColumns[DetailsColumns.Modified]);
         Assert.Equal(DetailsColumns.Max, s.DetailsColumns[DetailsColumns.Type]);
     }
@@ -784,6 +786,43 @@ public class SettingsStoreTests
         Assert.True(copy.OpenExplorerInNewTab);
         copy.OpenExplorerInNewTab = false;
         Assert.True(reloaded.Current.OpenExplorerInNewTab);
+    }
+
+    [Fact]
+    public void ItemMenu_DefaultsToApp_RoundTripsWindows_AndIsCloned()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        Assert.Equal("app", store.Current.ItemMenu);
+        Assert.Equal("app", new AppSettings().ItemMenu);
+
+        store.Update(s => s.ItemMenu = "windows");
+        store.Flush();
+        Assert.Contains("\"item_menu\": \"windows\"", File.ReadAllText(file));
+
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        Assert.Equal("windows", reloaded.Current.ItemMenu);
+
+        var copy = reloaded.Current.Clone();
+        copy.ItemMenu = "app";
+        Assert.Equal("windows", reloaded.Current.ItemMenu);
+    }
+
+    [Theory]
+    [InlineData("""{"version":2,"item_menu":"Explorer"}""", "app")]
+    [InlineData("""{"version":2,"item_menu":" WINDOWS "}""", "windows")]
+    [InlineData("""{"version":2}""", "app")]
+    public void ItemMenu_UnknownOrMissing_IsApp_CaseNormalized(string json, string expected)
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        File.WriteAllText(file, json);
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        Assert.Equal(expected, store.Current.ItemMenu);
     }
 
     [Fact]

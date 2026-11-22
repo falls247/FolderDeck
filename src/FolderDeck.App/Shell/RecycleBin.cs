@@ -1,35 +1,45 @@
 using System.Runtime.InteropServices;
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Paths;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.UI.Shell;
 
 namespace FolderDeck.Shell;
 
+/// <summary>
+/// How a delete of several items ended. <see cref="Recycled"/>: every item is in the Recycle Bin;
+/// the others say why the rest (<see cref="RecycleResult.Requested"/> minus
+/// <see cref="RecycleResult.Recycled"/>) was not moved.
+/// </summary>
 public enum RecycleOutcome
 {
-    /// <summary>The item is in the Recycle Bin.</summary>
+    /// <summary>Every item is in the Recycle Bin.</summary>
     Recycled,
 
-    /// <summary>The user cancelled (a shell dialog) or the shell skipped the item: nothing was deleted.</summary>
+    /// <summary>The user cancelled (a shell dialog) or the shell skipped items: those were not deleted.</summary>
     Canceled,
 
-    /// <summary>The item cannot go to the Recycle Bin (network folder, too large…): it was left as it is.</summary>
+    /// <summary>An item cannot go to the Recycle Bin (network folder, too large…): it and the rest were left as they are.</summary>
     NotRecyclable,
 
     /// <summary>The shell reported an error (in use, access denied, already gone…).</summary>
     Failed,
 }
 
-public sealed record RecycleResult(RecycleOutcome Outcome, string? Error = null);
+/// <param name="Requested">How many items were asked for.</param>
+/// <param name="Recycled">How many of them reached the Recycle Bin.</param>
+public sealed record RecycleResult(RecycleOutcome Outcome, int Requested, int Recycled, string? Error = null);
 
 /// <summary>
-/// Moves one file or folder to the Recycle Bin with <c>IFileOperation</c>, like Explorer's Delete key.
-/// It never deletes permanently: when the shell would destroy the item instead of recycling it
-/// (no Recycle Bin on that drive, item too large…), the operation is cancelled before anything is
-/// removed. The app's own confirmation comes first, so the shell's "move to Recycle Bin?" prompt
-/// is suppressed; its progress, "file in use" and similar dialogs still show, owned by
-/// <c>owner</c>.
+/// Moves several files and folders together to the Recycle Bin with one <c>IFileOperation</c>, like
+/// Explorer's Delete key (one progress, one undo). It never deletes permanently: when the shell
+/// would destroy an item instead of recycling it (no Recycle Bin on that drive, item too large…),
+/// that item and every one after it are not deleted (items handled before it are in the Recycle
+/// Bin). This holds only because all the items go through one <c>PerformOperations</c>: never split
+/// them into separate calls. The app's own confirmation comes first, so the shell's "move to
+/// Recycle Bin?" prompt is suppressed; its progress, "file in use" and similar dialogs still show,
+/// owned by <c>owner</c>.
 /// </summary>
 public static class RecycleBin
 {
@@ -54,19 +64,25 @@ public static class RecycleBin
         | FILEOPERATION_FLAGS.FOF_WANTNUKEWARNING;
 
     /// <summary>Runs on its own STA thread (IFileOperation is apartment-threaded and may show modal UI).</summary>
-    public static Task<RecycleResult> MoveAsync(string path, nint owner)
+    public static Task<RecycleResult> MoveAsync(IReadOnlyList<string> paths, nint owner)
     {
         var completion = new TaskCompletionSource<RecycleResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (paths.Count == 0)
+        {
+            completion.SetResult(new RecycleResult(RecycleOutcome.Recycled, 0, 0));
+            return completion.Task;
+        }
+
         var thread = new Thread(() =>
         {
             try
             {
-                completion.SetResult(Move(path, owner));
+                completion.SetResult(Move(paths, owner));
             }
             catch (Exception ex)
             {
-                AppLog.Warn($"Recycle failed: {path}", ex);
-                completion.SetResult(new RecycleResult(RecycleOutcome.Failed, ex.Message));
+                AppLog.Warn($"Recycle failed: {paths[0]} (+{paths.Count - 1})", ex);
+                completion.SetResult(new RecycleResult(RecycleOutcome.Failed, paths.Count, 0, ex.Message));
             }
         })
         {
@@ -78,20 +94,30 @@ public static class RecycleBin
         return completion.Task;
     }
 
-    private static unsafe RecycleResult Move(string path, nint owner)
+    private static unsafe RecycleResult Move(IReadOnlyList<string> paths, nint owner)
     {
-        object? itemObject = null;
+        int requested = paths.Count;
+        var itemObjects = new List<object>(requested);
         object? operationObject = null;
         var sink = new Sink();
         try
         {
-            HRESULT hr = PInvoke.SHCreateItemFromParsingName(ShellActions.ShellPath(path), null, out IShellItem item);
-            if (hr.Failed || item is null)
+            // Every item first: when one cannot be found, nothing is deleted.
+            var items = new List<IShellItem>(requested);
+            foreach (string path in paths)
             {
-                return new RecycleResult(RecycleOutcome.Failed, Marshal.GetExceptionForHR(hr.Value)?.Message ?? "項目が見つかりません。");
+                HRESULT hr = PInvoke.SHCreateItemFromParsingName(ShellActions.ShellPath(path), null, out IShellItem item);
+                if (hr.Failed || item is null)
+                {
+                    string message = Marshal.GetExceptionForHR(hr.Value)?.Message
+                        ?? $"「{PathTools.DisplayName(path)}」が見つかりません。";
+                    return new RecycleResult(RecycleOutcome.Failed, requested, 0, message);
+                }
+
+                itemObjects.Add(item);
+                items.Add(item);
             }
 
-            itemObject = item;
             var operation = (IFileOperation)new FileOperation();
             operationObject = operation;
             operation.SetOperationFlags(Flags);
@@ -100,9 +126,14 @@ public static class RecycleBin
                 operation.SetOwnerWindow(new HWND(owner));
             }
 
-            operation.DeleteItem(item, sink);
+            foreach (var item in items)
+            {
+                operation.DeleteItem(item, sink);
+            }
+
             try
             {
+                // One call for all the items: a refusal in the sink cancels that item and every later one.
                 operation.PerformOperations();
             }
             catch (COMException ex) when (IsCancel(ex.HResult))
@@ -112,41 +143,47 @@ public static class RecycleBin
 
             BOOL aborted = default;
             operation.GetAnyOperationsAborted(&aborted);
+
+            // Capped: should the sink ever hear about items inside a folder, the count stays per item asked for.
+            int recycled = Math.Min(sink.RecycledCount, requested);
             if (sink.Refused)
             {
-                return new RecycleResult(RecycleOutcome.NotRecyclable);
+                return new RecycleResult(RecycleOutcome.NotRecyclable, requested, recycled);
+            }
+
+            if (sink.Nuked > 0)
+            {
+                // Not expected (the sink refuses permanent deletes); say so rather than claim it is recoverable.
+                AppLog.Warn($"Recycle: the shell reported no Recycle Bin item for {sink.Nuked} item(s) of {paths[0]} (+{requested - 1})");
+                return new RecycleResult(RecycleOutcome.Failed, requested, recycled, "ごみ箱に移動されたことを確認できなかった項目があります。");
             }
 
             if (sink.DeleteError is { } error && error.Failed)
             {
                 return IsCancel(error.Value)
-                    ? new RecycleResult(RecycleOutcome.Canceled)
-                    : new RecycleResult(RecycleOutcome.Failed, Marshal.GetExceptionForHR(error.Value)?.Message);
+                    ? new RecycleResult(RecycleOutcome.Canceled, requested, recycled)
+                    : new RecycleResult(RecycleOutcome.Failed, requested, recycled, Marshal.GetExceptionForHR(error.Value)?.Message);
             }
 
-            if (aborted || !sink.Deleted)
+            if (aborted || recycled < requested)
             {
-                return new RecycleResult(RecycleOutcome.Canceled);
+                return new RecycleResult(RecycleOutcome.Canceled, requested, recycled);
             }
 
-            if (!sink.InRecycleBin)
-            {
-                // Not expected (the sink refuses permanent deletes); say so rather than claim it is recoverable.
-                AppLog.Warn($"Recycle: the shell reported no Recycle Bin item for {path}");
-                return new RecycleResult(RecycleOutcome.Failed, "ごみ箱に移動されたことを確認できませんでした。");
-            }
-
-            return new RecycleResult(RecycleOutcome.Recycled);
+            return new RecycleResult(RecycleOutcome.Recycled, requested, recycled);
         }
         catch (Exception ex) when (ex is COMException or InvalidCastException or ArgumentException or UnauthorizedAccessException or IOException)
         {
-            AppLog.Warn($"Recycle failed: {path}", ex);
-            return new RecycleResult(RecycleOutcome.Failed, ex.Message);
+            AppLog.Warn($"Recycle failed: {paths[0]} (+{requested - 1})", ex);
+            return new RecycleResult(RecycleOutcome.Failed, requested, Math.Min(sink.RecycledCount, requested), ex.Message);
         }
         finally
         {
             Release(operationObject);
-            Release(itemObject);
+            foreach (var itemObject in itemObjects)
+            {
+                Release(itemObject);
+            }
         }
     }
 
@@ -160,15 +197,23 @@ public static class RecycleBin
         }
     }
 
-    /// <summary>Watches the delete: refuses it when the shell would not recycle, and records the result.</summary>
+    /// <summary>Watches the deletes: refuses one when the shell would not recycle it, and counts how each ended.</summary>
     private sealed class Sink : IFileOperationProgressSink
     {
         public bool Refused { get; private set; }
 
-        public bool Deleted { get; private set; }
+        /// <summary>Items now in the Recycle Bin.</summary>
+        public int RecycledCount { get; private set; }
 
-        public bool InRecycleBin { get; private set; }
+        /// <summary>Items reported deleted with no Recycle Bin item (deleted for good: not expected).</summary>
+        public int Nuked { get; private set; }
 
+        /// <summary>Items the shell skipped with a success code (the user chose スキップ…): not deleted.</summary>
+        public int Skipped { get; private set; }
+
+        public int Failures { get; private set; }
+
+        /// <summary>The first error reported for an item.</summary>
         public HRESULT? DeleteError { get; private set; }
 
         public void PreDeleteItem(uint dwFlags, IShellItem psiItem)
@@ -187,13 +232,27 @@ public static class RecycleBin
             if (hrDelete.Failed)
             {
                 DeleteError ??= hrDelete;
+                Failures++;
                 return;
             }
 
-            Deleted = true;
-
-            // The item now in the Recycle Bin; null when it was deleted for good.
-            InRecycleBin = psiNewlyCreated is not null;
+            // psiNewlyCreated is the item now in the Recycle Bin. It wins over the success code:
+            // an item that landed in the bin is recycled whatever S_* code came with it.
+            if (psiNewlyCreated is not null)
+            {
+                RecycledCount++;
+            }
+            else if (hrDelete.Value != 0)
+            {
+                // A success code other than S_OK (COPYENGINE_S_USER_IGNORED…) with nothing in the bin:
+                // the item was skipped, not deleted; never counted as a permanent delete.
+                Skipped++;
+            }
+            else
+            {
+                // S_OK with no bin item: deleted for good.
+                Nuked++;
+            }
         }
 
         public void StartOperations()

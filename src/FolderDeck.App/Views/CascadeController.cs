@@ -122,7 +122,11 @@ public sealed class CascadeController
         _menus.NativeMenuChanged += SetNativeMenuOpen;
     }
 
-    public bool IsOpen => _levels.Count > 0;
+    /// <summary>
+    /// Something of the cascade is showing. A preview without a level under it only exists beside
+    /// an anchor (a file row of the details list, <see cref="ICascadeAnchor.File"/>).
+    /// </summary>
+    public bool IsOpen => _levels.Count > 0 || _preview is not null;
 
     /// <summary>
     /// A drag started (a card, a row or a preview): the whole cascade disappears at once and nothing
@@ -309,7 +313,7 @@ public sealed class CascadeController
                 _overlayTimer.Stop();
             }
         }
-        else if (_anchor is not null && _levels.Count > 0)
+        else if (_anchor is not null && IsOpen)
         {
             // Another anchor while a list is open: sidebar rows are stacked, so the pointer crosses
             // the neighbours on its way to the list. Switch only when it rests here.
@@ -327,7 +331,7 @@ public sealed class CascadeController
             _anchorItem = item;
         }
 
-        if (_levels.Count == 0 && !item.IsDisabled)
+        if (!IsOpen && !item.IsDisabled)
         {
             RestartOverlay();
         }
@@ -343,7 +347,7 @@ public sealed class CascadeController
     /// </summary>
     public void AnchorMouseMove(FrameworkElement hover, FrameworkElement placement, ICascadeAnchor item, Point position)
     {
-        if (_suspended || _levels.Count > 0 || _anchor is not null)
+        if (_suspended || IsOpen || _anchor is not null)
         {
             _rearmFrom = null;
             return; // armed or open already
@@ -466,7 +470,7 @@ public sealed class CascadeController
     /// </summary>
     public void CloseForSelectionKeys()
     {
-        if (_levels.Count > 0 && (_card is not null || _anchorItem is { YieldsToModifiers: true }))
+        if (IsOpen && (_card is not null || _anchorItem is { YieldsToModifiers: true }))
         {
             CloseAll();
         }
@@ -613,7 +617,7 @@ public sealed class CascadeController
 
         if (_anchor is { } anchor && _anchorPlacement is { } placement && _anchorItem is { } item)
         {
-            if (!_suspended && _levels.Count == 0 && anchor.IsMouseOver && !item.IsDisabled && !Yields(item))
+            if (!_suspended && !IsOpen && anchor.IsMouseOver && !item.IsDisabled && !Yields(item))
             {
                 OpenRoot(anchor, placement, item);
             }
@@ -1003,7 +1007,8 @@ public sealed class CascadeController
     }
 
     /// <summary>
-    /// Level 0 of a cascade opened from an anchor: the list of its folder, in a flyout. For the
+    /// Level 0 of a cascade opened from an anchor: the list of its folder, in a flyout, or for a file
+    /// anchor (<see cref="ICascadeAnchor.File"/>) the file's preview in its place. For the
     /// placement <paramref name="hover"/> is the "row" (the list opens at its height) and
     /// <paramref name="placement"/> the "parent card" (the list goes beside it). A sidebar row is both.
     /// </summary>
@@ -1016,7 +1021,18 @@ public sealed class CascadeController
 
         Rect rowRect = ScreenRect(hover);
         Rect anchorRect = ReferenceEquals(placement, hover) ? rowRect : ScreenRect(placement);
-        OpenFlyout(0, item.Path, item.Target, rowRect, anchorRect, preferLeft: false, parentRow: null);
+        if (item.File is { } file)
+        {
+            OpenPreviewAt(-1, file.Row, file.Card.ToItemRef(), rowRect, anchorRect, preferLeft: false);
+            return;
+        }
+
+        if (item.Target is not { } target)
+        {
+            return;
+        }
+
+        OpenFlyout(0, item.Path, target, rowRect, anchorRect, preferLeft: false, parentRow: null);
         item.IsHoverHeld = true;
     }
 
@@ -1306,7 +1322,7 @@ public sealed class CascadeController
             return;
         }
 
-        if (preview.ParentIndex < _levels.Count && ReferenceEquals(_levels[preview.ParentIndex].List.HoveredRow, preview.Row))
+        if (preview.ParentIndex >= 0 && preview.ParentIndex < _levels.Count && ReferenceEquals(_levels[preview.ParentIndex].List.HoveredRow, preview.Row))
         {
             return;
         }
@@ -1325,6 +1341,16 @@ public sealed class CascadeController
 
         Rect rowRect = ScreenRect(container);
         Rect anchor = parent.Flyout is { } pf ? ScreenRect(pf.CardElement) : ScreenRect(parent.Card!);
+        OpenPreviewAt(parent.Index, row, ItemOf(row), rowRect, anchor, preferLeft: parent.Flyout is not null && parent.DirectionLeft);
+    }
+
+    /// <summary>
+    /// Opens the preview of <paramref name="row"/> beside level <paramref name="parentIndex"/>, or
+    /// beside an anchor in place of level 0 when it is -1. <paramref name="item"/> is what its click
+    /// and menu act on.
+    /// </summary>
+    private void OpenPreviewAt(int parentIndex, EntryRowViewModel row, ItemRef item, Rect rowRect, Rect anchor, bool preferLeft)
+    {
         var monitor = ShellInterop.GetMonitorArea(new Point(rowRect.Left + (rowRect.Width / 2), rowRect.Top + (rowRect.Height / 2)));
 
         var model = new PreviewViewModel(row);
@@ -1340,11 +1366,12 @@ public sealed class CascadeController
             Child = view,
         };
 
-        var preview = new Preview(parent.Index, row, model, view, popup)
+        var preview = new Preview(parentIndex, row, model, view, popup)
         {
+            Item = item,
             RowRect = rowRect,
             AnchorRect = anchor,
-            PreferLeft = parent.Flyout is not null && parent.DirectionLeft,
+            PreferLeft = preferLeft,
 
             // Nothing of its own to show (audio, video, PDF…), only maybe a shell thumbnail: it
             // appears once a picture has come, and without one nothing appears at all.
@@ -1357,7 +1384,7 @@ public sealed class CascadeController
         }
         else
         {
-            row.IsActive = true;
+            MarkSource(preview, true);
         }
 
         view.MouseEnter += (_, _) =>
@@ -1367,7 +1394,14 @@ public sealed class CascadeController
                 return;
             }
 
-            // Reached the preview: keep it, and let nothing pending on its list replace it.
+            // Reached the preview: keep it, and let nothing pending on its list replace it (nor a
+            // neighbouring anchor crossed on the way, as in OnFlyoutEnter).
+            if (_pendingAnchor is not null)
+            {
+                ClearPendingAnchor();
+                _overlayTimer.Stop();
+            }
+
             _exitTimer.Stop();
             _previewCloseTimer.Stop();
             if (_pendingPreview is { } pp && pp.Level == preview.ParentIndex)
@@ -1383,8 +1417,8 @@ public sealed class CascadeController
             }
         };
         view.MouseLeave += (_, _) => Restart(_exitTimer);
-        view.Clicked += _ => OnRowClicked(row);
-        view.ContextMenuRequested += _ => ShowMenu(row.ToItemRef(), view.CardElement);
+        view.Clicked += _ => OnPreviewClicked(preview);
+        view.ContextMenuRequested += _ => ShowMenu(preview.Item, view.CardElement);
         view.DragRequested += _ => DragOut(row, "preview");
         view.CardElement.SizeChanged += (_, _) => PositionPreview(preview, reveal: false);
 
@@ -1394,6 +1428,10 @@ public sealed class CascadeController
         popup.HorizontalOffset = guessX;
         popup.VerticalOffset = (rowRect.Top / scale) - RowLead - PreviewView.ShadowMargin;
         popup.IsOpen = true;
+        if (parentIndex < 0)
+        {
+            WatchForeground(); // opened over an inactive window, as level 0 in OpenFlyout
+        }
 
         _ = LoadPreviewAsync(preview, scale);
         _window.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => PositionPreview(preview, reveal: true));
@@ -1417,7 +1455,7 @@ public sealed class CascadeController
         if (reveal && !preview.IsRevealed && !preview.AwaitsPicture)
         {
             preview.IsRevealed = true;
-            preview.Row.IsActive = true;
+            MarkSource(preview, true);
             preview.View.IsHitTestVisible = true;
             preview.View.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, HoverTimings.FlyoutFadeIn));
         }
@@ -1474,9 +1512,12 @@ public sealed class CascadeController
                 {
                     // The pointer (or the key selection) left the row while the picture was coming:
                     // don't flash a card that the grace timer is about to close.
-                    bool wanted = !_previewCloseTimer.IsEnabled && preview.ParentIndex < _levels.Count
-                        && (ReferenceEquals(_levels[preview.ParentIndex].List.HoveredRow, preview.Row)
-                            || ReferenceEquals(_levels[preview.ParentIndex].KeyRow, preview.Row));
+                    bool wanted = !_previewCloseTimer.IsEnabled
+                        && (preview.ParentIndex < 0
+                            ? _anchor?.IsMouseOver == true && ReferenceEquals(_anchorItem?.File?.Row, preview.Row)
+                            : preview.ParentIndex < _levels.Count
+                                && (ReferenceEquals(_levels[preview.ParentIndex].List.HoveredRow, preview.Row)
+                                    || ReferenceEquals(_levels[preview.ParentIndex].KeyRow, preview.Row)));
                     if (!wanted)
                     {
                         ClosePreview();
@@ -1553,8 +1594,34 @@ public sealed class CascadeController
         }
 
         _preview = null;
-        preview.Row.IsActive = false;
+        MarkSource(preview, false);
         preview.Dispose();
+    }
+
+    /// <summary>
+    /// Highlights (or no longer) what the preview was opened from: its row, and for a preview beside
+    /// an anchor the anchor's item too, so that the details row stays highlighted while the pointer
+    /// is in the preview.
+    /// </summary>
+    private void MarkSource(Preview p, bool on)
+    {
+        p.Row.IsActive = on;
+        if (p.ParentIndex < 0 && _anchorItem is { } a)
+        {
+            a.IsHoverHeld = on;
+        }
+    }
+
+    /// <summary>
+    /// A click on a preview: the file opens. A preview beside a details row goes through the card,
+    /// as a click on the row does (nothing happens for a busy or disabled item).
+    /// </summary>
+    private void OnPreviewClicked(Preview preview)
+    {
+        var item = preview.Item;
+        ActivateWindow();
+        CloseAll();
+        _ = item.Card is { } card ? _vm.ActivateCardAsync(card) : _vm.OpenItemAsync(item);
     }
 
     // ---- keyboard (§9.9) ----------------------------------------------------------------------
@@ -1564,7 +1631,8 @@ public sealed class CascadeController
     {
         if (_levels.Count == 0)
         {
-            return false;
+            // At most a preview beside an anchor: Esc closes it, the other keys go to the view.
+            return key == Key.Escape && CloseDeepest();
         }
 
         int index = _keyLevel < 0 || _keyLevel >= _levels.Count ? _levels.Count - 1 : _keyLevel;
@@ -1744,7 +1812,7 @@ public sealed class CascadeController
             return;
         }
 
-        if (_levels.Count == 0 || _window.IsActive)
+        if (!IsOpen || _window.IsActive)
         {
             _foregroundTimer.Stop(); // closed, or activated by a click: Deactivated takes over
             return;
@@ -1789,7 +1857,10 @@ public sealed class CascadeController
 
     private sealed record PendingPreview(int Level, EntryRowViewModel Row, bool ByKey);
 
-    /// <summary>An open preview: beside level <see cref="ParentIndex"/>, for one of its rows.</summary>
+    /// <summary>
+    /// An open preview: beside level <see cref="ParentIndex"/>, for one of its rows, or (-1) beside
+    /// an anchor, in place of level 0.
+    /// </summary>
     private sealed class Preview(int parentIndex, EntryRowViewModel row, PreviewViewModel model, PreviewView view, Popup popup) : IDisposable
     {
         public int ParentIndex { get; } = parentIndex;
@@ -1801,6 +1872,9 @@ public sealed class CascadeController
         public PreviewView View { get; } = view;
 
         public Popup Popup { get; } = popup;
+
+        /// <summary>What a click and the menu of the preview act on.</summary>
+        public ItemRef Item { get; init; } = null!;
 
         public Rect RowRect { get; init; }
 

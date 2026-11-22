@@ -145,8 +145,8 @@ public sealed class AppSettings
     public string? CardShape { get; set; } = CardShapes.Portrait;
 
     /// <summary>
-    /// Widths (DIP) of the resizable columns of the details list: <c>modified</c>, <c>type</c>,
-    /// <c>size</c> (see <see cref="Layout.DetailsColumns"/>; the 名前 column takes the rest).
+    /// Widths (DIP) of the columns of the details list: <c>name</c>, <c>modified</c>, <c>type</c>,
+    /// <c>size</c> (see <see cref="Layout.DetailsColumns"/>; a missing key loads as its default).
     /// </summary>
     public Dictionary<string, double>? DetailsColumns { get; set; }
 
@@ -182,6 +182,12 @@ public sealed class AppSettings
 
     /// <summary>"Show in Explorer" uses a new tab of the running File Explorer window (Windows 11 22H2+).</summary>
     public bool OpenExplorerInNewTab { get; set; }
+
+    /// <summary>
+    /// Right-click menu of items: <c>app</c> (the app's own menu) or <c>windows</c> (Explorer's
+    /// menu with the app's entries on top of it).
+    /// </summary>
+    public string? ItemMenu { get; set; } = ItemMenuStyles.App;
 
     /// <summary>
     /// Upper limit, in megabytes, of the thumbnail cache kept in the data folder (<c>thumbs</c>);
@@ -390,6 +396,7 @@ public sealed class AppSettings
         CardShape = CardShapes.ToSetting(CardShapes.FromSetting(CardShape));
         DetailsColumns = Layout.DetailsColumns.Normalize(DetailsColumns);
         Theme = AppThemes.ToSetting(AppThemes.FromSetting(Theme));
+        ItemMenu = ItemMenuStyles.ToSetting(ItemMenuStyles.FromSetting(ItemMenu));
         RecentLimit = Math.Clamp(RecentLimit, 10, 500);
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
         ThumbCacheMb = Math.Clamp(ThumbCacheMb, 0, ThumbCacheMbMax);

@@ -84,8 +84,8 @@ public sealed partial class MainViewModel : ObservableObject
     private CardShape _cardShape = CardShape.Portrait;
 
     /// <summary>
-    /// Widths of the resizable columns of the details list (<c>details_columns</c>: always the three
-    /// known keys). Replaced, never changed in place, by <see cref="SetDetailsColumnWidth"/>.
+    /// Widths of the columns of the details list (<c>details_columns</c>: always the four known keys,
+    /// name / modified / type / size). Replaced, never changed in place, by <see cref="SetDetailsColumnWidth"/>.
     /// </summary>
     [ObservableProperty]
     private IReadOnlyDictionary<string, double> _detailsColumns = DetailsColumnRules.Defaults;
@@ -1113,6 +1113,21 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 「エクスプローラーで開く」 of the PC section: This PC in Explorer, in a new Explorer tab when the
+    /// setting asks for it, else a new window. Nothing is recorded (not a path).
+    /// </summary>
+    public async Task OpenPcInExplorerAsync()
+    {
+        var result = Settings.OpenExplorerInNewTab
+            ? await ExplorerTabs.OpenAsync(ShellActions.ThisPcPath)
+            : await Task.Run(() => ShellActions.OpenInExplorer(ShellActions.ThisPcPath));
+        if (!result.Success)
+        {
+            Message.Error(result.Error!);
+        }
+    }
+
     public void CopyPath(ItemRef item) => CopyPaths([item]);
 
     /// <summary>パスをコピー: the paths as text, one per line (a selection gives several).</summary>
@@ -1137,69 +1152,137 @@ public sealed partial class MainViewModel : ObservableObject
     /// Items that can be moved to the Recycle Bin from their menu: what lies inside a folder (cards
     /// below a tab's top level, overlay / flyout rows). Never a tab's top-level card (a registered
     /// folder, a history entry) nor a flyout header, and not a missing / not responding card.
+    /// The same rule holds for the Delete key and for a selection of several items (every item must pass).
     /// </summary>
     public static bool CanDelete(ItemRef item) =>
         item.Context is ItemContext.InnerCard or ItemContext.Row && item.Card?.IsDisabled != true;
 
+    /// <summary>How many paths the delete confirmation lists before "…ほか n 個".</summary>
+    private const int DeleteConfirmPathLimit = 5;
+
     /// <summary>
-    /// Moves the item to the Recycle Bin after a confirmation (the cascade closes first). Never
-    /// deletes permanently: an item that cannot be recycled is left as it is (<see cref="RecycleBin"/>).
+    /// Moves the selection (or the one item of a menu) to the Recycle Bin after one confirmation,
+    /// with one shell operation (one progress, one undo in Explorer). The cascade is closed by the
+    /// caller. Never deletes permanently: when an item cannot be recycled, it and the rest are left
+    /// as they are (<see cref="RecycleBin"/>). Refused as a whole when any item fails
+    /// <see cref="CanDelete"/> (no partial delete) or while a paste / another delete runs.
     /// </summary>
-    public async Task DeleteAsync(ItemRef item)
+    public async Task DeleteAsync(IReadOnlyList<ItemRef> items)
     {
-        if (!CanDelete(item))
+        int n = items.Count;
+        if (n == 0)
         {
             return;
         }
 
-        string name = item.Name;
-        string body = (item.IsFolder
-                ? $"フォルダ「{name}」を、中のファイルやフォルダごとごみ箱に移動します。"
-                : $"「{name}」をごみ箱に移動します。")
-            + "\nごみ箱に移動できない場所（ネットワーク上のフォルダなど）にある項目は削除しません。";
-        bool ok = View?.Confirm("ごみ箱に移動しますか？", body, item.Path, "ごみ箱に移動", danger: true) ?? false;
-        if (!ok)
+        if (!items.All(CanDelete))
         {
+            Message.Info("この一覧の項目は削除できません（ごみ箱に移動できるのはフォルダの中の項目だけです）。");
             return;
         }
 
-        var card = item.Card;
-        if (card is not null)
+        if (_fileOpBusy)
         {
-            card.IsBusy = true;
+            Message.Info("前の操作が終わってから実行してください。");
+            return;
         }
 
+        var (body, paths) = DeleteConfirmText(items);
+        bool ok = View?.Confirm("ごみ箱に移動しますか？", body, paths, "ごみ箱に移動", danger: true) ?? false;
+        if (!ok || _fileOpBusy)
+        {
+            if (ok)
+            {
+                Message.Info("前の操作が終わってから実行してください。");
+            }
+
+            return;
+        }
+
+        _fileOpBusy = true;
+        var cards = items.Select(i => i.Card).OfType<CardViewModel>().ToList();
         RecycleResult result;
         try
         {
-            result = await RecycleBin.MoveAsync(item.Path, View?.WindowHandle ?? 0);
+            foreach (var card in cards)
+            {
+                card.IsBusy = true;
+            }
+
+            result = await RecycleBin.MoveAsync(items.Select(i => i.Path).ToList(), View?.WindowHandle ?? 0);
         }
         finally
         {
-            if (card is not null)
+            foreach (var card in cards)
             {
                 card.IsBusy = false;
             }
+
+            _fileOpBusy = false;
         }
 
+        ShowDeleteResult(result, items);
+
+        // Even a cancelled or failed delete may have moved part of it: list again. The selection is
+        // left to the reload (what is gone drops out; what stayed stays selected for another try).
+        await ReloadAfterFileChangeAsync();
+    }
+
+    /// <summary>The confirmation's body and path lines: as before for one item, the count and the first paths for several.</summary>
+    private static (string Body, string Paths) DeleteConfirmText(IReadOnlyList<ItemRef> items)
+    {
+        const string Notice = "\nごみ箱に移動できない場所（ネットワーク上のフォルダなど）にある項目は削除しません。";
+        int n = items.Count;
+        if (n == 1)
+        {
+            var item = items[0];
+            string single = item.IsFolder
+                ? $"フォルダ「{item.Name}」を、中のファイルやフォルダごとごみ箱に移動します。"
+                : $"「{item.Name}」をごみ箱に移動します。";
+            return (single + Notice, item.Path);
+        }
+
+        string body = $"{n:N0} 個の項目をごみ箱に移動します。"
+            + (items.Any(i => i.IsFolder) ? "フォルダは中のファイルやフォルダごと移動します。" : "")
+            + Notice;
+        string paths = string.Join("\n", items.Take(DeleteConfirmPathLimit).Select(i => i.Path));
+        if (n > DeleteConfirmPathLimit)
+        {
+            paths += $"\n…ほか {n - DeleteConfirmPathLimit:N0} 個";
+        }
+
+        return (body, paths);
+    }
+
+    /// <summary>The message line after a delete: the one-item wording as before, counts when only part went to the Recycle Bin.</summary>
+    private void ShowDeleteResult(RecycleResult result, IReadOnlyList<ItemRef> items)
+    {
+        int n = items.Count;
+        string what = n == 1 ? $"「{items[0].Name}」" : $"{n:N0} 個の項目";
+        int r = result.Recycled;
+        int rest = n - r;
+        string err = result.Error ?? "不明なエラー";
         switch (result.Outcome)
         {
             case RecycleOutcome.Recycled:
-                Message.Success($"「{name}」をごみ箱に移動しました。");
+                Message.Success($"{what}をごみ箱に移動しました。");
                 break;
             case RecycleOutcome.Canceled:
-                Message.Info($"「{name}」の削除を中止しました。");
+                Message.Info(r == 0
+                    ? $"{what}の削除を中止しました。"
+                    : $"{r:N0} 個をごみ箱に移動し、残りの {rest:N0} 個は中止しました。");
                 break;
             case RecycleOutcome.NotRecyclable:
-                Message.Error($"「{name}」はごみ箱に移動できない場所にあるため、削除しませんでした。");
+                Message.Error(r == 0
+                    ? $"{what}はごみ箱に移動できない場所にあるため、削除しませんでした。"
+                    : $"{r:N0} 個をごみ箱に移動しました。残りの {rest:N0} 個はごみ箱に移動できないため、削除しませんでした。");
                 break;
             default:
-                Message.Error($"「{name}」を削除できませんでした：{result.Error ?? "不明なエラー"}");
+                Message.Error(r == 0
+                    ? $"{what}を削除できませんでした：{err}"
+                    : $"{r:N0} 個をごみ箱に移動しましたが、残りの {rest:N0} 個は削除できませんでした：{err}");
                 break;
         }
-
-        // Even a cancelled or failed delete may have moved part of a folder: list again.
-        await ReloadAfterFileChangeAsync();
     }
 
     /// <summary>
@@ -1255,6 +1338,12 @@ public sealed partial class MainViewModel : ObservableObject
     private long? _shellCommandAt;
 
     /// <summary>
+    /// Items get Explorer's menu with the app's entries on top of it (setting 右クリックのメニュー).
+    /// Read at every right click, so OK in the settings applies without a restart.
+    /// </summary>
+    public bool UsesWindowsItemMenu => ItemMenuStyles.FromSetting(Settings.ItemMenu) == ItemMenuStyle.Windows;
+
+    /// <summary>
     /// Explorer's menu (「その他のメニュー（Windows）」) closed. A menu that could not be shown says so.
     /// Only a command reloads: it may have changed the folder (7-Zip's 展開, a new item…), and some
     /// work in another process after the menu returns, so the lists are read again now and once
@@ -1287,8 +1376,8 @@ public sealed partial class MainViewModel : ObservableObject
     private static readonly TimeSpan SourceProbeTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan CutCheckTimeout = TimeSpan.FromSeconds(2);
 
-    /// <summary>A paste is running (one at a time: the window asks before it closes meanwhile).</summary>
-    private bool _transferBusy;
+    /// <summary>A paste or a delete to the Recycle Bin is running (one at a time: the window asks before it closes meanwhile).</summary>
+    private bool _fileOpBusy;
 
     /// <summary>The paths of this app's pending cut (null: none) and the clipboard sequence number it was written with.</summary>
     private HashSet<string>? _cutPaths;
@@ -1303,8 +1392,8 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>The check of <see cref="OnActivatedAsync"/> is running.</summary>
     private bool _cutCheckBusy;
 
-    /// <summary>A copy or move started by a paste is running (the window must not close silently).</summary>
-    public bool IsTransferRunning => _transferBusy;
+    /// <summary>A copy / move started by a paste or a move to the Recycle Bin is running (the window must not close silently).</summary>
+    public bool IsFileOperationRunning => _fileOpBusy;
 
     /// <summary>
     /// A click on an item of the shown list with Ctrl and / or Shift: Ctrl flips the item, Shift
@@ -1429,8 +1518,21 @@ public sealed partial class MainViewModel : ObservableObject
         return usable && PathTools.IsFullyQualified(item.Path) ? item.Path : null;
     }
 
+    /// <summary>
+    /// The folder the shown tab lists, as an item of its own, for the menu of the blank area
+    /// (エクスプローラーで表示, パスをコピー, 登録フォルダに追加 and Explorer's background menu). Null
+    /// where <see cref="TabViewModel.TransferTargetPath"/> is (the top lists, no tab, loading, a
+    /// failed load). No ItemContext of its own: a root is a Drive (using it is not recorded in the
+    /// history, as for a drive row), any other folder a FlyoutHeader (the folder itself, never cut
+    /// or deleted). Those three commands branch on no other context.
+    /// </summary>
+    public ItemRef? ShownFolderItem() =>
+        SelectedTab.TransferTargetPath is { } path
+            ? new ItemRef(path, IsFolder: true, SelectedTab.Location, PathTools.IsRoot(path) ? ItemContext.Drive : ItemContext.FlyoutHeader)
+            : null;
+
     /// <summary>A paste into <paramref name="folder"/> can start now (the clipboard offers files).</summary>
-    public bool CanPaste(string? folder) => folder is not null && !_transferBusy && ShellClipboard.HasFiles();
+    public bool CanPaste(string? folder) => folder is not null && !_fileOpBusy && ShellClipboard.HasFiles();
 
     /// <summary>
     /// Ctrl+V and the menus' 貼り付け: copies or moves the clipboard's files into
@@ -1440,13 +1542,13 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     public async Task PasteAsync(string folder)
     {
-        if (_transferBusy)
+        if (_fileOpBusy)
         {
             Message.Info("前の操作が終わってから実行してください。");
             return;
         }
 
-        _transferBusy = true;
+        _fileOpBusy = true;
         try
         {
             View?.CloseCascade();
@@ -1500,7 +1602,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         finally
         {
-            _transferBusy = false;
+            _fileOpBusy = false;
         }
     }
 
@@ -1525,7 +1627,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     public async Task OnActivatedAsync()
     {
-        if (_shellCommandAt is { } at && !_transferBusy
+        if (_shellCommandAt is { } at && !_fileOpBusy
             && TimeSpan.FromMilliseconds(Environment.TickCount64 - at) >= ShellCommandHandBack)
         {
             _shellCommandAt = null;
@@ -1536,7 +1638,7 @@ public sealed partial class MainViewModel : ObservableObject
             await ReloadAfterFileChangeAsync(cardCascadeOnly: true);
         }
 
-        if ((_cutPaths ?? _endedCutPaths) is not { } paths || _cutCheckBusy || _transferBusy)
+        if ((_cutPaths ?? _endedCutPaths) is not { } paths || _cutCheckBusy || _fileOpBusy)
         {
             return;
         }

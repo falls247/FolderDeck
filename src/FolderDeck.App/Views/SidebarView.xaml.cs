@@ -88,6 +88,9 @@ public partial class SidebarView : UserControl
     /// <summary>A row was left-clicked with the right button held, and the right button was then released.</summary>
     public event Action<SidebarItemViewModel>? ItemExplorerRequested;
 
+    /// <summary>The PC section header was right-clicked (its menu: エクスプローラーで開く).</summary>
+    public event Action<FrameworkElement>? PcHeaderContextMenu;
+
     /// <summary>A row was pressed and the pointer moved past the system drag distance.</summary>
     public event Action<SidebarItemViewModel>? ItemDragRequested;
 
@@ -240,6 +243,22 @@ public partial class SidebarView : UserControl
         if (sender is FrameworkElement row && ItemOf(sender) is { } item)
         {
             ItemContextMenu?.Invoke(item, row);
+        }
+    }
+
+    private void OnPcHeaderRightUp(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        if (_rocker.RightUp() is { } armed)
+        {
+            // A row was left-clicked with the right button held: released here, the row is still shown in Explorer, no menu.
+            ItemExplorerRequested?.Invoke(armed);
+            return;
+        }
+
+        if (sender is FrameworkElement header)
+        {
+            PcHeaderContextMenu?.Invoke(header);
         }
     }
 

@@ -67,7 +67,7 @@ public static class ExplorerTabs
     /// <summary>Parent folder in a new tab with the item selected (like <c>explorer.exe /select</c>).</summary>
     public static Task<OpenResult> ShowAsync(string path) => RunAsync(path, select: true);
 
-    /// <summary>The folder itself in a new tab (like <c>explorer.exe "path"</c>).</summary>
+    /// <summary>The folder itself (or a shell namespace folder such as This PC) in a new tab (like <c>explorer.exe "path"</c>).</summary>
     public static Task<OpenResult> OpenAsync(string path) => RunAsync(path, select: false);
 
     private static async Task<OpenResult> RunAsync(string path, bool select)
@@ -553,7 +553,7 @@ public static class ExplorerTabs
                 }
             }
 
-            if (!Directory.Exists(folder))
+            if (!ShellActions.IsShellNamespace(folder) && !Directory.Exists(folder))
             {
                 return Outcome.Fallback("the folder does not exist or cannot be reached");
             }

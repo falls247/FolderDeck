@@ -21,6 +21,12 @@ public static class ShellActions
 
     public static bool IsExecutable(string path) => ExecutableExtensions.Contains(PathTools.ExtensionOf(path));
 
+    /// <summary>"PC" (This PC) as a shell namespace path; explorer.exe and Navigate2 both accept it.</summary>
+    public const string ThisPcPath = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
+
+    /// <summary>A shell namespace path ("::{CLSID}") rather than a file system path.</summary>
+    public static bool IsShellNamespace(string path) => path.StartsWith("::{", StringComparison.Ordinal);
+
     /// <summary>Opens a file with its default app, like a double click in Explorer. Blocking: run off the UI thread.</summary>
     public static OpenResult Open(string path)
     {

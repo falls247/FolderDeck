@@ -60,6 +60,17 @@
         <TextBlock Text="エクスプローラーが開いていないとき、またはタブに対応していない Windows では、新しいウィンドウで開きます。"
                    TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="20,0,0,0" />
 
+        <TextBlock Text="右クリックのメニュー" Style="{StaticResource Section}" />
+        <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3" Background="{DynamicResource Brush.Surface2}"
+                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+            <StackPanel Orientation="Horizontal">
+                <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="ItemMenu" Content="アプリのメニュー" IsChecked="{Binding IsItemMenuApp}" />
+                <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="ItemMenu" Content="Windows のメニュー" IsChecked="{Binding IsItemMenuWindows}" Margin="3,0,0,0" />
+            </StackPanel>
+        </Border>
+        <TextBlock Text="「Windows のメニュー」は、項目の右クリックでエクスプローラーのメニュー（7-Zip・送る・プロパティなど）を出し、その上にアプリの項目を並べます。ドライブ・空いているところ・使えない項目や、エクスプローラーのメニューが 5 秒以内に準備できなかったときは、アプリのメニューを出します（準備できなかった項目は、しばらくアプリのメニューになります）。"
+                   TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,6,0,0" />
+
         <TextBlock Text="データ" Style="{StaticResource Section}" />
         <Grid Margin="0,0,0,2">
             <Grid.ColumnDefinitions>

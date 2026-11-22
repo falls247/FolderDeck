@@ -50,13 +50,13 @@
         </Style>
 
         <!--
-          Grip on the left edge of a resizable column (the columns are anchored to the right, so the
-          left edge is the one that follows the pointer). It draws the divider between two titles.
+          Grip on the right edge of a column: it resizes the column on its left (as in Explorer, the
+          columns to the left stay put, so the grip follows the pointer). It draws the divider after a title.
         -->
         <Style x:Key="HeaderGrip" TargetType="{x:Type Thumb}">
             <Setter Property="Width" Value="9" />
-            <Setter Property="Margin" Value="-4,0,0,0" />
-            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="Margin" Value="0,0,-4,0" />
+            <Setter Property="HorizontalAlignment" Value="Right" />
             <Setter Property="Cursor" Value="SizeWE" />
             <Setter Property="Focusable" Value="False" />
             <Setter Property="ToolTip" Value="ドラッグで列の幅を変更" />
@@ -91,12 +91,14 @@
 
         <!-- Header. Margin: left = the rows' left padding; right = their right padding + the scroll bar. -->
         <Border Grid.Row="0" Margin="12,8,12,0" Height="28" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
-            <Grid>
+            <!-- the * column is the empty space right of the last column (the rows have it too) -->
+            <Grid ClipToBounds="True">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition x:Name="HeaderName" Width="360" />
                     <ColumnDefinition x:Name="HeaderModified" Width="150" />
                     <ColumnDefinition x:Name="HeaderType" Width="170" />
                     <ColumnDefinition x:Name="HeaderSize" Width="96" />
+                    <ColumnDefinition Width="*" />
                     <ColumnDefinition x:Name="HeaderEnd" Width="8" />
                 </Grid.ColumnDefinitions>
 
@@ -131,6 +133,8 @@
                 </Button>
 
                 <!-- after the titles, so that the grips lie on top of them (Tag: the DetailsColumns key) -->
+                <Thumb Grid.Column="0" Style="{StaticResource HeaderGrip}" Tag="name"
+                       DragStarted="OnGripDragStarted" DragDelta="OnGripDragDelta" DragCompleted="OnGripDragCompleted" />
                 <Thumb Grid.Column="1" Style="{StaticResource HeaderGrip}" Tag="modified"
                        DragStarted="OnGripDragStarted" DragDelta="OnGripDragDelta" DragCompleted="OnGripDragCompleted" />
                 <Thumb Grid.Column="2" Style="{StaticResource HeaderGrip}" Tag="type"

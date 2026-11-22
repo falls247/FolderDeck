@@ -21,9 +21,12 @@ public partial class DetailsRowView : UserControl
     private readonly ItemPointerTracker _pointer;
     private CardViewModel? _vm;
 
+    /// <summary>The item the row shows (its DataContext), or null before it is bound.</summary>
+    public CardViewModel? ViewModel => _vm;
+
     /// <summary>
-    /// A button went down on the row (a click, a menu, a drag): moving on the name does not ask for
-    /// the folder's list again until the pointer has left the name (as on a sidebar row).
+    /// A button went down on the row (a click, a menu, a drag): moving on the name column does not
+    /// ask for the folder's list again until the pointer has left the column (as on a sidebar row).
     /// </summary>
     private bool _noRearm;
 
@@ -76,24 +79,24 @@ public partial class DetailsRowView : UserControl
         _pointer.RightUp(e);
     }
 
-    // ---- the name: where a folder's list hangs ------------------------------------------------
+    // ---- the name column: where a folder's list hangs -----------------------------------------
 
     private void OnNameEnter(object sender, MouseEventArgs e)
     {
         if (_vm is { } vm)
         {
-            CardView.Host?.RowMouseEnter(NameCell, vm);
+            CardView.Host?.RowMouseEnter(NameColumn, vm);
         }
     }
 
     private void OnNameLeave(object sender, MouseEventArgs e)
     {
         _noRearm = false;
-        CardView.Host?.RowMouseLeave(NameCell);
+        CardView.Host?.RowMouseLeave(NameColumn);
     }
 
     /// <summary>
-    /// A hover starts when the pointer enters the name. After the list was closed under a resting
+    /// A hover starts when the pointer enters the name column. After the list was closed under a resting
     /// pointer (the window lost activation, the rows changed under it…) a real move asks again.
     /// </summary>
     private void OnNameMove(object sender, MouseEventArgs e)
@@ -103,7 +106,7 @@ public partial class DetailsRowView : UserControl
             && e.RightButton == MouseButtonState.Released
             && _vm is { } vm)
         {
-            CardView.Host?.RowMouseMove(NameCell, vm);
+            CardView.Host?.RowMouseMove(NameColumn, vm);
         }
     }
 
@@ -127,14 +130,14 @@ public partial class DetailsRowView : UserControl
 
     /// <summary>
     /// The container was given another item (rows are recycled while scrolling) or none. The name
-    /// cell is the same element as before, so a list that was opened (or is about to open) for the
+    /// column is the same element as before, so a list that was opened (or is about to open) for the
     /// old item must let go of it: nothing else tells the host that the element changed its item.
     /// </summary>
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (e.OldValue is not null)
         {
-            CardView.Host?.RowMouseLeave(NameCell);
+            CardView.Host?.RowMouseLeave(NameColumn);
         }
 
         _pointer.ItemChanged();

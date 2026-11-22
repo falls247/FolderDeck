@@ -75,6 +75,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         Sidebar.ItemLeft += row => _cascade.AnchorMouseLeave(row);
         Sidebar.ItemClicked += OnSidebarClicked;
         Sidebar.ItemContextMenu += (item, row) => _menus.Show(item.ToItemRef(), row);
+        Sidebar.PcHeaderContextMenu += OnPcHeaderContextMenu;
         Sidebar.ItemExplorerRequested += OnSidebarExplorer;
         Sidebar.ItemDragRequested += OnSidebarDrag;
         Sidebar.Scrolled += () => _cascade.CloseAll();
@@ -118,13 +119,14 @@ public partial class MainWindow : Window, IMainView, ICardHost
     }
 
     /// <summary>
-    /// The window refuses to close silently while a paste copies or moves files: the transfer runs
-    /// on a background thread and would be cut off halfway. Asks first (default: キャンセル).
+    /// The window refuses to close silently while a paste copies or moves files or a delete moves
+    /// them to the Recycle Bin: the operation runs on a background thread and would be cut off
+    /// halfway. Asks first (default: キャンセル).
     /// </summary>
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (_vm.IsTransferRunning
-            && !Confirm("終了しますか？", "ファイルの移動・コピーが実行中です。終了すると途中で中断されます。", null, "終了する", danger: true))
+        if (_vm.IsFileOperationRunning
+            && !Confirm("終了しますか？", "ファイルの移動・コピー・削除が実行中です。終了すると途中で中断されます。", null, "終了する", danger: true))
         {
             e.Cancel = true;
             return;
@@ -289,9 +291,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
     }
 
     /// <summary>
-    /// The selection keys (not in a text box): Ctrl+A, Esc (after the cascade had its turn) and
-    /// Ctrl+C / Ctrl+X / Ctrl+V. Copy and cut act on the selection only, never on the item under the
-    /// pointer; a held key repeats nothing (one paste per press). Returns true when the key was used.
+    /// The selection keys (not in a text box): Ctrl+A, Esc (after the cascade had its turn),
+    /// Ctrl+C / Ctrl+X / Ctrl+V and Delete. Copy, cut and delete act on the selection only, never on
+    /// the item under the pointer (nor the row the cascade's keys highlight); a held key repeats
+    /// nothing (one paste or one delete confirmation per press). Delete only recycles: Shift+Delete
+    /// (Explorer's permanent delete) and Ctrl+Delete are not used. Returns true when the key was used.
     /// </summary>
     private bool HandleSelectionKey(Key key, KeyEventArgs e)
     {
@@ -299,6 +303,25 @@ public partial class MainWindow : Window, IMainView, ICardHost
         if (key == Key.Escape && modifiers == ModifierKeys.None)
         {
             return _vm.ClearSelection();
+        }
+
+        if (key == Key.Delete && modifiers == ModifierKeys.None)
+        {
+            if (e.IsRepeat)
+            {
+                return true; // a held Delete asks once
+            }
+
+            var selected = _vm.SelectedItems();
+            if (selected.Count == 0)
+            {
+                return false; // nothing selected: not used (never the item under the pointer)
+            }
+
+            e.Handled = true; // before the modal confirmation
+            _cascade.CloseAll(); // as BeforeNavigate: the reload replaces the cascade
+            _ = _vm.DeleteAsync(selected);
+            return true;
         }
 
         if (modifiers != ModifierKeys.Control || key is not (Key.A or Key.C or Key.X or Key.V))
@@ -358,7 +381,13 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _vm.ClearSelection();
     }
 
-    /// <summary>A right click on the blank area that nothing else took: 貼り付け and 最新の情報に更新.</summary>
+    /// <summary>
+    /// A right click on the blank area that nothing else took: the menu of the folder shown
+    /// (貼り付け, 最新の情報に更新, its own entries and Explorer's background menu of it; only the first
+    /// two without a folder on screen, see <see cref="ContextMenuFactory.ShowBlank"/>). A click
+    /// that only reached the blank area because the items view does not hit test (while the tab
+    /// loads) but lies on a realized item still gets that item's menu.
+    /// </summary>
     private void OnContentRightUp(object sender, MouseButtonEventArgs e)
     {
         if (e.Handled || !_vm.HasTab || IsOnItemOrControl(e.OriginalSource))
@@ -367,6 +396,17 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         e.Handled = true;
+        if (ActiveList.RealizedItemAt(e) is { } view
+            && ((view as CardView)?.ViewModel ?? (view as DetailsRowView)?.ViewModel) is { } item)
+        {
+            // No path in the log: the type of the source and the load state tell why it fell through.
+            FolderDeck.Core.Infrastructure.AppLog.Info(
+                $"Item right click reached the blank area: source {e.OriginalSource?.GetType().Name ?? "null"}, "
+                + $"view {view.GetType().Name}, loading {_vm.SelectedTab.IsLoading}");
+            ItemContextMenu(item, view);
+            return;
+        }
+
         _cascade.CloseAll();
         _menus.ShowBlank(ContentHost);
     }
@@ -563,28 +603,29 @@ public partial class MainWindow : Window, IMainView, ICardHost
     public void CardMouseLeave(CardView card) => _cascade.CardMouseLeave(card);
 
     /// <summary>
-    /// A row of the details list: the name is both what the pointer rests on and what the list is
-    /// placed beside, so resting on the other columns opens nothing. Only a folder has a list; on
-    /// any other name nothing is armed and a list that is open closes as on leaving its row.
+    /// A row of the details list: the name column is both what the pointer rests on and what the
+    /// list is placed beside (at the column's right edge), so resting on the other columns opens
+    /// nothing. A folder opens its list, a previewable file its preview; on any other row nothing is
+    /// armed and a list that is open closes as on leaving its row.
     /// </summary>
-    public void RowMouseEnter(FrameworkElement nameCell, CardViewModel vm)
+    public void RowMouseEnter(FrameworkElement nameColumn, CardViewModel vm)
     {
-        if (CardAnchor.For(vm) is { } anchor)
+        if (CardAnchor.For(vm, _vm.Services.Icons) is { } anchor)
         {
-            _cascade.AnchorMouseEnter(nameCell, nameCell, anchor);
+            _cascade.AnchorMouseEnter(nameColumn, nameColumn, anchor);
         }
     }
 
-    /// <summary>The pointer moved on a name without a button held: arms the row again after everything was closed under it.</summary>
-    public void RowMouseMove(FrameworkElement nameCell, CardViewModel vm)
+    /// <summary>The pointer moved on a name column without a button held: arms the row again after everything was closed under it.</summary>
+    public void RowMouseMove(FrameworkElement nameColumn, CardViewModel vm)
     {
-        if (CardAnchor.For(vm) is { } anchor)
+        if (CardAnchor.For(vm, _vm.Services.Icons) is { } anchor)
         {
-            _cascade.AnchorMouseMove(nameCell, nameCell, anchor, Mouse.GetPosition(this));
+            _cascade.AnchorMouseMove(nameColumn, nameColumn, anchor, Mouse.GetPosition(this));
         }
     }
 
-    public void RowMouseLeave(FrameworkElement nameCell) => _cascade.AnchorMouseLeave(nameCell);
+    public void RowMouseLeave(FrameworkElement nameColumn) => _cascade.AnchorMouseLeave(nameColumn);
 
     /// <summary>
     /// A click with Ctrl and / or Shift selects (Ctrl flips the item, Shift takes the range, both add
@@ -644,6 +685,13 @@ public partial class MainWindow : Window, IMainView, ICardHost
     {
         _cascade.CloseAll();
         _ = item.IsDrive ? _vm.OpenDriveAsync(item) : _vm.OpenRegisteredAsync(item);
+    }
+
+    /// <summary>Right click on the PC header: 「エクスプローラーで開く」 (This PC). The cascade of a row is closed first (the menu is not about it).</summary>
+    private void OnPcHeaderContextMenu(FrameworkElement header)
+    {
+        _cascade.CloseAll();
+        _menus.ShowPcSection(header);
     }
 
     private void OnSidebarExplorer(SidebarItemViewModel item)

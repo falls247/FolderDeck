@@ -62,21 +62,25 @@
 
         <Grid>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="{Binding Metrics.NameWidth, RelativeSource={RelativeSource AncestorType={x:Type views:DetailsListView}}}" />
                 <ColumnDefinition Width="{Binding Metrics.ModifiedWidth, RelativeSource={RelativeSource AncestorType={x:Type views:DetailsListView}}}" />
                 <ColumnDefinition Width="{Binding Metrics.TypeWidth, RelativeSource={RelativeSource AncestorType={x:Type views:DetailsListView}}}" />
                 <ColumnDefinition Width="{Binding Metrics.SizeWidth, RelativeSource={RelativeSource AncestorType={x:Type views:DetailsListView}}}" />
+                <!-- the empty space right of the last column, as in the header -->
+                <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="{Binding Metrics.EndWidth, RelativeSource={RelativeSource AncestorType={x:Type views:DetailsListView}}}" />
             </Grid.ColumnDefinitions>
 
             <!-- 名前: the name cell is as wide as its content, the sub line of a top list takes the rest -->
-            <DockPanel Grid.Column="0">
-                <!--
-                  NameCell is what a folder's list hangs beside (ICardHost.RowMouseEnter): icon, name and 📌
-                  only, so the list opens next to the name and resting on the other columns opens nothing.
-                -->
-                <Border x:Name="NameCell" DockPanel.Dock="Left" Background="Transparent" Padding="6,0,8,0"
-                        MouseEnter="OnNameEnter" MouseLeave="OnNameLeave" MouseMove="OnNameMove">
+            <!--
+              NameColumn (the whole 名前 column, up to 更新日時) is what a folder's list hangs beside
+              (ICardHost.RowMouseEnter): resting anywhere on the column (icon, name, 📌, the sub line or
+              the blank after it) opens the list at the column's right edge; resting on the other columns
+              opens nothing. Transparent, not null: the blank after the name must be hit too.
+            -->
+            <DockPanel x:Name="NameColumn" Grid.Column="0" Background="Transparent"
+                       MouseEnter="OnNameEnter" MouseLeave="OnNameLeave" MouseMove="OnNameMove">
+                <Border DockPanel.Dock="Left" Background="Transparent" Padding="6,0,8,0">
                     <DockPanel>
                         <!-- 16 px icon; while the item is being opened (§6.8) a spinner takes its place -->
                         <Grid DockPanel.Dock="Left" Width="16" Height="16" Margin="0,0,7,0" VerticalAlignment="Center">
@@ -123,7 +127,7 @@
             <TextBlock Grid.Column="3" Style="{StaticResource Cell}" Text="{Binding SizeColumnText}" TextAlignment="Right" />
 
             <!-- × (§6.7): on the rows of a top list, while the pointer is on the row -->
-            <Button Grid.Column="4" Content="&#xE711;" ToolTip="{Binding RemoveToolTip}" Click="OnCloseClick"
+            <Button Grid.Column="5" Content="&#xE711;" ToolTip="{Binding RemoveToolTip}" Click="OnCloseClick"
                     HorizontalAlignment="Center" VerticalAlignment="Center">
                 <Button.Style>
                     <Style TargetType="{x:Type Button}" BasedOn="{StaticResource Btn.TabClose}">
@@ -156,7 +160,7 @@
             </Button>
 
             <!-- Selection frame over the whole row: drawn on top, so that the columns stay aligned with the header -->
-            <Border Grid.Column="0" Grid.ColumnSpan="5" CornerRadius="5" BorderThickness="2" IsHitTestVisible="False">
+            <Border Grid.Column="0" Grid.ColumnSpan="6" CornerRadius="5" BorderThickness="2" IsHitTestVisible="False">
                 <Border.Style>
                     <Style TargetType="{x:Type Border}">
                         <Setter Property="Visibility" Value="Collapsed" />
