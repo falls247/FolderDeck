@@ -251,10 +251,12 @@ App
 
 ### 3.3 カスケード（`CascadeController`、§9）
 
-- 状態：`_levels`（0 = カードのオーバーレイ、またはサイドバーの行の横のフライアウト。1 以降 = フライアウト）、起点（`_card`：カード、`_anchor` / `_anchorItem`：サイドバーの行。どちらか一方）、`_preview`（最大 1 つ、常にいちばん深い位置）、タイマー 6 つ（`HoverTimings`：overlay 300 / open 150 / grace 300 / exit 300 / preview 150 ms、プレビューを閉じるタイマーは grace と同じ）
+- 状態：`_levels`（0 = カードのオーバーレイ、またはサイドバーの行の横のフライアウト。1 以降 = フライアウト）、起点（`_card`：カード、`_anchor` / `_anchorItem`：サイドバーの行。どちらか一方）、`_preview`（最大 1 つ、常にいちばん深い位置）、タイマー 7 つ（`HoverTimings`：overlay 300（非アクティブ時 500）/ open 150 / grace 300 / exit 300 / preview 150 ms、プレビューを閉じるタイマーは grace と同じ、前面ウィンドウの監視 250 ms）
 - 開く（カード）：`MainWindow.CardMouseEnter` → `CardMouseEnter` → overlay タイマー → `OpenOverlayAsync`（`CardViewModel.EnsureListingAsync`）。行に止まる → `OnRowHovered` → open タイマー → `OpenChild` → `OpenFlyout` → `LoadLevelAsync` → `Position` / `Place`（行が載っているモニターの作業領域と DPI から物理ピクセルで配置し、Popup のウィンドウを直接動かす）
 - 開く（サイドバー）：`SidebarView.ItemEntered` → `SidebarMouseEnter` → overlay タイマー → `OpenRoot` → `OpenFlyout(0, …)`（行そのものを「行」と「親カード」の両方の矩形として渡すので、行の右に出る）。一覧を開いている間に別の行へ入ったときは、すぐには切り替えず `_pendingAnchor` に置いて overlay タイマーを回し、そこで止まったときだけ切り替える（行が縦に並んでいて、一覧へ斜めに移動すると隣の行を横切るため。一覧に入れば `OnFlyoutEnter` が取り消す）
-- 閉じる：**開閉はすべてここで決める**（Popup は `StaysOpen=True`）。`CloseAll` / `CloseFrom(index)` / `CloseDeepest`（Esc）。右クリックメニュー表示中は閉じない（`ContextMenuFactory.MenuOpened` / `MenuClosed`）
+- 非アクティブなウィンドウでも開く（旧仕様 §9.6 規則 7「非アクティブの間は開かない」はやめた。横に並べて使うと「行に載せても出ず、どこかをクリックすると出る」不具合に見えたため）。旧規則が守っていたことは別の仕組みで守る：通過しただけでは開かない → `RestartOverlay`（非アクティブ時は `HoverTimings.OverlayInactive` = 500 ms）、最前面の Popup がほかのアプリの上に残らない → `WatchForeground`（非アクティブで階層 0 を開いたら前面ウィンドウを 250 ms ごとに見て、替わったら `CloseAll`。`Deactivated` は来ないため）、操作はアクティブなウィンドウで行う → `ActivateWindow`（一覧のクリック・右クリックの前に `Window.Activate`。Popup は `WS_EX_NOACTIVATE` でクリックしてもアクティブにならない。メニューは必ず `ShowMenu` 経由で出す）。ホバーだけではウィンドウを前面に出さない
+- 再武装（サイドバー）：ホバーの起点は `MouseEnter` の 1 回だけなので、ポインターが行に載ったまま `CloseAll` されると（非アクティブ化、ドラッグ終了、前面ウィンドウの交代）出入りするまで開かない。`SidebarView.ItemMoved` → `SidebarMouseMove` が、最初に見た位置からシステムのドラッグ距離以上動いたときだけ `SidebarMouseEnter` をやり直す。クリック・右クリック・ドラッグした行は、出るまで再武装しない（`SidebarView._noRearm`。タブを開いた直後に同じ行の一覧が出直さないため）
+- 閉じる：**開閉はすべてここで決める**（Popup は `StaysOpen=True`）。`CloseAll` / `CloseFrom(index)` / `CloseDeepest`（Esc）。右クリックメニュー表示中は閉じない（`ContextMenuFactory.MenuOpened` / `MenuClosed`）。カードグリッドの都合（スクロール、カードの作り直し = 表示中タブの `Cards` 差し替え）で閉じるときは `CloseCardCascade`（`IMainView.CloseCardCascade`）：サイドバー起点の一覧は閉じない（タブの読み込み完了が、利用者が見ている一覧を消していた）
 - クリック：`OnRowClicked` / `OnHeaderClicked` → `MainViewModel.OpenItemAsync`。サイドバー起点のカスケードでは `ItemOf` / `HeaderOf` が `ItemRef.NewTab` を立てるので、フォルダは新しいフォルダのタブで開く（カード起点は表示中のタブの中で移動）
 - キーボード：`MainWindow.OnPreviewKeyDown` が、カスケード表示中は先に `HandleKey`（↑ ↓ → ← Enter Esc）へ渡す
 - ドラッグ：`BeginDrag` で全階層を非表示にしてタイマーを止め、`EndDrag` で本当に閉じる。ドラッグ中の `CloseAll` は無視する（理由は `BeginDrag` の XML コメント）
@@ -401,6 +403,7 @@ App
 - 並び順は `_baseCards` を基準に `Ordered` で作る。`Cards` を直接並べ替えない。ピン・ドラッグ順の規則は Core の関数を使う。`Cards` はフィルターで項目が減っていることがあるので、位置（何番目か）を基準順と突き合わせる処理は `OrderedCards` を使う。
 - タブは 1 つの種類に 1 つとは限らない（フォルダのタブは何個でも）。`TabKind` からタブを引かず、`TabViewModel` の参照（`SelectedTab`、`FolderTabs`）で扱う。全タブに効かせる処理は `MainViewModel.AllTabs`。
 - 一覧の行（`EntryListView` の `ListBox`）でマウスキャプチャを使って何かを待たない。`ListBox` は左ボタンを離すたびに自分のキャプチャを手放す（処理済みのイベントでも）。待ち状態は `RockerGesture` のようにフラグで持ち、取り消す条件を決める。
+- カスケードを開く条件に `Window.IsActive` を戻さない（[§3.3](#33-カスケードcascadecontroller9)）。カードグリッドの都合で閉じるときは `CloseAll` ではなく `CloseCardCascade` を使う。
 - カスケードの開閉判断を `CascadeController` の外に書かない。ドラッグ中にポップアップを破棄しない（`DoDragDrop` がボタンを離したことに気づかなくなる）。
 - シェルが返すビットマップの上下と非乗算アルファの扱いは `ShellInterop` に閉じている（README「実装メモ」）。安易に反転しない。
 - `tools/dev.ps1` は UTF-8（BOM 付き）、BAT は ASCII のみ。

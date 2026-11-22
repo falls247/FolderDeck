@@ -24,6 +24,12 @@ public partial class SidebarView : UserControl
     /// button is released.
     /// </summary>
     private readonly RockerGesture<SidebarItemViewModel> _rocker = new();
+
+    /// <summary>
+    /// The row that was just clicked, right-clicked or dragged: moving on it does not ask for its
+    /// list again (<see cref="ItemMoved"/>) until the pointer has left it.
+    /// </summary>
+    private FrameworkElement? _noRearm;
     private ReorderDrag? _drag;
 
     public SidebarView()
@@ -47,6 +53,12 @@ public partial class SidebarView : UserControl
 
     /// <summary>The pointer entered a row.</summary>
     public event Action<FrameworkElement, SidebarItemViewModel>? ItemEntered;
+
+    /// <summary>
+    /// The pointer moved on a row with no button held (position in this control's coordinates): a
+    /// hover that was dropped or closed while the pointer rested there can start again.
+    /// </summary>
+    public event Action<FrameworkElement, SidebarItemViewModel, Point>? ItemMoved;
 
     public event Action<FrameworkElement>? ItemLeft;
 
@@ -81,6 +93,11 @@ public partial class SidebarView : UserControl
         _pressed = null;
         if (sender is FrameworkElement row)
         {
+            if (ReferenceEquals(row, _noRearm))
+            {
+                _noRearm = null;
+            }
+
             ItemLeft?.Invoke(row);
         }
     }
@@ -102,7 +119,18 @@ public partial class SidebarView : UserControl
         _pressedAt = e.GetPosition(this);
     }
 
-    private void OnRowMove(object sender, MouseEventArgs e) => TryStartDrag(sender, e);
+    private void OnRowMove(object sender, MouseEventArgs e)
+    {
+        TryStartDrag(sender, e);
+        if (sender is FrameworkElement row
+            && !ReferenceEquals(row, _noRearm)
+            && e.LeftButton == MouseButtonState.Released
+            && e.RightButton == MouseButtonState.Released
+            && ItemOf(sender) is { } item)
+        {
+            ItemMoved?.Invoke(row, item, e.GetPosition(this));
+        }
+    }
 
     private void OnRowLeftUp(object sender, MouseButtonEventArgs e)
     {
@@ -118,6 +146,7 @@ public partial class SidebarView : UserControl
         _pressed = null;
         if (clicked)
         {
+            _noRearm = sender as FrameworkElement; // the folder opens in a tab: its list does not come back under the pointer
             ItemClicked?.Invoke(item!);
         }
     }
@@ -125,6 +154,7 @@ public partial class SidebarView : UserControl
     private void OnRowRightUp(object sender, MouseButtonEventArgs e)
     {
         e.Handled = true;
+        _noRearm = sender as FrameworkElement; // Explorer or the menu takes over
         if (_rocker.RightUp() is { } armed)
         {
             ItemExplorerRequested?.Invoke(armed); // the row that was clicked, wherever the release lands
@@ -151,6 +181,7 @@ public partial class SidebarView : UserControl
         }
 
         _pressed = null; // a drag never opens the row on mouse up
+        _noRearm = sender as FrameworkElement;
         ItemDragRequested?.Invoke(item);
     }
 

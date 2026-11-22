@@ -361,6 +361,9 @@ internal static class ShellInterop
 
     public static void AllowAnyForeground() => PInvoke.AllowSetForegroundWindow(unchecked((uint)-1));
 
+    /// <summary>The window the user is working in (0 while Windows switches between two windows).</summary>
+    public static nint GetForegroundWindow() => (IntPtr)PInvoke.GetForegroundWindow();
+
     public static void BringToFront(IntPtr hwnd)
     {
         var h = new HWND(hwnd);

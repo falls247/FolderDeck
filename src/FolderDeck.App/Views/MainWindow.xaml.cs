@@ -37,10 +37,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
         // The stores are loaded before the window is created: the sidebar opens at its saved width.
         SidebarColumn.Width = new GridLength(AppSettings.ClampSidebarWidth(vm.Services.Stores.Settings.Current.SidebarWidth));
 
-        Grid.Scrolled += (_, _) => _cascade.CloseAll();
+        Grid.Scrolled += (_, _) => _cascade.CloseCardCascade();
         Grid.CardSizeStepRequested += step => vm.StepCardSize(step);
 
         Sidebar.ItemEntered += (row, item) => _cascade.SidebarMouseEnter(row, item);
+        Sidebar.ItemMoved += (row, item, position) => _cascade.SidebarMouseMove(row, item, position);
         Sidebar.ItemLeft += row => _cascade.SidebarMouseLeave(row);
         Sidebar.ItemClicked += OnSidebarClicked;
         Sidebar.ItemContextMenu += (item, row) => _menus.Show(item.ToItemRef(), row);
@@ -456,6 +457,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
     // ---- IMainView ----------------------------------------------------------------------------
 
     public void CloseCascade() => _cascade.CloseAll();
+
+    public void CloseCardCascade() => _cascade.CloseCardCascade();
 
     public double GetScrollOffset() => Grid.VerticalOffset;
 

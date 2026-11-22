@@ -18,6 +18,9 @@ public interface IMainView
 {
     void CloseCascade();
 
+    /// <summary>Closes the cascade of a card only: the card grid changed, a list beside a sidebar row is not affected.</summary>
+    void CloseCardCascade();
+
     double GetScrollOffset();
 
     void ScrollTo(double offset);
@@ -127,7 +130,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         else if (e.PropertyName == nameof(TabViewModel.Cards) && ReferenceEquals(sender, SelectedTab))
         {
-            View?.CloseCascade(); // the grid rebuilds its cards: an open overlay would be left behind
+            View?.CloseCardCascade(); // the grid rebuilds its cards: an open overlay would be left behind
         }
     }
 
