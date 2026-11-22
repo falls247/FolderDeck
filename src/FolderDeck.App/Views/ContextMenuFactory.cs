@@ -1,6 +1,9 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using FolderDeck.Core.Transfer;
+using FolderDeck.Shell;
 using FolderDeck.ViewModels;
 
 namespace FolderDeck.Views;
@@ -24,15 +27,28 @@ public sealed class ContextMenuFactory
     public Action? BeforeNavigate { get; set; }
 
     /// <summary>
+    /// Explorer's own menu (「その他のメニュー（Windows）」) opens (true) or has closed (false). True is
+    /// raised synchronously from the item's Click, before the menu is built; false follows every
+    /// outcome (also a menu that never showed or timed out), before the result is acted on.
+    /// </summary>
+    public event Action<bool>? NativeMenuChanged;
+
+    /// <summary>Explorer menus asked for and not finished yet (normally 0 or 1).</summary>
+    private int _nativeMenus;
+
+    /// <summary>
     /// The menu of one item, or with <paramref name="group"/> (more than one item: the selection the
     /// clicked item is part of, in display order) the short menu of the whole group: 切り取り,
     /// コピー and パスをコピー. The caller decides the group (cascade rows and headers have none).
     /// </summary>
     public void Show(ItemRef item, FrameworkElement target, IReadOnlyList<ItemRef>? group = null)
     {
+        // Where Explorer's menu will appear, and whether it gets the extended entries: read now, at
+        // the right click, not when its item is clicked.
+        var at = NativeMenuPoint.Capture(target);
         if (group is { Count: > 1 })
         {
-            ShowGroup(group, target);
+            ShowGroup(group, target, at);
             return;
         }
 
@@ -117,6 +133,12 @@ public sealed class ContextMenuFactory
             }
         }
 
+        if (!drive)
+        {
+            // Not on a drive row: a drive's menu would offer フォーマット.
+            AddNativeItem(menu, [item.Path], !disabled && TransferRules.IsTransferable(item.Path), at);
+        }
+
         Open(menu);
     }
 
@@ -132,12 +154,58 @@ public sealed class ContextMenuFactory
     }
 
     /// <summary>Several selected items: only what applies to all of them at once.</summary>
-    private void ShowGroup(IReadOnlyList<ItemRef> group, FrameworkElement target)
+    private void ShowGroup(IReadOnlyList<ItemRef> group, FrameworkElement target, NativeMenuPoint at)
     {
         var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
         AddClipboardItems(menu, group, pasteItem: null, separator: false);
         menu.Items.Add(Item("パスをコピー", CopyGlyph, true, () => _vm.CopyPaths(group)));
+
+        // Explorer's menu of the whole selection (one menu for every item, as with a selection in
+        // Explorer): only when every item is usable and not a root.
+        AddNativeItem(menu, group.Select(i => i.Path).ToList(), group.All(MainViewModel.CanCopy), at);
         Open(menu);
+    }
+
+    /// <summary>
+    /// The last item: 「その他のメニュー（Windows）」, Explorer's own menu for <paramref name="paths"/>
+    /// (entries of shell extensions such as 7-Zip, 送る, プログラムから開く, プロパティ). The shell's
+    /// delete, rename, cut, copy and paste are left out of it by <see cref="ShellContextMenu"/>
+    /// (the app has its own; the shell's delete can be permanent).
+    /// </summary>
+    private void AddNativeItem(ContextMenu menu, IReadOnlyList<string> paths, bool enabled, NativeMenuPoint at)
+    {
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item("その他のメニュー（Windows）", NativeMenuGlyph, enabled, () => _ = ShowNativeAsync(paths, at)));
+    }
+
+    private async Task ShowNativeAsync(IReadOnlyList<string> paths, NativeMenuPoint at)
+    {
+        // Synchronously, before anything is awaited: the cascade must be frozen before the menu
+        // thread can take the foreground (the window's Deactivated would close it).
+        if (_nativeMenus++ == 0)
+        {
+            NativeMenuChanged?.Invoke(true);
+        }
+
+        ShellMenuResult result;
+        try
+        {
+            result = await ShellContextMenu.ShowAsync(paths, at.X, at.Y, at.Extended, _vm.View?.WindowHandle ?? 0);
+        }
+        catch (Exception ex)
+        {
+            result = new ShellMenuResult(ShellMenuOutcome.Failed, null, ex.Message); // not expected: the task never faults
+        }
+        finally
+        {
+            if (--_nativeMenus == 0)
+            {
+                NativeMenuChanged?.Invoke(false);
+            }
+        }
+
+        // After the unfreeze: the reload after a command closes the cascade, which a frozen one ignores.
+        await _vm.OnShellMenuClosedAsync(result);
     }
 
     /// <summary>
@@ -186,11 +254,29 @@ public sealed class ContextMenuFactory
         menu.IsOpen = true;
     }
 
-    // Segoe Fluent Icons: Cut, Copy (also パスをコピー), Paste, Refresh.
+    // Segoe Fluent Icons: Cut, Copy (also パスをコピー), Paste, Refresh, More.
     private const string CutGlyph = "\uE8C6";
     private const string CopyGlyph = "\uE8C8";
     private const string PasteGlyph = "\uE77F";
     private const string RefreshGlyph = "\uE72C";
+    private const string NativeMenuGlyph = "\uE712"; // More (…)
+
+    /// <summary>The pointer in screen pixels and the Shift state when the app's menu was asked for.</summary>
+    private readonly record struct NativeMenuPoint(int X, int Y, bool Extended)
+    {
+        public static NativeMenuPoint Capture(FrameworkElement target)
+        {
+            bool extended = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+            if (ShellInterop.TryGetCursorPos(out int x, out int y))
+            {
+                return new NativeMenuPoint(x, y, extended);
+            }
+
+            // Fallback: the target's top-left corner (PointToScreen gives device pixels).
+            var corner = target.IsVisible ? target.PointToScreen(new Point(0, 0)) : default;
+            return new NativeMenuPoint((int)corner.X, (int)corner.Y, extended);
+        }
+    }
 
     private static MenuItem Item(string header, string glyph, bool enabled, Action action)
     {

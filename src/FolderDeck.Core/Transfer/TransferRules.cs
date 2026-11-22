@@ -15,11 +15,8 @@ public enum CopyReason
     /// <summary>The item is moved.</summary>
     None,
 
-    /// <summary>A copy was asked for (Ctrl while dragging, or a copy on the clipboard).</summary>
+    /// <summary>A copy was asked for (a copy on the clipboard).</summary>
     Requested,
-
-    /// <summary>The source is on the network and the caller turns such moves into copies (drags).</summary>
-    Network,
 
     /// <summary>The source is on read-only media (optical disc, write-protected volume).</summary>
     ReadOnlyMedia,
@@ -66,19 +63,16 @@ public readonly record struct TransferSource(string Path, SourceMedia Media, boo
 /// </param>
 public readonly record struct TransferItem(string Path, TransferKind Kind, CopyReason Reason, bool RenameOnCollision);
 
-/// <summary>What the user asked for, and the rules of the gesture (drag or paste).</summary>
+/// <summary>What the user asked for, and the rules of the gesture (a paste is the only one).</summary>
 /// <param name="Requested">Move or copy, before the per-item rules.</param>
-/// <param name="NetworkBecomesCopy">A move from a network source becomes a copy.</param>
 /// <param name="AllowSameFolderCopy">A copy into the source's own folder is allowed (it is renamed).</param>
-public sealed record TransferOptions(TransferKind Requested, bool NetworkBecomesCopy, bool AllowSameFolderCopy)
+public sealed record TransferOptions(TransferKind Requested, bool AllowSameFolderCopy)
 {
-    /// <summary>A drop inside the app: a move, or a copy with Ctrl; network sources are copied.</summary>
-    public static TransferOptions Drag(bool ctrl) =>
-        new(ctrl ? TransferKind.Copy : TransferKind.Move, NetworkBecomesCopy: true, AllowSameFolderCopy: false);
-
-    /// <summary>A paste: the clipboard's kind (cut = move), as Explorer does it.</summary>
-    public static TransferOptions Paste(TransferKind clip) =>
-        new(clip, NetworkBecomesCopy: false, AllowSameFolderCopy: true);
+    /// <summary>
+    /// A paste: the clipboard's kind (cut = move), as Explorer does it. A cut from the network is
+    /// really moved, as in Explorer.
+    /// </summary>
+    public static TransferOptions Paste(TransferKind clip) => new(clip, AllowSameFolderCopy: true);
 }
 
 /// <summary>The outcome of <see cref="TransferRules.Decide"/>: what to run and what was left out.</summary>
@@ -122,8 +116,8 @@ public sealed record TransferPlan(
 
 /// <summary>
 /// Decides, from strings and probed facts only (no file system access), whether sources may be
-/// transferred into a folder and whether each one is moved or copied. Paste and drops inside the
-/// app both go through <see cref="Decide"/>. Paths are normalized with <see cref="PathTools"/> and
+/// transferred into a folder and whether each one is moved or copied. A paste goes through
+/// <see cref="Decide"/> (the app has no other way to copy or move files). Paths are normalized with <see cref="PathTools"/> and
 /// compared case-insensitively. Links, junctions and 8.3 short names are not resolved: two
 /// different spellings of one folder are different paths here. The same-folder and into-itself
 /// checks therefore hold only when sources and target use the same spelling: a caller whose paths
@@ -190,27 +184,6 @@ public static class TransferRules
     }
 
     /// <summary>
-    /// True when dropping <paramref name="paths"/> on <paramref name="target"/> would transfer at
-    /// least one of them under the drag rules (<see cref="TransferOptions.Drag"/>). Strings only;
-    /// the answer does not depend on Ctrl, because a drag never copies into the same folder.
-    /// </summary>
-    public static bool CanDropInto(IReadOnlyList<string> paths, string? target)
-    {
-        if (paths is null || paths.Count == 0)
-        {
-            return false;
-        }
-
-        var sources = new TransferSource[paths.Count];
-        for (int i = 0; i < sources.Length; i++)
-        {
-            sources[i] = new TransferSource(paths[i], SourceMedia.Local, CanDelete: true);
-        }
-
-        return Decide(sources, target, TransferOptions.Drag(ctrl: false)).Items.Count > 0;
-    }
-
-    /// <summary>
     /// Builds the plan for transferring <paramref name="sources"/> into <paramref name="target"/>.
     /// <list type="number">
     /// <item>Sources are normalized and deduplicated; a source inside another source is dropped
@@ -219,9 +192,8 @@ public static class TransferRules
     /// <item>A target that is the item or lies inside it: IntoItself (moves and copies).</item>
     /// <item>An item already in the target: SameFolder for a requested move; for a requested copy
     /// too, unless <see cref="TransferOptions.AllowSameFolderCopy"/>, which gives a renamed copy.</item>
-    /// <item>Kind per item: a requested copy stays a copy; read-only media, network sources (when
-    /// <see cref="TransferOptions.NetworkBecomesCopy"/>) and undeletable sources are copied; the
-    /// rest is moved.</item>
+    /// <item>Kind per item: a requested copy stays a copy; read-only media and undeletable sources
+    /// are copied; the rest is moved (network sources too).</item>
     /// </list>
     /// Without a usable target every source is skipped as NoTarget.
     /// </summary>
@@ -367,12 +339,6 @@ public static class TransferRules
         if (source.Media == SourceMedia.ReadOnly)
         {
             return (TransferKind.Copy, CopyReason.ReadOnlyMedia);
-        }
-
-        // A UNC path is a network source whatever the probe said (or failed to say).
-        if (options.NetworkBecomesCopy && (source.Media == SourceMedia.Network || IsNetworkPath(path)))
-        {
-            return (TransferKind.Copy, CopyReason.Network);
         }
 
         if (!source.CanDelete)

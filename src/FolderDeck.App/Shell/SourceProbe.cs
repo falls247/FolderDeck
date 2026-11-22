@@ -10,7 +10,7 @@ using Windows.Win32.System.Diagnostics.Debug;
 namespace FolderDeck.Shell;
 
 /// <summary>
-/// What <see cref="TransferRules.Decide"/> needs to know about the sources of a paste or a drop:
+/// What <see cref="TransferRules.Decide"/> needs to know about the sources of a paste:
 /// the kind of media each lies on, and whether it could be removed there (a move deletes its
 /// source). The only caller of <c>GetDriveType</c> / <c>GetVolumeInformation</c> for sources.
 /// <para>
@@ -43,14 +43,12 @@ public static class SourceProbe
     /// <item><c>CanDelete</c> is false when opening the item with delete access is refused
     /// (<c>ERROR_ACCESS_DENIED</c>, <c>ERROR_WRITE_PROTECT</c>), on read-only media, and for every
     /// source not reached before <paramref name="timeout"/>. An item that is merely in use
-    /// (<c>ERROR_SHARING_VIOLATION</c>) counts as deletable: the shell asks about it during the move.</item>
-    /// <item>With <paramref name="probeNetwork"/> false, network sources are not opened at all
-    /// (no round trip to a server during a drag); their <c>CanDelete</c> is true, meaning "not known
-    /// to be refused".</item>
+    /// (<c>ERROR_SHARING_VIOLATION</c>) counts as deletable: the shell asks about it during the move.
+    /// Network sources are opened too (a round trip to the server per item).</item>
     /// </list>
     /// Never faults.
     /// </summary>
-    public static async Task<IReadOnlyList<TransferSource>> DescribeAsync(IReadOnlyList<string> paths, bool probeNetwork, TimeSpan timeout)
+    public static async Task<IReadOnlyList<TransferSource>> DescribeAsync(IReadOnlyList<string> paths, TimeSpan timeout)
     {
         ArgumentNullException.ThrowIfNull(paths);
         if (paths.Count == 0)
@@ -58,7 +56,7 @@ public static class SourceProbe
             return Array.Empty<TransferSource>();
         }
 
-        var run = new Run(paths, probeNetwork);
+        var run = new Run(paths);
         Task work = Task.Factory.StartNew(run.Execute, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         try
         {
@@ -103,7 +101,7 @@ public static class SourceProbe
     private static TimeSpan Clamp(TimeSpan timeout) =>
         timeout < TimeSpan.Zero && timeout != Timeout.InfiniteTimeSpan ? TimeSpan.Zero : timeout;
 
-    private static TransferSource Describe(string path, bool probeNetwork, Dictionary<string, SourceMedia> mediaByRoot)
+    private static TransferSource Describe(string path, Dictionary<string, SourceMedia> mediaByRoot)
     {
         if (string.IsNullOrWhiteSpace(path) || !PathTools.IsFullyQualified(path))
         {
@@ -116,7 +114,6 @@ public static class SourceProbe
         {
             // Nothing can be removed there, and opening an item could spin up a disc for no gain.
             SourceMedia.ReadOnly => new TransferSource(path, media, false),
-            SourceMedia.Network when !probeNetwork => new TransferSource(path, media, true),
             _ => new TransferSource(path, media, CanDelete(path)),
         };
     }
@@ -230,15 +227,13 @@ public static class SourceProbe
     {
         private readonly object _gate = new();
         private readonly string[] _paths;
-        private readonly bool _probeNetwork;
         private readonly TransferSource[] _results;
         private int _done;
         private volatile bool _abandoned;
 
-        public Run(IReadOnlyList<string> paths, bool probeNetwork)
+        public Run(IReadOnlyList<string> paths)
         {
             _paths = paths.Select(p => p ?? string.Empty).ToArray();
-            _probeNetwork = probeNetwork;
             _results = Unknown(_paths);
         }
 
@@ -258,7 +253,7 @@ public static class SourceProbe
                 TransferSource source;
                 try
                 {
-                    source = Describe(_paths[i], _probeNetwork, mediaByRoot);
+                    source = Describe(_paths[i], mediaByRoot);
                 }
                 catch (Exception ex)
                 {

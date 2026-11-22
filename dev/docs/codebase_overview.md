@@ -18,18 +18,18 @@
 | §3 | 主要な処理の流れ | 呼び出しの順序をメンバー名でたどる |
 | §3.1 | タブの読み込み | `TabViewModel.LoadAsync`、`NavLocation`、`_baseCards` / `_orderedCards` / `Cards`（フィルター） |
 | §3.2 | カードの段階読み込み | `Realize` / `Unrealize`、`DetailGate`、`ThumbnailService`（画像は `ImageDecoder` + `ThumbDiskCache`、ほかはシェル）、詳細表示の行は読み込まない |
-| §3.3 | カスケード | `CascadeController`：オーバーレイ・フライアウト・タイマー・開閉の判断、カード起点とアンカー起点（`ICascadeAnchor`：サイドバーの行、詳細表示の行の名前）、Ctrl / Shift を押したときに閉じる一覧 |
+| §3.3 | カスケード | `CascadeController`：オーバーレイ・フライアウト・タイマー・開閉の判断、カード起点とアンカー起点（`ICascadeAnchor`：サイドバーの行、詳細表示の行の名前）、Ctrl / Shift を押したときに閉じる一覧、エクスプローラーのメニューを出している間の凍結（`SetNativeMenuOpen`） |
 | §3.4 | プレビュー | `PreviewTextCache` → Office / テキスト抜粋 → サムネイル |
-| §3.5 | 開く・移動する | `OpenFileAsync`、利用記録、項目のポインター操作（`ItemPointerTracker`）、右クリックの操作、右ボタンを押したままの左クリック、ごみ箱への削除、選択（Ctrl / Shift のクリック、`SelectionModel`）、切り取り・コピー・貼り付け（`ShellClipboard`、`PasteAsync` → `FileTransfer`） |
+| §3.5 | 開く・移動する | `OpenFileAsync`、利用記録、項目のポインター操作（`ItemPointerTracker`）、右クリックの操作、右ボタンを押したままの左クリック、ごみ箱への削除、選択（Ctrl / Shift のクリック、`SelectionModel`）、切り取り・コピー・貼り付け（`ShellClipboard`、`PasteAsync` → `FileTransfer`）、エクスプローラーのメニュー（「その他のメニュー（Windows）」、`ShellContextMenu`） |
 | §3.6 | 並べ替え・ピン留め | `SetSortMode`、`SetFilter`、`MoveCard`、`MoveRegistered`、`ApplyPins`、`PlaceInBase`、📌 のクリック、表示モード（カードの形と詳細表示 `DetailsListView`：見出しでの並べ替え、列の幅、切り替え時のスクロール位置） |
 | §3.7 | 他アプリへのドラッグ | `FileDragOut`、`BeginDrag` / `EndDrag`、Copy \| Link のみ、選択した項目をまとめてドラッグ |
 | §3.8 | 永続化 | `StoreBase` の保存予約、原子的書き込み、壊れたファイルの退避、`settings.json` の版（version 2）と旧形式からの移行 |
 | §3.9 | テーマ | 設定のテーマ（システム / ライト / ダーク）、`ThemeManager` と Light / Dark の差し替え |
 | §3.10 | タブ列とサイドバー | 1 本のタブ列（`Tabs`、`OpenQuickTabAsync`、`OpenFolderTabAsync`）、タブなし（`NoTab` / `HasTab`）、`ShowTabAsync`、タブを閉じる・並べ替える、タブごとの履歴、`open_tabs` の保存、サイドバーの節と折りたたみ（`SidebarSectionViewModel`、`IsSidebarCollapsed`、`ApplySidebarLayout`）、`RefreshRegistered`、PC の節（`DriveListViewModel`、`MainWindowHook`） |
-| §4 | スレッドと非同期の規約 | UI スレッドで待たない、STA ワーカーとタイムアウト、ドライブの確認、キャンセル |
+| §4 | スレッドと非同期の規約 | UI スレッドで待たない、STA ワーカーとタイムアウト、専用 STA スレッド（ごみ箱・コピー・移動・エクスプローラーのメニュー）、ドライブの確認、キャンセル |
 | §5 | 改修レシピ | よくある改修ごとに触るファイルの順番と注意・関連テスト |
 | §6 | テスト・ビルド | 関連テストだけ流すコマンド、テストファイルと対象の対応表 |
-| §7 | 守ること・落とし穴 | 削除はごみ箱へだけ、コピー・移動は `FileTransfer` だけ、パス比較、設定のコピー、コメント記号（§ / R / P / AC） |
+| §7 | 守ること・落とし穴 | 削除はごみ箱へだけ、コピー・移動は `FileTransfer` だけ、エクスプローラーのメニューから外す操作、パス比較、設定のコピー、コメント記号（§ / R / P / AC） |
 | §8 | 調べ方のショートカット | `rg` での引き方、ログの見方 |
 | §9 | 本書の更新ルール | どの変更で本書と目次を更新するか |
 
@@ -172,7 +172,7 @@ App
 | | `DetailsText.cs` | 詳細表示のセルのうちシェルに聞かずに作れる文字列：サイズ（`FileSizeKb`：エクスプローラーと同じ切り上げの KB）、種類の仮の名前（`TypeFallback`：「JPG ファイル」「ファイル フォルダー」） |
 | Selection | `SelectionModel.cs` | 1 つの一覧の複数選択。キーはパス（カードは読み込みのたびに作り直すので、選択はカードに持たせない）。`Toggle`（Ctrl）/ `SelectRange`（Shift。起点 `Anchor`）/ `SelectAll` / `Replace` / `Clear` / `Prune`（表示されていない項目を外す）、表示順に並べる `InOrder`、操作の対象 `TargetsOf`（押した項目が選択の中なら選択全部、外ならその項目だけ）。変更があったときだけ `Changed` |
 | Transfer | `FileDrag.cs` | 他アプリへのドラッグの規則：可否、`DropList`（260 文字以上→8.3）、自アプリ由来の判定、`IsDragGesture`。内部形式の名前（`SourceFormat`、カードの並べ替え `ReorderFormat`、サイドバーの並べ替え `SidebarReorderFormat`） |
-| | `TransferRules.cs` | コピー・移動の判断（文字列だけ。I/O なし）：`Decide(sources, target, options)` が項目ごとに移動かコピーか、断る理由（`TransferRefusal`：同じフォルダ・自分の中・ドライブそのもの・パスでない）を決める。貼り付けは `TransferOptions.Paste(kind)`（切り取りは移動。ネットワーク上の元も移動、削除できない場所の元はコピー、同じフォルダへのコピーは名前を変えて複製）。結果の分類 `TransferOutcomes.Classify` |
+| | `TransferRules.cs` | コピー・移動の判断（文字列だけ。I/O なし）：`Decide(sources, target, options)` が項目ごとに移動かコピーか、断る理由（`TransferRefusal`：同じフォルダ・自分の中・ドライブそのもの・パスでない）を決める。貼り付けは `TransferOptions.Paste(kind)`（切り取りは移動。ネットワーク上の元も移動、削除できない場所の元はコピー、同じフォルダへのコピーは名前を変えて複製）。ほかの規則（ドラッグ用など）はない：アプリの中でファイルを動かすのは貼り付けだけ。結果の分類 `TransferOutcomes.Classify` |
 | | `FileClipboard.cs` | クリップボードのファイル一覧の符号化：`CF_HDROP`（`EncodeHDrop` / `DecodeHDrop`。壊れたデータは空で返し例外を投げない）と "Preferred DropEffect"（切り取り = 移動 / コピー） |
 
 ### 2.2 App（`src/FolderDeck.App/`）
@@ -202,10 +202,11 @@ App
 | | `MainWindowHook.cs` | メイン ウィンドウのメッセージの受け口（`HwndSource` のフック）。ボリュームの着脱（`WM_DEVICECHANGE`）を 500 ms まとめて `DrivesChanged` で知らせる（ネットワーク ドライブでは来ない）。クリップボードの変更（`WM_CLIPBOARDUPDATE`。自アプリの書き込みでも来る）を `ClipboardChanged` で知らせる → `MainViewModel.OnClipboardChanged` |
 | | `ShellClipboard.cs` | クリップボードへのファイルの書き込み（`TryWrite`：UI スレッド。成功時のシーケンス番号を返す）と読み取り（`ReadWithSequenceAsync`：専用スレッドでタイムアウト付き。読んだ時点のシーケンス番号も返す）、`HasFiles`、移動が済んだ切り取りを片づける `ClearIfUnchanged`（読んだあと誰も書き換えていないときだけ空にする） |
 | | `FileTransfer.cs` | アプリで唯一ファイルをコピー・移動するところ（`RunAsync`：`IFileOperation` を専用 STA スレッドで実行。名前の衝突・進行状況はシェルのダイアログ、確認を省くフラグは使わない）。結果 `TransferResult` の `Done` / `MovesDone` / `NewPaths` は実行後にファイル システムを見て決める |
-| | `SourceProbe.cs` | コピー・移動の元と先の確認（ネットワーク上か・読み取り専用の媒体か・削除できるか `DescribeAsync`、貼り付け先があるか `FolderExistsAsync`）。どちらもタイムアウト付きでワーカーで実行し、例外を投げない |
-| | `StaThread.cs`（internal） | 1 回の処理のための専用 STA スレッド（`Run`：`FileTransfer` とクリップボードの読み取り）。本体の例外は `onError` へ渡し、Task は失敗にしない |
+| | `SourceProbe.cs` | コピー・移動の元と先の確認（ネットワーク上か・読み取り専用の媒体か・削除できるか `DescribeAsync`（ネットワーク上の元も開いて確かめる）、貼り付け先があるか `FolderExistsAsync`）。どちらもタイムアウト付きでワーカーで実行し、例外を投げない |
+| | `ShellContextMenu.cs` | エクスプローラーの右クリックメニュー（`IContextMenu`）を出す（`ShowAsync(paths, x, y, extended, mainWindow)` → `ShellMenuResult`：`Invoked` / `Dismissed` / `Unavailable` / `TimedOut` / `Failed`。Task は失敗にしない）。1 回ごとに専用の STA スレッド（`StaThread.RunPumped`）と見えないオーナー ウィンドウ。親が 1 つなら `SHBindToParent` → `GetUIObjectOf`、複数なら item array（`ShellMenuTargets.TryGroup` で判定）。delete / rename / cut / copy / paste の項目を外す。用意に 5 秒（`TimedOut`。後から出ない）、表示後は無制限 |
+| | `StaThread.cs`（internal） | 1 回の処理のための専用 STA スレッド（`Run`：`FileTransfer` とクリップボードの読み取り、`RunPumped`：Dispatcher を回す版で `ShellContextMenu`）。本体の例外は `onError` へ渡し、Task は失敗にしない |
 | | `SingleInstance.cs` / `ThemeManager.cs` | 単一インスタンス / テーマの適用（`Apply(AppTheme)`：設定のテーマでライト・ダークを差し替える。「システム」のときは Windows のモードに追従） |
-| ViewModels | `MainViewModel.cs` | タブ列（`Tabs`：固定タブ `RecentTab` / `FrequentTab` を開く `OpenQuickTabAsync`・フォルダのタブを開く `OpenFolderTabAsync`・閉じる `CloseTab`・並べ替え `MoveTab`）、タブなしの `NoTab` / `HasTab`、タブ切り替え（`ShowTabAsync`）、移動と履歴（戻る・進む、タブごとに最大 100）、開く、右クリックの各操作（ごみ箱への削除 `CanDelete` / `DeleteAsync` を含む）、サイドバーの登録フォルダ（`Registered`、`RefreshRegistered`、登録・解除 `Unregister`・並べ替え `MoveRegistered`、幅 `SidebarWidth`）、サイドバーの節（`QuickSection` / `RegisteredSection`）と全体の表示・非表示（`IsSidebarCollapsed`、`ToggleSidebarCommand`）、並べ替え・フィルター（`SetSortMode` / `SetFilter`）・ドラッグ順の保存、ピン、カードの大きさと表示モード（`CardSize` / `CardShape`：カードの形 2 つと詳細表示）、詳細表示の列の幅（`DetailsColumns` / `SetDetailsColumnWidth`）、選択（`ClickSelect` / `SelectAll` / `ClearSelection` / `SelectionTargets`）、切り取り・コピー・貼り付け（`CanCut` / `CanCopy` / `CopyToClipboard`、`PasteFolderOf` / `CanPaste` / `PasteAsync`、切り取りの状態 `OnClipboardChanged` / `OnActivatedAsync`、実行中 `IsTransferRunning`）（[§3.5](#35-開く移動する)）、設定ダイアログ |
+| ViewModels | `MainViewModel.cs` | タブ列（`Tabs`：固定タブ `RecentTab` / `FrequentTab` を開く `OpenQuickTabAsync`・フォルダのタブを開く `OpenFolderTabAsync`・閉じる `CloseTab`・並べ替え `MoveTab`）、タブなしの `NoTab` / `HasTab`、タブ切り替え（`ShowTabAsync`）、移動と履歴（戻る・進む、タブごとに最大 100）、開く、右クリックの各操作（ごみ箱への削除 `CanDelete` / `DeleteAsync` を含む）、サイドバーの登録フォルダ（`Registered`、`RefreshRegistered`、登録・解除 `Unregister`・並べ替え `MoveRegistered`、幅 `SidebarWidth`）、サイドバーの節（`QuickSection` / `RegisteredSection`）と全体の表示・非表示（`IsSidebarCollapsed`、`ToggleSidebarCommand`）、並べ替え・フィルター（`SetSortMode` / `SetFilter`）・ドラッグ順の保存、ピン、カードの大きさと表示モード（`CardSize` / `CardShape`：カードの形 2 つと詳細表示）、詳細表示の列の幅（`DetailsColumns` / `SetDetailsColumnWidth`）、選択（`ClickSelect` / `SelectAll` / `ClearSelection` / `SelectionTargets`）、切り取り・コピー・貼り付け（`CanCut` / `CanCopy` / `CopyToClipboard`、`PasteFolderOf` / `CanPaste` / `PasteAsync`、切り取りの状態 `OnClipboardChanged` / `OnActivatedAsync`、実行中 `IsTransferRunning`）、エクスプローラーのメニューの結果（`OnShellMenuClosedAsync`）（[§3.5](#35-開く移動する)）、設定ダイアログ |
 | | `TabViewModel.cs` | 1 タブの現在地・カード・読み込み・並び・フィルター・戻る／進むの履歴（`BackStack` / `ForwardStack`）・離れたときのスクロール位置（[§3.1](#31-タブの読み込み)）。固定タブ（`Recent` / `Frequent`）とフォルダのタブ（`Folder`、`IsFolderTab`）で共通。`None`（`IsPlaceholder`）はタブなしの代役で、何も読み込まず何も出さない。`IsOpen`（タブ列にあるか）、`ResetToTop`（閉じた固定タブを最上位・履歴なしに戻す）、`ResetScrollOffsets`（覚えているスクロール位置を全部 0 にする。表示モードがカード ↔ 詳細で替わったとき）。選択 `Selection`（Core の `SelectionModel`）と「n 個を選択」の `SelectionText`、切り取りの印 `CutPaths`（カードの `IsSelected` / `IsCut` へ写す `ApplyItemFlags`）、貼り付け先 `FolderTargetPath` / `TransferTargetPath` |
 | | `CardViewModel.cs` | タブの項目 1 つ（カードとしても、詳細表示の行としても出る）。`CardKind`（`Folder` / `File`。`Missing` / `NoResponse` は表示の仕組みだけ残っていて、今はどの一覧も作らない）、`BadgeMode`、段階読み込み（`Realize` / `Unrealize`。カードだけが呼ぶ）、詳細表示の行が読む `Icon` / `ModifiedText` / `TypeText` / `SizeColumnText`（バインドされて初めて取りに行くので、カード表示では何もしない）、選択と切り取りの表示 `IsSelected` / `IsCut`（タブが入れる。自分では変えない） |
 | | `SidebarItemViewModel.cs` | サイドバーの 1 行：登録フォルダ、または PC の節のドライブ（`ForDrive` で作る。`IsDrive`）。`Id` / `Path` / `Name`、確認の結果 `SidebarItemState`、`IsDisabled`、開く先 `Target`、`ToItemRef`（ドライブは `ItemContext.Drive`）。カスケードの起点として `ICascadeAnchor` を実装（`OpensInNewTab` = true、`YieldsToModifiers` = false）。ドライブの行は名前がラベルに追従し（`UpdateDrive`）、アイコンはシェルのものではなく種類ごとのフォント グリフ（`Glyph`） |
@@ -226,10 +227,10 @@ App
 | | `DetailsRowView.xaml(.cs)` | 詳細表示の 1 行（名前のセル = アイコン + 名前 + 📌、一覧のときは補足 `SubText`、更新日時、種類、サイズ、最上位では ×）。見た目は全部バインドとトリガー。マウスのボタンは `ItemPointerTracker` へ渡し、名前のセルの出入りと移動を `ICardHost.RowMouseEnter` / `RowMouseMove` / `RowMouseLeave` へ知らせる。**`Realize` を呼ばない**。選択は `Root` のトリガーで塗り（`Brush.AccentSoft`）と、セルの上に重ねた 2 px の枠（`Brush.Accent`。枠で列がずれないよう重ねる）、切り取りは不透明度 0.5 |
 | | `CardView.xaml(.cs)` | 1 枚のカード。ホバーは自分で `ICardHost` へ通知し、マウスのボタンのイベントは `ItemPointerTracker`（`_pointer`）へ渡す。`ICardHost` の実装の置き場（`CardView.Host`）と `ICardHost` の定義もここ。表示されたら `Realize`。📌 はフッターのバッジ行の左（`PinButton`、クリックで解除）、バッジは幅が足りなければ `Viewbox` で縮める。選択はトリガーで枠（`SelectionFrame`：2 px の `Brush.Accent` を上に重ねる）とフッターの塗り（`CardBorder` の `Brush.AccentSoft`）、切り取りは `UpdateOpacity` で 0.5（不透明度はホバー・ドラッグと同じくコードで決めるので、トリガーにしない） |
 | | `ItemPointerTracker.cs` | 項目 1 つぶんのポインターの状態（押下・クリックの判定・ドラッグのしきい値・右ボタンを押したままの左クリック）。要素（`CardView`、`DetailsRowView`）がマウスのイベントを渡し、結果を `ICardHost` の `ItemClick` / `ItemContextMenu` / `ItemShowInExplorer` / `CanDragItem` / `ItemDrag` へ通知する（[§3.5](#35-開く移動する)） |
-| | `CascadeController.cs` | ホバー一覧とカスケード全体（[§3.3](#33-カスケードcascadecontroller9)）。カードから（`CardMouseEnter`）とアンカー（`ICascadeAnchor`。サイドバーの行：登録フォルダ・ドライブと、詳細表示の行の名前）から（`AnchorMouseEnter` / `AnchorMouseMove` / `AnchorMouseLeave`）の両方。一覧の起点の要素が消えたときは `AnchorRemoved` |
+| | `CascadeController.cs` | ホバー一覧とカスケード全体（[§3.3](#33-カスケードcascadecontroller9)）。カードから（`CardMouseEnter`）とアンカー（`ICascadeAnchor`。サイドバーの行：登録フォルダ・ドライブと、詳細表示の行の名前）から（`AnchorMouseEnter` / `AnchorMouseMove` / `AnchorMouseLeave`）の両方。一覧の起点の要素が消えたときは `AnchorRemoved`。エクスプローラーのメニューの間は凍結（`SetNativeMenuOpen`） |
 | | `ICascadeAnchor.cs` | カード以外のカスケードの起点が表すフォルダ（`Path` / `Target` / `IsDisabled` / `IsHoverHeld`）と、起点ごとの違い（`OpensInNewTab`、`YieldsToModifiers`）。`CardAnchor`：タブの中のフォルダ（`CardViewModel`）を起点にする包み（`For` はフォルダ以外に null。`OpensInNewTab` = false、`YieldsToModifiers` = true、`IsHoverHeld` は項目のものをそのまま使う） |
 | | `EntryListView` / `OverlayView` / `FlyoutView` / `PreviewView` | 行の一覧（どの行にポインターがあるか、クリック、右クリック、右ボタンを押したままの左クリック `RowExplorerRequested` を通知）/ オーバーレイ / フライアウト / プレビューの表示 |
-| | `ContextMenuFactory.cs` | 右クリックメニュー（カード・行・フライアウト見出し・サイドバーの行で共通、`ItemRef.Context` で出し分け。「削除（ごみ箱へ移動）」は `MainViewModel.CanDelete` のときだけ、「登録フォルダに追加」は未登録のフォルダだけ、「登録を解除」は登録フォルダの行だけ。ドライブの行（`ItemContext.Drive`）は「開く」「エクスプローラーで表示」「パスをコピー」「貼り付け」「登録フォルダに追加」だけ）。「パスをコピー」の後に「切り取り」（全部が `CanCut` のとき）「コピー」（全部が `CanCopy` のとき）「貼り付け」（フォルダと使えるドライブの行。`CanPaste` で有効）。複数の選択（`group`）では「切り取り」「コピー」「パスをコピー」だけ。項目の領域の空白は `ShowBlank`（「貼り付け」「最新の情報に更新」） |
+| | `ContextMenuFactory.cs` | 右クリックメニュー（カード・行・フライアウト見出し・サイドバーの行で共通、`ItemRef.Context` で出し分け。「削除（ごみ箱へ移動）」は `MainViewModel.CanDelete` のときだけ、「登録フォルダに追加」は未登録のフォルダだけ、「登録を解除」は登録フォルダの行だけ。ドライブの行（`ItemContext.Drive`）は「開く」「エクスプローラーで表示」「パスをコピー」「貼り付け」「登録フォルダに追加」だけ）。「パスをコピー」の後に「切り取り」（全部が `CanCut` のとき）「コピー」（全部が `CanCopy` のとき）「貼り付け」（フォルダと使えるドライブの行。`CanPaste` で有効）。複数の選択（`group`）では「切り取り」「コピー」「パスをコピー」だけ。いちばん下に「その他のメニュー（Windows）」（`AddNativeItem` → `ShowNativeAsync` → `ShellContextMenu.ShowAsync`。ドライブの行には出さない。1 項目は使える項目で `IsTransferable` のとき、選択は全部が `CanCopy` のとき有効）。メニューを出したときのポインター位置と Shift を `Show` で覚える（`NativeMenuPoint`）。開閉は `NativeMenuChanged` で `CascadeController` へ。項目の領域の空白は `ShowBlank`（「貼り付け」「最新の情報に更新」） |
 | | `ConfirmDialog` / `SettingsWindow` / `Converters.cs` | 確認ダイアログ / 設定画面 / 値コンバーター |
 | | `HoverTimings.cs` | ホバーの待ち時間とアニメーション時間（**調整はここだけ**） |
 | Themes | `Light.xaml` / `Dark.xaml` | 色トークン（同じキーを両方に定義）。固定タブは `Brush.Accent`、登録フォルダとフォルダのタブは `Brush.Folder` / `Brush.FolderSoft` |
@@ -299,6 +300,10 @@ App
 - Ctrl / Shift（選択の操作）に道を譲る：一覧の項目にぶら下がる一覧（カードのオーバーレイと、`YieldsToModifiers` が true のアンカー = 詳細表示の行）は、Ctrl か Shift を押している間は overlay タイマーが来ても開かず（`OnOverlayTimer` / `OnDetailsLoaded` の `SelectionKeysDown`、切り替えの保留も同じ）、開いていれば Ctrl / Shift を押した瞬間に閉じる（`MainWindow.OnPreviewKeyDown` → `CloseForSelectionKeys`）。Ctrl + クリックで隣の項目を選ぶとき、一覧が次の項目を覆わないため。サイドバーの行の一覧は項目を覆わないので影響を受けない。閉じたあとはポインターが項目を出入りするまで開かない（カードには再武装がない）
 - キーボード：`MainWindow.OnPreviewKeyDown` が、カスケード表示中は先に `HandleKey`（↑ ↓ → ← Enter Esc）へ渡す
 - ドラッグ：`BeginDrag` で全階層を非表示にしてタイマーを止め、`EndDrag` で本当に閉じる。ドラッグ中の `CloseAll` は無視する（理由は `BeginDrag` の XML コメント）
+- エクスプローラーのメニュー（「その他のメニュー（Windows）」）：`ContextMenuFactory.NativeMenuChanged` → `SetNativeMenuOpen`。
+  - `true` は項目の Click の中で**同期的に**（`ShowAsync` より前に）来る。メニューのスレッドが前面を取ると `Deactivated` → `CloseAll` が来るので、その前に凍結しておく。凍結 = `_nativeMenu` と `_suspended` を立てて `StopTimers`。**隠さない**（メニューは一覧の行から出したもので、閉じたらそこへ戻る）。`CloseAll` は何もせず（`_dragging` と同じ）、タイマーの Tick（overlay / open / grace / exit / preview / previewClose / foreground）は先頭で戻る。`_suspended` が要る理由：`CardMouseEnter` / `AnchorMouseEnter` は `CloseAll`（凍結中は何もしない）のあと `_card` / `_anchor` を差し替えるので、開いた階層が別の起点の下に残る。
+  - `false` は結果がどれでも（表示しなかった・時間切れも）来る。ウィンドウがアクティブなら `Restart(_exitTimer)`（規則 3 に戻る）。非アクティブなら、メニューのスレッドが前面を返す（前面がまだオーナーのときだけ返す）のを 300 ms 待ってから決める（`AfterNativeMenuAsync`）：アクティブ → `Restart(_exitTimer)`、まだ非アクティブ（ほかのウィンドウをクリックして閉じた、コマンドがウィンドウを開いた）→ `CloseAll`。待つ間に閉じた・別の一覧になった（`_generation` が変わった）ときは何もしない。
+  - WPF のメニューの `MenuClosed` は凍結中は exit タイマーを始めない（解除のときに始める）。
 - 非同期の結果は、完了時に対象（`_preview` や階層）が差し替わっていないかを確かめてから反映する
 
 ### 3.4 プレビュー
@@ -327,11 +332,16 @@ App
   - 空白の押下での解除は `MainWindow.ContentHost`（背景は透明）で受ける。カードの左押下は処理済みにならないので、`OnContentLeftDown` は `e.OriginalSource` の祖先にカード・行・スクロール バー・ボタン・つまみがあれば何もしない（無条件に外すと、離したときのクリックの判定より先に選択が消える）。スクロール ビューアーが押下を処理済みにすることがあるので `handledEventsToo` で受ける。
   - 選択の中の項目に対する操作は選択全部が対象（`SelectionTargets`。表示順）：右クリックメニュー（複数なら「切り取り」「コピー」「パスをコピー」だけ）、ドラッグ（[§3.7](#37-他アプリへのドラッグ)）、Ctrl + C / X。選択の外を右クリックすると選択を外して、その項目だけのメニュー。カスケードの行・見出しは選択に入らず、いつも 1 項目。
 - 切り取り・コピー：`MainViewModel.CopyToClipboard(items, cut)` → `ShellClipboard.TryWrite`（UI スレッド。エクスプローラーと同じ `CF_HDROP` + "Preferred DropEffect"）。Ctrl + C / X は**選択だけ**が対象で、選択が空なら何もしない（ポインターの下の項目は使わない）。切り取れるのは `CanCut`（削除と同じ規則：フォルダの中の項目だけ。最近の履歴・よく使う項目の一覧のカード、見出し、サイドバーの行は不可）、コピーは `CanCopy`（使える項目。ドライブそのものは不可）。
-  - 切り取りは全タブの `CutPaths` に入れて薄く表示し、書き込んだときのシーケンス番号を覚える。クリップボードがほかの内容に替わったら（`MainWindowHook.ClipboardChanged` → `OnClipboardChanged`：番号が違う）、ウィンドウに戻ったとき切り取った項目が消えていたら（`OnActivatedAsync`。エクスプローラーで貼り付けると移動はエクスプローラーが行う。確認はワーカーで 2 秒まで）、切り取りの印を消す。
+  - 切り取りは全タブの `CutPaths` に入れて薄く表示し、書き込んだときのシーケンス番号を覚える。クリップボードがほかの内容に替わったら（`MainWindowHook.ClipboardChanged` → `OnClipboardChanged`：番号が違う）、ウィンドウに戻ったとき切り取った項目が消えていたら（`OnActivatedAsync`。エクスプローラーで貼り付けると移動はエクスプローラーが行う。確認はワーカーで 2 秒まで）、切り取りの印を消す。一部だけ消えていたら（衝突で「スキップ」した残り）、残った項目だけを切り取りのまま薄く表示し続ける。クリップボードが替わって終わった切り取りも、次に戻ったとき一度だけ確かめ、消えていれば一覧を読み直す（エクスプローラーが移動してからクリップボードが替わった場合）。貼り付けで全件を移動し終えても、転送中に新しく切り取った分（シーケンス番号が違う）は残す。
 - 貼り付け：Ctrl + V、項目の領域の空白の右クリック（`ShowBlank`）、フォルダとドライブの行のメニュー → `MainViewModel.PasteAsync(folder)`。先は `PasteFolderOf`：フォルダの項目ならそのフォルダ、項目なしなら `SelectedTab.TransferTargetPath`（そのフォルダの読み込みが成功して画面に出ている間だけ。最近の履歴・よく使う項目の一覧とタブなしでは null → 「この一覧には貼り付けできません」）。
-  - 順序：`ShellClipboard.ReadWithSequenceAsync`（2 秒）→ `SourceProbe.FolderExistsAsync`（先）→ `SourceProbe.DescribeAsync(probeNetwork: true)`（元）→ `TransferRules.Decide(..., TransferOptions.Paste(kind))` → 全部断られたら理由をメッセージ行へ、そうでなければ `FileTransfer.RunAsync` → 結果（先のフォルダ名、移動できずコピーした数）→ `ReloadAfterFileChangeAsync` → 表示中のタブが先なら届いた項目を選択（`Selection.Replace(NewPaths)`）。アプリ自身のダイアログは出さない（名前の衝突・進行状況はシェルのもの）。
+  - 順序：`ShellClipboard.ReadWithSequenceAsync`（2 秒）→ `SourceProbe.FolderExistsAsync`（先）→ `SourceProbe.DescribeAsync`（元）→ `TransferRules.Decide(..., TransferOptions.Paste(kind))` → 全部断られたら理由をメッセージ行へ、そうでなければ `FileTransfer.RunAsync` → 結果（先のフォルダ名、移動できずコピーした数）→ `ReloadAfterFileChangeAsync` → 表示中のタブが先なら届いた項目を選択（`Selection.Replace(NewPaths)`）。アプリ自身のダイアログは出さない（名前の衝突・進行状況はシェルのもの）。
   - 切り取りの貼り付けは、移動が全部済んだとき（`MovesDone == MovesRequested`）だけクリップボードを空にし（`ClearIfUnchanged`：読んだあと誰も書き換えていなければ。ほかのアプリの切り取りでも同じ）、切り取りの印を消す。一部でもスキップ・失敗したら残す（残りをもう一度貼り付けられる）。ネットワーク上の元からの切り取りも移動のまま（エクスプローラーと同じ）。
   - 一度に 1 つ（`_transferBusy`。2 つ目は「前の操作が終わってから実行してください」）。押しっぱなしの Ctrl + V はキーの繰り返し（`e.IsRepeat`）を無視する。実行中にウィンドウを閉じようとすると確認する（`MainWindow.OnClosing`。転送はバックグラウンド スレッドなので、黙って閉じると途中で切れる）。
+- エクスプローラーのメニュー：右クリックメニューのいちばん下の「その他のメニュー（Windows）」→ `ContextMenuFactory.ShowNativeAsync`（`NativeMenuChanged(true)` → `ShellContextMenu.ShowAsync`（`Show` のときのポインター位置と Shift、オーナーにする `IMainView.WindowHandle`）→ `NativeMenuChanged(false)` → `MainViewModel.OnShellMenuClosedAsync(result)`）。
+  - `Invoked` だけが読み直す（`ReloadAfterFileChangeAsync`）。さらに `_shellCommandAt` を記録し、1 秒（`ShellCommandHandBack`）より後の次の `OnActivatedAsync` でもう一度読み直す：7-Zip の展開などはメニューが戻った後に別のプロセスで続く。1 秒より前のアクティブ化はメニューのスレッドが前面を返しただけなので数えない（記録は残す）。`Dismissed`（除外した verb を選んだ・前面を取れずに出さなかったも含む）は何もしない：一覧の読み直しはカスケードを閉じるため、出した一覧が残らなくなる。
+  - `Unavailable` / `TimedOut` / `Failed` はメッセージ行に「このメニューは表示できませんでした：理由」（警告）。`Invoked` の `Error`（コマンドの失敗）は出さない（ハンドラーが自分で出すことが多い。ログには残る）。
+  - `NativeMenuChanged(false)` を `OnShellMenuClosedAsync` より先に出す：読み直しの `CloseCascade` は凍結中だと無視される。
+  - 複数の選択は 1 つのメニュー（エクスプローラーで複数選んだときと同じ）。親が違う項目（最近の履歴の一覧）は item array で、取れなければ `Unavailable`。
 
 ### 3.6 並べ替え・ピン留め
 
@@ -407,6 +417,7 @@ App
 - シェル / COM の呼び出しは `StaWorkerPool` 上でタイムアウトつき（`ThumbnailService` は 4 本・5 秒、`AppServices.Shell` は 1 本、詳細表示の種類の名前 `TypeNameCache` は専用の 1 本・5 秒）。タイムアウトしたワーカーは放棄して作り直す（最大 16 本）。タイムアウトは**呼び出しが始まってから**数える（キューで待つ時間は含めない。画像の多いフォルダで待ち行列が長いだけの要求を打ち切らないため）。60 秒たっても始まらない要求は `TimeoutException`。
   - 画像のデコード（`ImageDecoder`）は COM の STA を必要としないが、同じ `StaWorkerPool` を使う：`ThumbnailService` のデコード用ワーカー（コア数 − 1 本を 2〜8 本に丸める、優先度 BelowNormal、5 秒）。ディスクキャッシュの書き込み・刈り込みは `ThumbDiskCache` の 1 本（優先度 Lowest、タイムアウトなし）。
   - 例外：ごみ箱への移動（`RecycleBin`）とコピー・移動（`FileTransfer`、`StaThread.Run`）は操作ごとに専用の STA スレッドを作り、タイムアウトをつけない（シェルの進行状況・名前の衝突・「使用中」などのダイアログが利用者の操作を待つため）。UI スレッドは `await` で待つだけで止まらない。このスレッドはバックグラウンド スレッドなので、実行中にウィンドウを閉じると途中で切れる（`MainWindow.OnClosing` が確認する）。
+  - エクスプローラーのメニュー（`ShellContextMenu`）は 1 回ごとに専用の STA スレッド（`StaThread.RunPumped`：Dispatcher を回す）と、そのスレッドのオーナー ウィンドウ（メイン ウィンドウに所有させない：スレッドをまたぐ所有は入力キューをつなぎ、応答しない拡張機能が UI の入力まで止める）。用意（`QueryContextMenu`）は 5 秒まで（呼び出し側のタイマーが止める旗を立て、表示の直前に見る。時間切れのメニューは出ない）、表示後とコマンドは無制限。コマンドが 1 秒以上戻らなければ先に `Invoked` を返す。コマンドの後も 2 秒以上と、そのスレッドのウィンドウが見えている間はメッセージを回し続ける。一度に 1 つ（2 つ目は `Unavailable`）。応答しない拡張機能はスレッド 1 本を捨てるだけで済むが、異常終了する拡張機能はプロセスごと落とす。
   - クリップボード：書き込み（`ShellClipboard.TryWrite`）は UI スレッドで、ほかのアプリが開いていれば 100 ms で諦める。読み取り（`ReadWithSequenceAsync`）は専用スレッドで 2 秒まで（エクスプローラーは読まれたときに一覧を作るので、応答しない持ち主に読み手が止められる）。待つのをやめた読み取りが終わるまで、次の読み取りは即 null。
   - 貼り付けの元と先の確認（`SourceProbe`）はワーカーでタイムアウト付き（先 2 秒、元 5 秒）。元の確認が間に合わなかった項目は「削除できない」扱いになり、切り取りでもコピーになる。
 - 遅い・切断されたネットワークドライブ対策：`Existence` のタイムアウト（登録フォルダ 2 秒、履歴 1 秒）、`VolumeThrottle`、5 秒で「応答がありません」（`HoverTimings.Slow`、`TabViewModel.IsSlow`）。
@@ -421,7 +432,7 @@ App
 | 設定項目を追加 | `Core/Stores/SettingsStore.cs` の `AppSettings` にプロパティ（既定値）→ 範囲があれば `Normalize` → `App/ViewModels/SettingsViewModel.cs`（フィールド、コンストラクタ、`ApplyTo`、数値なら `Validate`）→ `Views/SettingsWindow.xaml` → 必要なら `MainViewModel.OpenSettings` でタブを `IsStale` に | `Clone` は `MemberwiseClone` なので**参照型を足したら `Clone` にコピーを追加**。テストは `StoreTests.cs` の `SettingsStoreTests`。README の設定表も更新 |
 | プレビュー対象の拡張子を追加 | `Core/Listing/PreviewKinds.cs` の拡張子集合 | `PreviewTests`。シェルのサムネイルで足りる形式なら追加不要（`ShellPreviewSupport` が自動判定） |
 | 新しい種類のプレビュー | `PreviewKind` に追加 → 読み取りを `Core/Listing/` に → `PreviewTextCache.GetAsync` の分岐 → `CascadeController.ShowExcerpt` / `LoadPreviewAsync` → `PreviewViewModel` / `PreviewView` | 読み取りは共有モード・上限つき・キャンセル可能に。オンラインのみのファイルは開かない（`FileContent.IsCloudOnly`） |
-| 右クリックメニューの項目 | `Views/ContextMenuFactory.cs`（`ItemRef.Context` / カードの種類で出し分け）→ 処理は `MainViewModel` の public メソッドに | カスケードを離れる操作は `BeforeNavigate`（= `CloseAll`）を先に通す |
+| 右クリックメニューの項目 | `Views/ContextMenuFactory.cs`（`ItemRef.Context` / カードの種類で出し分け）→ 処理は `MainViewModel` の public メソッドに | カスケードを離れる操作は `BeforeNavigate`（= `CloseAll`）を先に通す。項目は「その他のメニュー（Windows）」（`AddNativeItem`。いつもいちばん下）より上に足す。エクスプローラーのメニューに出したくない verb は `ShellContextMenu.RemovedVerbs` に足す（外すだけ。消してよい verb を戻さない） |
 | ファイルを変更する操作（削除など） | `Shell/RecycleBin.cs`（ごみ箱への移動だけ）→ `MainViewModel.CanDelete` / `DeleteAsync` → `ContextMenuFactory` | **完全削除の経路を作らない**、必ず確認ダイアログを出す。App 層なので自動テストなし → ローカルのパス（ごみ箱へ入る）と `\\wsl.localhost\…` などのパス（中止されて残る）で手動確認。終わったら `ReloadAfterFileChangeAsync` で読み直す。README の「削除（ごみ箱へ移動）」も更新 |
 | コピー・移動（貼り付け）の規則・経路 | 規則：`Core/Transfer/TransferRules.cs`（`Decide`、`TransferOptions.Paste`）→ 元と先の確認：`Shell/SourceProbe.cs` → 実行：`Shell/FileTransfer.cs` → 流れ：`MainViewModel.PasteAsync`（先は `PasteFolderOf`、メニューは `ContextMenuFactory`、キーは `MainWindow.HandleSelectionKey`） | **コピー・移動は `FileTransfer` だけ**、確認を省くフラグを足さない、ドライブそのものを元にしない。切り取りの後片づけは `MovesDone == MovesRequested` のときだけ。`TransferRulesTests` / `FileClipboardTests`。App 層なので手動確認：同じフォルダへの貼り付け（「x - コピー」）、名前の衝突でスキップ（切り取りが残る）、エクスプローラーとの往復、長いコピー中にウィンドウを閉じる |
 | 選択の規則・見た目 | 規則：`Core/Selection/SelectionModel.cs` → タブ：`TabViewModel.Selection` / `SelectableKeys` / `ApplyItemFlags` → 操作：`MainViewModel.ClickSelect` / `SelectionTargets`、`MainWindow.ItemClick` / `HandleSelectionKey` / `OnContentLeftDown` → 見た目：`CardView.xaml`（`SelectionFrame`）、`DetailsRowView.xaml`（`Root` のトリガー） | `SelectionModelTests`。色は `Brush.Accent` / `Brush.AccentSoft`（両テーマにある）。項目の祖先で左押下に反応しない（[§7](#7-守ること落とし穴)）。Ctrl / Shift のクリック・空白の押下は手動確認 |
@@ -480,13 +491,14 @@ App
 | `DriveRulesTests.cs` | `DriveRulesTests` | PC の節のドライブ：出すかどうか（リムーバブル・光学は確認でメディアがあるときだけ）、名前（ラベルなしの既定名、ネットワーク ドライブの `共有名 (\\サーバー) (Z:)`）、ドライブ文字順と重複の除去 |
 | `DetailsColumnsTests.cs` | `DetailsColumnsTests` | 詳細表示の列の幅：`Normalize`（既定値・範囲・知らないキー）、`Fit`（名前の列に幅を残して縮める、最小幅より下げない）。セルの文字列：サイズの KB 表示（切り上げ・桁区切り）、種類の仮の名前 |
 | `SelectionModelTests.cs` | `SelectionModelTests` | 選択：Ctrl の切り替えと起点、Shift の範囲（両方向・足す・起点なし）、表示から消えた項目を外す `Prune`、表示順 `InOrder`、操作の対象 `TargetsOf` |
-| `TransferRulesTests.cs` | `TransferRulesTests` | コピー・移動の判断 `Decide`：同じフォルダ、自分の中（`E:\a` と `E:\ab` を区別）、ドライブそのもの、項目ごとの種別（読み取り専用・削除できない元はコピー）、一部だけ断る・全部断る。メニュー用の共通の親 `ShellMenuTargets.TryGroup` |
+| `TransferRulesTests.cs` | `TransferRulesTests` | コピー・移動の判断 `Decide`：同じフォルダ、自分の中（`E:\a` と `E:\ab` を区別）、ドライブそのもの、項目ごとの種別（読み取り専用・削除できない元はコピー）、一部だけ断る・全部断る（どれも貼り付けの規則 `TransferOptions.Paste`）。メニュー用の共通の親 `ShellMenuTargets.TryGroup` |
 | `FileClipboardTests.cs` | `FileClipboardTests` | クリップボードの `CF_HDROP` の符号化と壊れたデータ、"Preferred DropEffect"（移動はコピーのビットがないときだけ） |
 | `TestHelpers.cs` | `FakeClock` `FakeFileSystem` `TempDir` | テスト用の部品（新しいテストはまずこれを使う） |
 
 ## 7. 守ること・落とし穴
 
 - **ファイルを完全に削除しない**（自分のデータファイルを除く）。消すのは右クリックの「削除（ごみ箱へ移動）」だけで、確認ダイアログのあと `RecycleBin` でごみ箱へ移す（ごみ箱に入らない項目は中止）。複数の選択をまとめて削除する経路も作らない。
+- **エクスプローラーのメニューから delete / rename / cut / copy / paste を外す**（`ShellContextMenu.RemovedVerbs`）。シェルの削除はごみ箱に入らない場所では完全に削除する。外し損ねた項目（サブメニューの中、verb が後で読めた）も、選ばれたときに verb を見て実行しない（`Dismissed`）。親が 1 つの経路では verb が読めない項目は残る（外せない）ので、親が複数の経路で verb が 1 つも読めなければメニューを出さない（`Unavailable`）。ドライブの行には出さない（「フォーマット」が並ぶ）、`ShowAsync` もドライブそのもの（`IsTransferable` が false）を断る。
 - **コピー・移動は `FileTransfer` だけ**（貼り付け：`MainViewModel.PasteAsync`）。`IFileOperation` でシェルの衝突・確認のダイアログを必ず出し、`FOF_NOCONFIRMATION` などの確認を省くフラグを使わない。ドライブそのもの（`C:\`、`\\server\share`）は元にしない（`TransferRules`）。上書きするかはいつもシェルのダイアログで利用者が決める。他アプリへのドラッグは Copy | Link のみで、アプリの中でファイルを動かすドラッグはない。アプリが切り取った項目をエクスプローラーで貼り付けたときの移動はエクスプローラーが行う。自分のデータのうち画像サムネイルのキャッシュ（`thumbs\`）は上限を超えると古いものを消すが、消すのは自分が付けた名前（`DiskCacheRules.IsCacheFileName`）のファイルだけ。
 - **UI スレッドで待たない**（[§4](#4-スレッドと非同期の規約)）。シェル呼び出しは必ず STA ワーカー経由でタイムアウトをつける。
 - パスの比較は `PathTools.PathEquals` / `PathSet`（大文字小文字を区別せず正規化）。`==` で比べない。長いパスをシェルに渡すときは `PathTools.ForShell`。
@@ -506,7 +518,7 @@ App
 - 詳細表示の見出しと行の列は別々の `Grid` で、幅を `DetailsMetrics` で揃えているだけ。片方の列・余白だけを変えるとずれる（スクロール バーは常に表示して幅を見出し側で空けてある：`Auto` に戻すと、一覧が長くなった瞬間に列が動く）。
 - カード・詳細表示の行の普通の左押下は処理済みにならない（`ItemPointerTracker`。クリックは離したときに決まる）。ウィンドウや項目の親で左押下に反応する処理を足すときは、`e.OriginalSource` から項目（`CardView` / `DetailsRowView`）の上の押下かどうかを確かめる。確かめずに押下の時点で何かを変えると、離したときのクリック・ドラッグの判定より先に効いてしまう（例：`MainWindow.OnContentLeftDown` の選択の解除。無条件に外すと、選択した項目を押してドラッグしようとした時点で選択が消える）。
 - 選択・切り取りの印はカード（`CardViewModel`）に持たせず、タブの `Selection` / `CutPaths`（パス）から写す。カードは読み込み・並べ替えで作り直されるので、カードの `IsSelected` を直接書き換えても次の表示で消える。
-- 貼り付け先に `FolderTargetPath` をそのまま使わない。読み込み中・失敗・古い表示のフォルダへ貼り付けないよう、項目なしの貼り付けは `TransferTargetPath` を使う。
+- 貼り付け先に `FolderTargetPath` をそのまま使わない。読み込み中・失敗したフォルダへ貼り付けないよう、項目なしの貼り付けは `TransferTargetPath` を使う。`TransferTargetPath` に `IsStale` の条件を足さない：`RecordUse` / `TogglePin` は表示中の最近の履歴・よく使う項目のタブ（中のフォルダを表示中）にも `IsStale` を付けるので、貼り付けが F5 まで止まる。
 - Ctrl + C / X / V はキーの繰り返し（`e.IsRepeat`）で動かさず、テキスト ボックスの中では何もしない。Ctrl + C / X はポインターの下の項目を対象にしない（選択だけ）。
 - カスケードの開閉判断を `CascadeController` の外に書かない。ドラッグ中にポップアップを破棄しない（`DoDragDrop` がボタンを離したことに気づかなくなる）。
 - シェルが返すビットマップの上下と非乗算アルファの扱いは `ShellInterop` に閉じている（README「実装メモ」）。安易に反転しない。

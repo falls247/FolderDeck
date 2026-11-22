@@ -333,7 +333,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 }
                 else
                 {
-                    _vm.Message.Info(_vm.HasTab && _vm.SelectedTab.FolderTargetPath is not null
+                    _vm.Message.Info(_vm.HasTab && _vm.SelectedTab.FolderTargetPath is not null && _vm.SelectedTab.IsLoading
                         ? "フォルダの読み込みが終わってから貼り付けてください。"
                         : "この一覧には貼り付けできません。");
                 }

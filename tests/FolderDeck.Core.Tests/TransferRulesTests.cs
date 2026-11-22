@@ -12,7 +12,7 @@ public class TransferRulesTests
     // ---- TransferRules.Decide -------------------------------------------------------------------
 
     [Fact]
-    public void Decide_SameFolder_MoveSkipped_PasteCopyRenamed_DragCopySkipped()
+    public void Decide_SameFolder_MoveSkipped_PasteCopyRenamed()
     {
         TransferSource[] sources = [Local(@"E:\docs\a.txt")];
 
@@ -25,14 +25,6 @@ public class TransferRulesTests
         TransferItem copy = Assert.Single(paste.Items);
         Assert.Equal(new TransferItem(@"E:\docs\a.txt", TransferKind.Copy, CopyReason.Requested, RenameOnCollision: true), copy);
         Assert.Equal(TransferRefusal.None, paste.Refusal);
-
-        var dragMove = TransferRules.Decide(sources, @"E:\docs", TransferOptions.Drag(ctrl: false));
-        Assert.Empty(dragMove.Items);
-        Assert.Equal(TransferRefusal.SameFolder, dragMove.Refusal);
-
-        var dragCopy = TransferRules.Decide(sources, @"E:\docs", TransferOptions.Drag(ctrl: true));
-        Assert.Empty(dragCopy.Items);
-        Assert.Equal(TransferRefusal.SameFolder, dragCopy.Refusal);
     }
 
     [Fact]
@@ -40,19 +32,17 @@ public class TransferRulesTests
     {
         // Into a descendant, into the folder itself (case-insensitively), and as a copy too.
         Assert.Equal(TransferRefusal.IntoItself,
-            TransferRules.Decide([Local(@"E:\a")], @"E:\a\b", TransferOptions.Drag(ctrl: false)).Refusal);
+            TransferRules.Decide([Local(@"E:\a")], @"E:\a\b", TransferOptions.Paste(TransferKind.Move)).Refusal);
         Assert.Equal(TransferRefusal.IntoItself,
-            TransferRules.Decide([Local(@"E:\a")], @"e:\A", TransferOptions.Drag(ctrl: false)).Refusal);
+            TransferRules.Decide([Local(@"E:\a")], @"e:\A", TransferOptions.Paste(TransferKind.Move)).Refusal);
         Assert.Equal(TransferRefusal.IntoItself,
             TransferRules.Decide([Local(@"E:\a\")], @"E:\a\b\c", TransferOptions.Paste(TransferKind.Copy)).Refusal);
-        Assert.False(TransferRules.CanDropInto([@"E:\a"], @"E:\a\b"));
 
         // "E:\ab" only shares the first characters with "E:\a".
-        var sibling = TransferRules.Decide([Local(@"E:\a")], @"E:\ab", TransferOptions.Drag(ctrl: false));
+        var sibling = TransferRules.Decide([Local(@"E:\a")], @"E:\ab", TransferOptions.Paste(TransferKind.Move));
         TransferItem item = Assert.Single(sibling.Items);
         Assert.Equal(new TransferItem(@"E:\a", TransferKind.Move, CopyReason.None, RenameOnCollision: false), item);
         Assert.Empty(sibling.Skipped);
-        Assert.True(TransferRules.CanDropInto([@"E:\a"], @"E:\ab"));
     }
 
     [Theory]
@@ -63,8 +53,6 @@ public class TransferRulesTests
     {
         TransferOptions[] all =
         [
-            TransferOptions.Drag(ctrl: false),
-            TransferOptions.Drag(ctrl: true),
             TransferOptions.Paste(TransferKind.Move),
             TransferOptions.Paste(TransferKind.Copy),
         ];
@@ -77,7 +65,6 @@ public class TransferRulesTests
         }
 
         Assert.False(TransferRules.IsTransferable(root));
-        Assert.False(TransferRules.CanDropInto([root], target));
     }
 
     [Fact]
@@ -91,21 +78,7 @@ public class TransferRulesTests
             new(@"E:\src\locked.txt", SourceMedia.Local, CanDelete: false),
         ];
 
-        // Drag: NetworkBecomesCopy is on.
-        var drag = TransferRules.Decide(sources, @"E:\dst", TransferOptions.Drag(ctrl: false));
-        Assert.Equal(
-            new[]
-            {
-                (TransferKind.Move, CopyReason.None),
-                (TransferKind.Copy, CopyReason.Network),
-                (TransferKind.Copy, CopyReason.ReadOnlyMedia),
-                (TransferKind.Copy, CopyReason.NotDeletable),
-            },
-            Kinds(drag));
-        Assert.Equal(1, drag.MoveCount);
-        Assert.Equal(3, drag.CopyCount);
-
-        // Cut and paste: NetworkBecomesCopy is off, a network source is really moved.
+        // Cut and paste: a network source is really moved, as in Explorer.
         var cut = TransferRules.Decide(sources, @"E:\dst", TransferOptions.Paste(TransferKind.Move));
         Assert.Equal(
             new[]
@@ -116,12 +89,14 @@ public class TransferRulesTests
                 (TransferKind.Copy, CopyReason.NotDeletable),
             },
             Kinds(cut));
+        Assert.Equal(2, cut.MoveCount);
+        Assert.Equal(2, cut.CopyCount);
 
         // A requested copy is a copy for every item, whatever the media.
-        var copy = TransferRules.Decide(sources, @"E:\dst", TransferOptions.Drag(ctrl: true));
+        var copy = TransferRules.Decide(sources, @"E:\dst", TransferOptions.Paste(TransferKind.Copy));
         Assert.Equal(4, copy.CopyCount);
         Assert.All(copy.Items, i => Assert.Equal(CopyReason.Requested, i.Reason));
-        Assert.All(drag.Items.Concat(cut.Items).Concat(copy.Items), i => Assert.False(i.RenameOnCollision));
+        Assert.All(cut.Items.Concat(copy.Items), i => Assert.False(i.RenameOnCollision));
     }
 
     [Fact]
@@ -139,13 +114,13 @@ public class TransferRulesTests
             Local(@"C:\"),
         ];
 
-        var plan = TransferRules.Decide(sources, @"E:\dst", TransferOptions.Drag(ctrl: false));
+        var plan = TransferRules.Decide(sources, @"E:\dst", TransferOptions.Paste(TransferKind.Move));
 
         Assert.Equal(
             new[]
             {
                 new TransferItem(@"E:\src\a.txt", TransferKind.Move, CopyReason.None, RenameOnCollision: false),
-                new TransferItem(@"\\nas\share\b.txt", TransferKind.Copy, CopyReason.Network, RenameOnCollision: false),
+                new TransferItem(@"\\nas\share\b.txt", TransferKind.Move, CopyReason.None, RenameOnCollision: false),
                 new TransferItem(@"E:\src\sub", TransferKind.Move, CopyReason.None, RenameOnCollision: false),
             },
             plan.Items.ToArray());
@@ -158,15 +133,15 @@ public class TransferRulesTests
             },
             plan.Skipped.ToArray());
         Assert.Equal(TransferRefusal.None, plan.Refusal);
-        Assert.Equal(2, plan.MoveCount);
-        Assert.Equal(1, plan.CopyCount);
+        Assert.Equal(3, plan.MoveCount);
+        Assert.Equal(0, plan.CopyCount);
     }
 
     [Fact]
     public void Decide_AllSkipped_RefusesWithTheFirstReason()
     {
         var plan = TransferRules.Decide(
-            [Local(@"relative\x.txt"), Local(@"E:\dst\a.txt")], @"E:\dst", TransferOptions.Drag(ctrl: false));
+            [Local(@"relative\x.txt"), Local(@"E:\dst\a.txt")], @"E:\dst", TransferOptions.Paste(TransferKind.Move));
         Assert.Empty(plan.Items);
         Assert.Equal(2, plan.Skipped.Count);
         Assert.Equal(TransferRefusal.NotAPath, plan.Refusal);

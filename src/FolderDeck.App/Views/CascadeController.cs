@@ -32,6 +32,9 @@ public sealed class CascadeController
     private const double RowLead = 10;
     private const double WorkMargin = 16;
 
+    /// <summary>How long to wait for the foreground to come back after Explorer's menu (see <see cref="SetNativeMenuOpen"/>).</summary>
+    private static readonly TimeSpan NativeMenuHandBack = TimeSpan.FromMilliseconds(300);
+
     private readonly Window _window;
     private readonly MainViewModel _vm;
     private readonly AppServices _services;
@@ -75,6 +78,16 @@ public sealed class CascadeController
     private bool _menuOpen;
     private bool _suspended;
     private bool _dragging;
+
+    /// <summary>Explorer's own menu is open (see <see cref="SetNativeMenuOpen"/>): the cascade is frozen.</summary>
+    private bool _nativeMenu;
+
+    /// <summary>
+    /// A CloseAll arrived while the native menu was being prepared and the window was still active
+    /// (a tab click, a scroll, the end of a drag: not the Deactivated the menu itself causes): run
+    /// it as soon as the menu is over.
+    /// </summary>
+    private bool _closeAfterNativeMenu;
     private int _generation;
 
     /// <summary>The foreground window when a cascade opened over the inactive main window (see <see cref="WatchForeground"/>).</summary>
@@ -100,9 +113,13 @@ public sealed class CascadeController
         _menus.MenuClosed += () =>
         {
             _menuOpen = false;
-            Restart(_exitTimer); // back to rule 3
+            if (!_nativeMenu)
+            {
+                Restart(_exitTimer); // back to rule 3 (after Explorer's menu: see SetNativeMenuOpen)
+            }
         };
         _menus.BeforeNavigate = CloseAll;
+        _menus.NativeMenuChanged += SetNativeMenuOpen;
     }
 
     public bool IsOpen => _levels.Count > 0;
@@ -157,6 +174,77 @@ public sealed class CascadeController
         _dragging = false;
         CloseAll();
         _suspended = false;
+    }
+
+    /// <summary>
+    /// Explorer's own menu (「その他のメニュー（Windows）」) opens or closes. It runs on another thread
+    /// and takes the foreground, so meanwhile the main window is inactive and gets no pointer input.
+    /// <para>
+    /// <c>true</c> (raised before the menu is even built): the cascade is frozen, not hidden; the
+    /// menu was asked for from one of its rows and comes back to it. <see cref="CloseAll"/> does
+    /// nothing (Deactivated, a tab that finishes loading…), no hover opens anything, every timer is
+    /// stopped and their tick handlers return at once. <c>_suspended</c> is needed as well:
+    /// <see cref="CardMouseEnter"/> and <see cref="AnchorMouseEnter"/> would otherwise call
+    /// <see cref="CloseAll"/> (which does nothing) and then put a new owner under the open levels.
+    /// </para>
+    /// <para>
+    /// <c>false</c> (every outcome, also a menu that never showed): with the window active again the
+    /// cascade goes back to rule 3 (it closes when the pointer is not in it). The menu thread hands
+    /// the foreground back only when nothing else took it, and that arrives a moment later, so an
+    /// inactive window is judged after <see cref="NativeMenuHandBack"/>: still inactive means the
+    /// user went to another window (or a command opened one), and the cascade closes as on
+    /// Deactivated.
+    /// </para>
+    /// </summary>
+    public void SetNativeMenuOpen(bool open)
+    {
+        if (open)
+        {
+            _nativeMenu = true;
+            _suspended = true;
+            StopTimers();
+            return;
+        }
+
+        if (!_nativeMenu)
+        {
+            return;
+        }
+
+        _nativeMenu = false;
+        _suspended = _dragging;
+        if (_closeAfterNativeMenu)
+        {
+            _closeAfterNativeMenu = false;
+            CloseAll();
+            return;
+        }
+
+        if (_window.IsActive)
+        {
+            Restart(_exitTimer);
+            return;
+        }
+
+        _ = AfterNativeMenuAsync(_generation);
+    }
+
+    private async Task AfterNativeMenuAsync(int generation)
+    {
+        await Task.Delay(NativeMenuHandBack);
+        if (_nativeMenu || generation != _generation)
+        {
+            return; // another menu, or the cascade was closed or replaced meanwhile
+        }
+
+        if (_window.IsActive)
+        {
+            Restart(_exitTimer);
+        }
+        else
+        {
+            CloseAll();
+        }
     }
 
     // ---- card events --------------------------------------------------------------------------
@@ -320,15 +408,22 @@ public sealed class CascadeController
 
     /// <summary>
     /// Closes everything at once (rule 5: scroll, resize, tab switch, navigation, deactivation…).
-    /// During a drag the cascade is already hidden and closes when the drag ends (see <see cref="BeginDrag"/>).
+    /// During a drag the cascade is already hidden and closes when the drag ends (see <see cref="BeginDrag"/>);
+    /// while Explorer's menu is open it stays as it is (see <see cref="SetNativeMenuOpen"/>).
     /// </summary>
     public void CloseAll()
     {
-        if (_dragging)
+        if (_nativeMenu && _window.IsActive)
+        {
+            _closeAfterNativeMenu = true;
+        }
+
+        if (_dragging || _nativeMenu)
         {
             return;
         }
 
+        _closeAfterNativeMenu = false;
         StopTimers();
         _keyLevel = -1;
         CloseFrom(0);
@@ -490,6 +585,11 @@ public sealed class CascadeController
     private void OnOverlayTimer()
     {
         _overlayTimer.Stop();
+        if (_nativeMenu)
+        {
+            return; // frozen under Explorer's menu
+        }
+
         if (_pendingAnchor is { } pending && _pendingAnchorPlacement is { } pendingPlacement && _pendingAnchorItem is { } pendingItem)
         {
             // The pointer rested on another anchor: the cascade moves there.
@@ -582,7 +682,7 @@ public sealed class CascadeController
             return;
         }
 
-        if (_suspended || generation != _generation || !ReferenceEquals(_card, card) || !ReferenceEquals(card.ViewModel, vm) || _levels.Count > 0)
+        if (_suspended || generation != _generation || !ReferenceEquals(_card, card) || !ReferenceEquals(card.ViewModel, vm) || _levels.Count > 0 || SelectionKeysDown)
         {
             return;
         }
@@ -709,6 +809,11 @@ public sealed class CascadeController
     private void OnOpenTimer()
     {
         _openTimer.Stop();
+        if (_nativeMenu)
+        {
+            return; // frozen under Explorer's menu
+        }
+
         if (_pendingOpen is not { } p)
         {
             return;
@@ -738,6 +843,11 @@ public sealed class CascadeController
     private void OnGraceTimer()
     {
         _graceTimer.Stop();
+        if (_nativeMenu)
+        {
+            return; // frozen under Explorer's menu
+        }
+
         int index = _graceLevel;
         _graceLevel = -1;
         if (index < 0 || index >= _levels.Count)
@@ -756,6 +866,11 @@ public sealed class CascadeController
     private void OnExitTimer()
     {
         _exitTimer.Stop();
+        if (_nativeMenu)
+        {
+            return; // frozen under Explorer's menu
+        }
+
         if (_menuOpen)
         {
             return; // rule 8
@@ -1152,6 +1267,11 @@ public sealed class CascadeController
     private void OnPreviewTimer()
     {
         _previewTimer.Stop();
+        if (_nativeMenu)
+        {
+            return; // frozen under Explorer's menu
+        }
+
         if (_pendingPreview is not { } p)
         {
             return;
@@ -1176,6 +1296,11 @@ public sealed class CascadeController
     private void OnPreviewCloseTimer()
     {
         _previewCloseTimer.Stop();
+        if (_nativeMenu)
+        {
+            return; // frozen under Explorer's menu
+        }
+
         if (_preview is not { } preview || preview.View.IsMouseOver)
         {
             return;
@@ -1613,6 +1738,12 @@ public sealed class CascadeController
 
     private void OnForegroundTimer()
     {
+        if (_nativeMenu)
+        {
+            _foregroundTimer.Stop(); // frozen under Explorer's menu, which has the foreground
+            return;
+        }
+
         if (_levels.Count == 0 || _window.IsActive)
         {
             _foregroundTimer.Stop(); // closed, or activated by a click: Deactivated takes over

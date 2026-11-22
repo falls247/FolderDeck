@@ -173,11 +173,13 @@ public sealed partial class TabViewModel : ObservableObject
 
     /// <summary>
     /// <see cref="FolderTargetPath"/> only while that folder is what is on screen: its last load
-    /// ended well, no load is running and nothing marked the tab stale. Where a paste without a
-    /// folder item goes (Ctrl+V, the menu of the blank area).
+    /// ended well and no load is running. Where a paste without a folder item goes (Ctrl+V, the
+    /// menu of the blank area). IsStale is deliberately not tested: RecordUse / TogglePin mark the
+    /// 最近の履歴 / よく使う項目 tabs stale while one of them shows a folder inside them, and every
+    /// path that really changes the shown folder reloads it at once (IsLoading covers that time).
     /// </summary>
     public string? TransferTargetPath =>
-        _loadedLocation is { } loaded && loaded == Location && !IsLoading && !IsStale ? FolderTargetPath : null;
+        _loadedLocation is { } loaded && loaded == Location && !IsLoading ? FolderTargetPath : null;
 
     /// <summary>Mirrors the selection and the cut onto the shown cards (<c>IsSelected</c> / <c>IsCut</c>).</summary>
     private void ApplyItemFlags()

@@ -75,8 +75,9 @@ public sealed class ItemPointerTracker
             return;
         }
 
-        // A double click must not run twice (§6.8): only the first press counts.
-        _pressed = e.ClickCount == 1;
+        // A double click must not run twice (§6.8): only the first press counts. A Ctrl / Shift
+        // press only changes the selection, so a quick second one must count (to toggle back).
+        _pressed = e.ClickCount == 1 || (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
         _pressedAt = e.GetPosition(_element);
         _dragCandidate = _pressed && !e.Handled && !onButton && _ownsPress?.Invoke(source) != true;
     }

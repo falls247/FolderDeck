@@ -1207,9 +1207,21 @@ public sealed partial class MainViewModel : ObservableObject
     /// (the parent, the overlay's folders, covers that showed the item), marks every tab stale and
     /// reloads the shown one in place.
     /// </summary>
-    private async Task ReloadAfterFileChangeAsync()
+    /// <param name="cardCascadeOnly">
+    /// From an activation: close only a cascade that lives in the tab's content (as a tab load
+    /// does), so a sidebar list the user is opening over the window that just came back stays.
+    /// </param>
+    private async Task ReloadAfterFileChangeAsync(bool cardCascadeOnly = false)
     {
-        View?.CloseCascade();
+        if (cardCascadeOnly)
+        {
+            View?.CloseCardCascade();
+        }
+        else
+        {
+            View?.CloseCascade();
+        }
+
         _services.ClearCaches();
         foreach (var tab in AllTabs)
         {
@@ -1230,6 +1242,44 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// How long after a command of Explorer's menu an activation is taken for the menu handing the
+    /// foreground back (not for the user coming back from what the command started).
+    /// </summary>
+    private static readonly TimeSpan ShellCommandHandBack = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// When a command of Explorer's menu was handed over (Environment.TickCount64), until the next
+    /// activation after <see cref="ShellCommandHandBack"/> reloads the lists once more; null: none.
+    /// </summary>
+    private long? _shellCommandAt;
+
+    /// <summary>
+    /// Explorer's menu (「その他のメニュー（Windows）」) closed. A menu that could not be shown says so.
+    /// Only a command reloads: it may have changed the folder (7-Zip's 展開, a new item…), and some
+    /// work in another process after the menu returns, so the lists are read again now and once
+    /// more when the user comes back to the window. A dismissed menu changes nothing, so the
+    /// cascade it came from stays.
+    /// </summary>
+    public async Task OnShellMenuClosedAsync(ShellMenuResult result)
+    {
+        switch (result.Outcome)
+        {
+            case ShellMenuOutcome.Invoked:
+                // A failure the handler reported has usually been shown by the handler itself (and is logged).
+                _shellCommandAt = Environment.TickCount64;
+                await ReloadAfterFileChangeAsync();
+                break;
+            case ShellMenuOutcome.Unavailable:
+            case ShellMenuOutcome.TimedOut:
+            case ShellMenuOutcome.Failed:
+                Message.Warning(result.Error is { Length: > 0 } error
+                    ? $"このメニューは表示できませんでした：{error}"
+                    : "このメニューは表示できませんでした。");
+                break;
+        }
+    }
+
     // ---- selection, clipboard and paste ---------------------------------------------------------
 
     private static readonly TimeSpan ClipboardReadTimeout = TimeSpan.FromSeconds(2);
@@ -1243,6 +1293,12 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>The paths of this app's pending cut (null: none) and the clipboard sequence number it was written with.</summary>
     private HashSet<string>? _cutPaths;
     private uint _cutSequence;
+
+    /// <summary>
+    /// The paths of a cut that ended because the clipboard changed (Explorer may have moved them
+    /// first): the next activation checks them once and reloads the lists when any is gone.
+    /// </summary>
+    private HashSet<string>? _endedCutPaths;
 
     /// <summary>The check of <see cref="OnActivatedAsync"/> is running.</summary>
     private bool _cutCheckBusy;
@@ -1411,7 +1467,7 @@ public sealed partial class MainViewModel : ObservableObject
             }
 
             var kind = read.Files.Kind;
-            var sources = await SourceProbe.DescribeAsync(read.Files.Paths, probeNetwork: true, SourceProbeTimeout);
+            var sources = await SourceProbe.DescribeAsync(read.Files.Paths, SourceProbeTimeout);
             var plan = TransferRules.Decide(sources, folder, TransferOptions.Paste(kind));
             if (plan.Items.Count == 0)
             {
@@ -1427,7 +1483,10 @@ public sealed partial class MainViewModel : ObservableObject
             if (kind == TransferKind.Move && result.MovesRequested > 0 && result.MovesDone == result.MovesRequested)
             {
                 ShellClipboard.ClearIfUnchanged(read.Sequence, owner);
-                ClearCut();
+                if (_cutPaths is not null && _cutSequence == read.Sequence)
+                {
+                    ClearCut(); // a cut made while this paste ran stays
+                }
             }
 
             await ReloadAfterFileChangeAsync();
@@ -1451,9 +1510,10 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     public void OnClipboardChanged()
     {
-        if (_cutPaths is not null && ShellClipboard.Sequence != _cutSequence)
+        if (_cutPaths is { } paths && ShellClipboard.Sequence != _cutSequence)
         {
             ClearCut();
+            _endedCutPaths = paths; // Explorer may have moved them: checked on the next activation
         }
     }
 
@@ -1461,10 +1521,22 @@ public sealed partial class MainViewModel : ObservableObject
     /// The window came back to the front. A cut of this app pasted in Explorer is moved by Explorer,
     /// which may leave the clipboard as it was: when a cut item is gone, the cut is over and the
     /// lists are read again. The check runs off the UI thread (a network path may hang).
+    /// After a command of Explorer's menu the lists are read again once (see <see cref="OnShellMenuClosedAsync"/>).
     /// </summary>
     public async Task OnActivatedAsync()
     {
-        if (_cutPaths is not { } paths || _cutCheckBusy || _transferBusy)
+        if (_shellCommandAt is { } at && !_transferBusy
+            && TimeSpan.FromMilliseconds(Environment.TickCount64 - at) >= ShellCommandHandBack)
+        {
+            _shellCommandAt = null;
+
+            // Not inside Activated itself: a click that activated the window (a row of a cascade
+            // opened over the inactive window) is handled first, then the reload closes the cascade.
+            await Task.Yield();
+            await ReloadAfterFileChangeAsync(cardCascadeOnly: true);
+        }
+
+        if ((_cutPaths ?? _endedCutPaths) is not { } paths || _cutCheckBusy || _transferBusy)
         {
             return;
         }
@@ -1473,21 +1545,39 @@ public sealed partial class MainViewModel : ObservableObject
         try
         {
             string[] copy = paths.ToArray();
-            Task<bool> check = Task.Run(() => copy.Any(p => !File.Exists(p) && !Directory.Exists(p)));
-            bool gone;
+            Task<string[]> check = Task.Run(() => copy.Where(p => File.Exists(p) || Directory.Exists(p)).ToArray());
+            string[] remaining;
             try
             {
-                gone = await check.WaitAsync(CutCheckTimeout);
+                remaining = await check.WaitAsync(CutCheckTimeout);
             }
             catch (TimeoutException)
             {
-                return; // unknown: the cut stays
+                return; // unknown: the cut stays (an ended cut is checked again next time)
             }
 
-            if (gone && ReferenceEquals(paths, _cutPaths))
+            bool gone = remaining.Length < copy.Length;
+            if (ReferenceEquals(paths, _endedCutPaths))
+            {
+                _endedCutPaths = null;
+            }
+            else if (!ReferenceEquals(paths, _cutPaths))
+            {
+                return; // the cut changed meanwhile
+            }
+            else if (remaining.Length == 0)
             {
                 ClearCut();
-                await ReloadAfterFileChangeAsync();
+            }
+            else if (gone)
+            {
+                // Partly pasted (a skipped conflict): what is left stays cut and dimmed.
+                SetCut(new HashSet<string>(remaining, PathTools.Comparer), _cutSequence);
+            }
+
+            if (gone)
+            {
+                await ReloadAfterFileChangeAsync(cardCascadeOnly: true);
             }
         }
         finally
@@ -1500,6 +1590,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         _cutPaths = paths;
         _cutSequence = sequence;
+        _endedCutPaths = null;
         foreach (var tab in AllTabs)
         {
             tab.CutPaths = paths;
