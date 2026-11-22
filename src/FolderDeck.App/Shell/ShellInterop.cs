@@ -340,6 +340,19 @@ internal static class ShellInterop
         return null;
     }
 
+    /// <summary>
+    /// Makes a top-level window unowned. GWLP_HWNDPARENT sets the owner of a top-level window (not
+    /// a parent): WPF's Window.Owner does it the same way.
+    /// </summary>
+    public static void ClearOwner(IntPtr hwnd)
+    {
+        var window = new HWND(hwnd);
+        if (!PInvoke.GetWindow(window, GET_WINDOW_CMD.GW_OWNER).IsNull)
+        {
+            PInvoke.SetWindowLongPtr(window, WINDOW_LONG_PTR_INDEX.GWLP_HWNDPARENT, 0);
+        }
+    }
+
     public static void MoveWindow(IntPtr hwnd, int x, int y)
     {
         PInvoke.SetWindowPos(

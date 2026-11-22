@@ -1120,10 +1120,9 @@ public sealed class CascadeController
             return;
         }
 
-        Rect rowRect = ScreenRect(container);
         Rect anchor = parent.Flyout is { } pf ? ScreenRect(pf.CardElement) : ScreenRect(parent.Card!);
         bool preferLeft = parent.Flyout is not null && parent.DirectionLeft; // keep going left once we went left
-        OpenFlyout(parent.Index + 1, row.Path, row.Target, rowRect, anchor, preferLeft, row);
+        OpenFlyout(parent.Index + 1, row.Path, row.Target, container, anchor, preferLeft, row);
         parent.ActiveRow = row;
         row.IsActive = true;
     }
@@ -1141,11 +1140,10 @@ public sealed class CascadeController
             return;
         }
 
-        Rect rowRect = ScreenRect(hover);
-        Rect anchorRect = ReferenceEquals(placement, hover) ? rowRect : ScreenRect(placement);
+        Rect anchorRect = ScreenRect(placement);
         if (item.File is { } file)
         {
-            OpenPreviewAt(-1, file.Row, file.Card.ToItemRef(), rowRect, anchorRect, preferLeft: false);
+            OpenPreviewAt(-1, file.Row, file.Card.ToItemRef(), hover, anchorRect, preferLeft: false);
             return;
         }
 
@@ -1154,14 +1152,18 @@ public sealed class CascadeController
             return;
         }
 
-        OpenFlyout(0, item.Path, target, rowRect, anchorRect, preferLeft: false, parentRow: null);
+        OpenFlyout(0, item.Path, target, hover, anchorRect, preferLeft: false, parentRow: null);
         item.IsHoverHeld = true;
     }
 
-    /// <summary>Opens the flyout of level <paramref name="index"/> next to <paramref name="anchor"/>, at the height of <paramref name="rowRect"/>.</summary>
-    private void OpenFlyout(int index, string path, NavLocation target, Rect rowRect, Rect anchor, bool preferLeft, EntryRowViewModel? parentRow)
+    /// <summary>
+    /// Opens the flyout of level <paramref name="index"/> next to <paramref name="anchor"/>, at the
+    /// height of <paramref name="origin"/> (the row it hangs at, also what its window is created on: <see cref="OpenOn"/>).
+    /// </summary>
+    private void OpenFlyout(int index, string path, NavLocation target, FrameworkElement origin, Rect anchor, bool preferLeft, EntryRowViewModel? parentRow)
     {
-        var monitor = ShellInterop.GetMonitorArea(new Point(rowRect.Left + (rowRect.Width / 2), rowRect.Top + (rowRect.Height / 2)));
+        Rect rowRect = ScreenRect(origin);
+        var monitor = MonitorOf(rowRect);
 
         var model = new EntryListViewModel(path, target, _services.Icons);
         var view = new FlyoutView { DataContext = model };
@@ -1192,12 +1194,13 @@ public sealed class CascadeController
             WatchForeground();
         }
 
-        // Rough position first (main window DPI), exact position once the popup has a size.
-        double scale = VisualTreeHelper.GetDpi(_window).DpiScaleX;
+        // Rough position first, exact position once the popup has a size. The offsets are DIPs of
+        // the popup's own DPI, which is the row's monitor's (OpenOn), not the main window's.
+        double scale = monitor.Scale;
         double guessX = (level.PreferLeft ? anchor.Left - ((FlyoutView.CardWidth + FlyoutView.ShadowMargin) * scale) : anchor.Right) / scale;
         popup.HorizontalOffset = guessX;
         popup.VerticalOffset = (rowRect.Top / scale) - RowLead - FlyoutView.ShadowMargin;
-        popup.IsOpen = true;
+        OpenOn(popup, origin);
 
         _ = LoadLevelAsync(level);
         _window.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => Position(level, reveal: true));
@@ -1238,7 +1241,8 @@ public sealed class CascadeController
 
     /// <summary>
     /// §9.5 placement, computed in physical pixels on the row's monitor work area, then applied to
-    /// the popup window directly (robust across monitors with different DPI).
+    /// the popup window directly. Moving the window does not change the DPI it draws with: that is
+    /// settled when it opens (<see cref="OpenOn"/>).
     /// </summary>
     private void Position(Level level, bool reveal)
     {
@@ -1280,12 +1284,16 @@ public sealed class CascadeController
             return null;
         }
 
-        var monitor = ShellInterop.GetMonitorArea(new Point(row.Left + (row.Width / 2), row.Top + (row.Height / 2)));
+        var monitor = MonitorOf(row);
         double s = monitor.Scale;
         var work = monitor.Work;
-        double w = cardWidth * s;
-        double h = Math.Max(1, card.ActualHeight) * s;
-        double margin = shadowMargin * s;
+
+        // What the popup really draws with (and reads its offsets in): its window's DPI from when it
+        // opened, normally the monitor's (OpenOn). The gaps are distances on the monitor.
+        double p = source.CompositionTarget?.TransformToDevice.M11 ?? s;
+        double w = cardWidth * p;
+        double h = Math.Max(1, card.ActualHeight) * p;
+        double margin = shadowMargin * p;
         double gap = FlyoutGap * s;
 
         double rightX = a.Right + gap;
@@ -1317,9 +1325,8 @@ public sealed class CascadeController
 
         int wx = (int)Math.Round(x - margin);
         int wy = (int)Math.Round(y - margin);
-        double mainScale = VisualTreeHelper.GetDpi(_window).DpiScaleX;
-        double offX = wx / mainScale;
-        double offY = wy / mainScale;
+        double offX = wx / p;
+        double offY = wy / p;
         if (Math.Abs(popup.HorizontalOffset - offX) > 0.5)
         {
             popup.HorizontalOffset = offX;
@@ -1362,6 +1369,51 @@ public sealed class CascadeController
         var topLeft = element.PointToScreen(new Point(0, 0));
         var bottomRight = element.PointToScreen(new Point(element.ActualWidth, element.ActualHeight));
         return new Rect(topLeft, bottomRight);
+    }
+
+    /// <summary>
+    /// Opens a flyout's or preview's popup so that it draws with the DPI of <paramref name="origin"/>'s
+    /// monitor. A WPF popup takes its DPI from the monitor its window is created on (a new window
+    /// each time it opens) and keeps it while open: Popup.OnDpiChanged swallows WM_DPICHANGED, so
+    /// moving the window afterwards (<see cref="Place"/>) does not rescale it. Without a
+    /// PlacementTarget the window is created at (0,0), on the primary monitor: with a 200 % primary,
+    /// lists opened on a 100 % monitor were drawn twice too large. With one, it is created on the
+    /// monitor of the target's top-left (<see cref="MonitorOf"/>). The target serves only that and is
+    /// cleared once the window exists (the position stays the offsets', Placement is Absolute), so
+    /// the popup keeps no link to a row that may be recycled.
+    /// WPF also makes the target's window the owner of the popup's window when the foreground
+    /// window is in its owner chain (the main window, or for a deeper level the parent flyout, owned
+    /// by the main window in turn). That is undone: an owned window dies with its owner, and so
+    /// would the WPF menus and tooltips opened from a row inside a flyout (they would be owned by
+    /// the flyout), without their Closed event when the flyout closes first (the menu's Closed is
+    /// what clears <see cref="_menuOpen"/>). Unowned, the windows are as they were before.
+    /// The callers measure <paramref name="origin"/> on the screen first (<see cref="ScreenRect"/>),
+    /// so it has a window and WPF creates the popup's window here, synchronously.
+    /// </summary>
+    private static void OpenOn(Popup popup, FrameworkElement origin)
+    {
+        popup.PlacementTarget = origin;
+        popup.IsOpen = true;
+        popup.ClearValue(Popup.PlacementTargetProperty);
+        if (popup.Child is { } child && PresentationSource.FromVisual(child) is HwndSource source)
+        {
+            ShellInterop.ClearOwner(source.Handle);
+        }
+    }
+
+    /// <summary>
+    /// The monitor of a popup opened at <paramref name="row"/> (screen rectangle of the
+    /// <see cref="OpenOn"/> origin), whose work area holds it. WPF creates the window, and so fixes
+    /// its DPI, on the monitor of the top-left truncated to whole pixels
+    /// (PopupInitialPlacementHelper.GetPlacementOrigin). A row across two monitors (the window
+    /// straddles them) still goes by its center, as it always did, when both have that DPI; when
+    /// they differ it goes by the top-left, as the popup could not draw right on the other one.
+    /// </summary>
+    private static ShellInterop.MonitorArea MonitorOf(Rect row)
+    {
+        var created = ShellInterop.GetMonitorArea(new Point(Math.Truncate(row.Left), Math.Truncate(row.Top)));
+        var center = ShellInterop.GetMonitorArea(new Point(row.Left + (row.Width / 2), row.Top + (row.Height / 2)));
+        return center.Scale == created.Scale ? center : created;
     }
 
     // ---- previews (previewable file rows) -----------------------------------------------------
@@ -1475,19 +1527,20 @@ public sealed class CascadeController
             return;
         }
 
-        Rect rowRect = ScreenRect(container);
         Rect anchor = parent.Flyout is { } pf ? ScreenRect(pf.CardElement) : ScreenRect(parent.Card!);
-        OpenPreviewAt(parent.Index, row, ItemOf(row), rowRect, anchor, preferLeft: parent.Flyout is not null && parent.DirectionLeft);
+        OpenPreviewAt(parent.Index, row, ItemOf(row), container, anchor, preferLeft: parent.Flyout is not null && parent.DirectionLeft);
     }
 
     /// <summary>
     /// Opens the preview of <paramref name="row"/> beside level <paramref name="parentIndex"/>, or
-    /// beside an anchor in place of level 0 when it is -1. <paramref name="item"/> is what its click
+    /// beside an anchor in place of level 0 when it is -1, at the height of <paramref name="origin"/>
+    /// (the row's element, as in <see cref="OpenFlyout"/>). <paramref name="item"/> is what its click
     /// and menu act on.
     /// </summary>
-    private void OpenPreviewAt(int parentIndex, EntryRowViewModel row, ItemRef item, Rect rowRect, Rect anchor, bool preferLeft)
+    private void OpenPreviewAt(int parentIndex, EntryRowViewModel row, ItemRef item, FrameworkElement origin, Rect anchor, bool preferLeft)
     {
-        var monitor = ShellInterop.GetMonitorArea(new Point(rowRect.Left + (rowRect.Width / 2), rowRect.Top + (rowRect.Height / 2)));
+        Rect rowRect = ScreenRect(origin);
+        var monitor = MonitorOf(rowRect);
 
         var model = new PreviewViewModel(row);
         var view = new PreviewView { DataContext = model };
@@ -1560,12 +1613,12 @@ public sealed class CascadeController
         view.DragRequested += _ => DragOut(row, "preview");
         view.CardElement.SizeChanged += (_, _) => PositionPreview(preview, reveal: false);
 
-        // Rough position first (main window DPI), exact position once the popup has a size.
-        double scale = VisualTreeHelper.GetDpi(_window).DpiScaleX;
+        // Rough position first, exact position once the popup has a size (as in OpenFlyout).
+        double scale = monitor.Scale;
         double guessX = (preview.PreferLeft ? anchor.Left - ((PreviewView.CardWidth + PreviewView.ShadowMargin) * scale) : anchor.Right) / scale;
         popup.HorizontalOffset = guessX;
         popup.VerticalOffset = (rowRect.Top / scale) - RowLead - PreviewView.ShadowMargin;
-        popup.IsOpen = true;
+        OpenOn(popup, origin);
         if (parentIndex < 0)
         {
             WatchForeground(); // opened over an inactive window, as level 0 in OpenFlyout
