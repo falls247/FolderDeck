@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Layout;
 using FolderDeck.Core.Stores;
 
 namespace FolderDeck.Core.Tests;
@@ -515,7 +516,6 @@ public class SettingsStoreTests
         store.Load();
         var s = store.Current;
         Assert.Equal(200, s.CardSize);
-        Assert.Equal(AppSettings.TabRecent, s.LastTab);
         Assert.True(s.ConfirmExecutables);
         Assert.True(s.IncludeWindowsRecent);
         Assert.False(s.ShowHidden);
@@ -524,40 +524,140 @@ public class SettingsStoreTests
         Assert.Equal(50, s.FrequentLimit);
         Assert.Equal(512, s.ThumbCacheMb);
         Assert.Null(s.RecentClearedAt);
-        Assert.Equal(2, s.Locations!.Count);
-        Assert.Empty(s.OpenTabs!);
         Assert.Equal(AppSettings.SidebarWidthDefault, s.SidebarWidth);
     }
 
+    private static string Describe(OpenTabSetting tab) => $"{tab.Kind}|{tab.Root}|{tab.Path}";
+
     [Fact]
-    public void FolderTabsAndSidebar_AreNormalized()
+    public void OpenTabs_FirstRunOpensRecent_ASavedEmptyListStaysEmpty()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load(); // no file
+        Assert.Equal(["recent||"], store.Current.OpenTabs!.Select(Describe));
+        Assert.Equal(0, store.Current.SelectedTab);
+
+        // Every tab was closed: that is remembered, 最近の履歴 does not come back.
+        store.Update(s =>
+        {
+            s.OpenTabs = [];
+            s.SelectedTab = 0;
+        });
+        store.Flush();
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        Assert.Empty(reloaded.Current.OpenTabs!);
+        Assert.Equal(-1, reloaded.Current.SelectedTab);
+    }
+
+    [Fact]
+    public void OpenTabs_AreNormalized_SelectionFollowsItsEntry()
+    {
+        AppSettings Make(int selected) => new()
+        {
+            OpenTabs =
+            [
+                new OpenTabSetting { Kind = " Recent " },
+                new OpenTabSetting { Kind = "folder", Root = " ", Path = "x" },    // no root: dropped
+                new OpenTabSetting { Kind = "recent", Root = @"E:\古い" },          // a second 最近の履歴: dropped
+                null!,
+                new OpenTabSetting { Kind = "bogus", Root = @"E:\写真", Path = null! },
+                new OpenTabSetting { Kind = null, Root = @"E:\仕事", Path = "2026" },
+            ],
+            SelectedTab = selected,
+        };
+
+        var s = Make(5);
+        s.Normalize();
+        Assert.Equal(["recent||", @"folder|E:\写真|", @"folder|E:\仕事|2026"], s.OpenTabs!.Select(Describe));
+        Assert.Equal(2, s.SelectedTab); // still the same entry, three removals later
+
+        var dropped = Make(1); // the selected entry itself goes: the next one that stays
+        dropped.Normalize();
+        Assert.Equal(1, dropped.SelectedTab);
+
+        var beyond = Make(99);
+        beyond.Normalize();
+        Assert.Equal(2, beyond.SelectedTab);
+    }
+
+    [Fact]
+    public void Version1File_MigratesToOneTabStrip_AndStaysStable()
     {
         using var tmp = new TempDir();
         string file = tmp.Combine("settings.json");
 
-        // Written by the version with a 登録フォルダ tab: its location (a registration id) is dropped.
+        // Version 1: two fixed tabs with their locations, folder tabs (blank roots dropped before the
+        // index is clamped), the id of the former 登録フォルダ tab among the locations.
         File.WriteAllText(file, """
-            {"version":1,"last_tab":"registered","sidebar_width":9000,"selected_folder_tab":7,
-             "locations":{"registered":{"root":"3f9a1c0b7d2e","path":"2026"}},
-             "open_tabs":[{"root":"E:\\写真","path":"2026"},{"root":"","path":"x"},null,{"root":"E:\\仕事"}]}
+            {"version":1,"last_tab":"folder","sidebar_width":9000,"selected_folder_tab":7,
+             "locations":{"registered":{"root":"3f9a1c0b7d2e","path":"2026"},"recent":{"root":"","path":""},"frequent":{"root":"E:\\写真","path":"2026"}},
+             "open_tabs":[{"root":"E:\\仕事","path":""},{"root":"","path":"x"},null,{"root":"E:\\写真","path":"2026\\夏"}]}
             """);
         var store = new SettingsStore(file, FakeClock.Fixed());
         store.Load();
         var s = store.Current;
         Assert.Equal(LoadStatus.Loaded, store.LoadStatus);
-        Assert.Equal(AppSettings.TabRecent, s.LastTab);
         Assert.Equal(AppSettings.SidebarWidthMax, s.SidebarWidth);
-        Assert.False(s.Locations!.ContainsKey("registered"));
-        Assert.Equal(2, s.OpenTabs!.Count); // the entries without a root are dropped
-        Assert.Equal("2026", s.OpenTabs[0].Path);
-        Assert.Equal(string.Empty, s.OpenTabs[1].Path);
-        Assert.Equal(1, s.SelectedFolderTab); // clamped to the last tab
+        string[] expected = ["recent||", @"frequent|E:\写真|2026", @"folder|E:\仕事|", @"folder|E:\写真|2026\夏"];
+        Assert.Equal(expected, s.OpenTabs!.Select(Describe));
+        Assert.Equal(3, s.SelectedTab); // the last folder tab (index 7 clamped)
+        Assert.Equal(2, s.Version);
+        Assert.Null(s.LastTab);
+        Assert.Null(s.Locations);
+        Assert.Null(s.SelectedFolderTab);
 
-        // "folder" needs a folder tab to go back to.
-        var none = new AppSettings { LastTab = AppSettings.TabFolder, OpenTabs = null, SidebarWidth = double.NaN };
-        none.Normalize();
-        Assert.Equal(AppSettings.TabRecent, none.LastTab);
-        Assert.Equal(AppSettings.SidebarWidthDefault, none.SidebarWidth);
+        // Saved in the new layout; the version 1 keys are gone (a null selected_folder_tab would make
+        // the version 1 program reject the file) and a reload changes nothing.
+        store.Update(_ => { });
+        store.Flush();
+        string text = File.ReadAllText(file);
+        Assert.Contains("\"version\": 2", text);
+        Assert.Contains("\"selected_tab\": 3", text);
+        Assert.DoesNotContain("last_tab", text);
+        Assert.DoesNotContain("locations", text);
+        Assert.DoesNotContain("selected_folder_tab", text);
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        Assert.Equal(expected, reloaded.Current.OpenTabs!.Select(Describe));
+        Assert.Equal(3, reloaded.Current.SelectedTab);
+
+        // Version 1 without any tab key: both fixed tabs, 最近の履歴 shown ("folder" needs a folder tab).
+        var bare = new AppSettings { Version = 1, LastTab = AppSettings.TabFolder, OpenTabs = null, Locations = null, SidebarWidth = double.NaN };
+        bare.Normalize();
+        Assert.Equal(["recent||", "frequent||"], bare.OpenTabs!.Select(Describe));
+        Assert.Equal(0, bare.SelectedTab);
+        Assert.Equal(AppSettings.SidebarWidthDefault, bare.SidebarWidth);
+    }
+
+    [Fact]
+    public void FileRewrittenByVersion1_MigratesAgain()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+
+        // What the version 1 program leaves after it read a version 2 file with よく使う項目 (inside
+        // E:\写真\2026) and one folder tab: the kinds are gone, entries without a root too, and it
+        // wrote its own keys back (最近の履歴 shown).
+        File.WriteAllText(file, """
+            {"version":1,"last_tab":"recent","selected_folder_tab":0,
+             "locations":{"recent":{"root":"","path":""},"frequent":{"root":"","path":""}},
+             "open_tabs":[{"root":"E:\\写真","path":"2026"},{"root":"E:\\仕事","path":""}]}
+            """);
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        var s = store.Current;
+        Assert.Equal(["recent||", "frequent||", @"folder|E:\写真|2026", @"folder|E:\仕事|"], s.OpenTabs!.Select(Describe));
+        Assert.Equal(0, s.SelectedTab);
+        Assert.Equal(2, s.Version);
+
+        // The version key alone does not decide: last_tab is only ever written by version 1.
+        var mislabeled = new AppSettings { Version = 2, LastTab = AppSettings.TabFrequent, OpenTabs = [new OpenTabSetting { Root = @"E:\仕事" }] };
+        mislabeled.Normalize();
+        Assert.Equal(["recent||", "frequent||", @"folder|E:\仕事|"], mislabeled.OpenTabs!.Select(Describe));
+        Assert.Equal(1, mislabeled.SelectedTab);
     }
 
     [Fact]
@@ -565,7 +665,7 @@ public class SettingsStoreTests
     {
         using var tmp = new TempDir();
         string file = tmp.Combine("settings.json");
-        File.WriteAllText(file, """{"version":1,"card_size":205,"recent_limit":5000,"frequent_limit":1,"thumb_cache_mb":999999,"last_tab":"bogus","recent_cleared_at":"garbage"}""");
+        File.WriteAllText(file, """{"version":1,"card_size":205,"recent_limit":5000,"frequent_limit":1,"thumb_cache_mb":999999,"last_tab":"bogus","recent_cleared_at":"garbage","details_columns":{" Type ":9999,"bogus":1}}""");
         var store = new SettingsStore(file, FakeClock.Fixed());
         store.Load();
         var s = store.Current;
@@ -574,10 +674,15 @@ public class SettingsStoreTests
         Assert.Equal(500, s.RecentLimit);
         Assert.Equal(10, s.FrequentLimit);
         Assert.Equal(AppSettings.ThumbCacheMbMax, s.ThumbCacheMb);
-        Assert.Equal(AppSettings.TabRecent, s.LastTab);
+        Assert.Equal(0, s.SelectedTab); // an unknown last_tab: 最近の履歴
         Assert.Null(s.RecentClearedAt);
         Assert.True(s.ConfirmExecutables);
         Assert.NotNull(s.Window);
+
+        // details_columns: exactly the three known keys, a missing one at its default, a value out of range clamped
+        Assert.Equal(["modified", "type", "size"], s.DetailsColumns!.Keys);
+        Assert.Equal(DetailsColumns.Defaults[DetailsColumns.Modified], s.DetailsColumns[DetailsColumns.Modified]);
+        Assert.Equal(DetailsColumns.Max, s.DetailsColumns[DetailsColumns.Type]);
     }
 
     [Theory]
@@ -602,22 +707,27 @@ public class SettingsStoreTests
         store.Update(s =>
         {
             s.CardSize = 260;
-            s.LastTab = AppSettings.TabFolder;
-            s.Locations![AppSettings.TabFrequent] = new LocationSetting { Root = @"E:\写真", Path = "2026" };
-            s.OpenTabs = [new LocationSetting { Root = @"E:\仕事" }, new LocationSetting { Root = @"E:\写真", Path = @"2026\夏" }];
-            s.SelectedFolderTab = 1;
+            s.OpenTabs =
+            [
+                new OpenTabSetting { Kind = AppSettings.TabFrequent, Root = @"E:\写真", Path = "2026" },
+                new OpenTabSetting { Root = @"E:\仕事" },
+                new OpenTabSetting { Root = @"E:\写真", Path = @"2026\夏" },
+            ];
+            s.SelectedTab = 2;
             s.SidebarWidth = 300;
             s.Window = new WindowPlacementSetting { Left = 10, Top = 20, Width = 900, Height = 700, Maximized = true };
             s.RecentClearedAt = FakeClock.Default;
             s.ShowHidden = true;
+            s.DetailsColumns = new Dictionary<string, double> { [DetailsColumns.Size] = 120 };
         });
         store.Flush();
 
         string text = File.ReadAllText(file);
         Assert.Contains("\"card_size\": 260", text);
-        Assert.Contains("\"last_tab\": \"folder\"", text);
+        Assert.Contains("\"details_columns\"", text);
         Assert.Contains("\"open_tabs\"", text);
-        Assert.Contains("\"selected_folder_tab\": 1", text);
+        Assert.Contains("\"kind\": \"frequent\"", text);
+        Assert.Contains("\"selected_tab\": 2", text);
         Assert.Contains("\"sidebar_width\": 300", text);
         Assert.Contains("\"recent_cleared_at\": \"2026-11-21T01:23:45+00:00\"", text);
         Assert.Contains("\"show_hidden\": true", text);
@@ -626,17 +736,14 @@ public class SettingsStoreTests
         reloaded.Load();
         var s = reloaded.Current;
         Assert.Equal(260, s.CardSize);
-        Assert.Equal(AppSettings.TabFolder, s.LastTab);
-        Assert.Equal(@"E:\写真", s.Locations![AppSettings.TabFrequent].Root);
-        Assert.Equal("2026", s.Locations[AppSettings.TabFrequent].Path);
-        Assert.Equal(2, s.OpenTabs!.Count);
-        Assert.Equal(@"E:\写真", s.OpenTabs[1].Root);
-        Assert.Equal(@"2026\夏", s.OpenTabs[1].Path);
-        Assert.Equal(1, s.SelectedFolderTab);
+        Assert.Equal([@"frequent|E:\写真|2026", @"folder|E:\仕事|", @"folder|E:\写真|2026\夏"], s.OpenTabs!.Select(Describe));
+        Assert.Equal(2, s.SelectedTab);
         Assert.Equal(300, s.SidebarWidth);
         Assert.Equal(900, s.Window!.Width);
         Assert.True(s.Window.Maximized);
         Assert.Equal(FakeClock.Default, s.RecentClearedAt);
+        Assert.Equal(120, s.DetailsColumns![DetailsColumns.Size]);
+        Assert.Equal(DetailsColumns.Defaults[DetailsColumns.Type], s.DetailsColumns[DetailsColumns.Type]);
     }
 
     [Fact]
@@ -645,14 +752,14 @@ public class SettingsStoreTests
         using var tmp = new TempDir();
         var store = new SettingsStore(tmp.Combine("settings.json"), FakeClock.Fixed());
         store.Load();
-        store.Update(s => s.OpenTabs = [new LocationSetting { Root = @"E:\写真" }]);
+        store.Update(s => s.OpenTabs = [new OpenTabSetting { Root = @"E:\写真" }]);
         var copy = store.Current;
         copy.CardSize = 380;
-        copy.Locations![AppSettings.TabRecent].Path = "x";
         copy.OpenTabs![0].Path = "x";
-        copy.OpenTabs.Add(new LocationSetting { Root = @"E:\仕事" });
+        copy.OpenTabs.Add(new OpenTabSetting { Root = @"E:\仕事" });
+        copy.DetailsColumns![DetailsColumns.Size] = 300;
         Assert.Equal(200, store.Current.CardSize);
-        Assert.Equal(string.Empty, store.Current.Locations![AppSettings.TabRecent].Path);
+        Assert.Equal(DetailsColumns.Defaults[DetailsColumns.Size], store.Current.DetailsColumns![DetailsColumns.Size]);
         Assert.Equal(string.Empty, Assert.Single(store.Current.OpenTabs!).Path);
     }
 
@@ -689,6 +796,40 @@ public class SettingsStoreTests
         store.Load();
         Assert.True(store.Current.AddToWindowsRecent);
         Assert.False(store.Current.OpenExplorerInNewTab);
+    }
+
+    [Fact]
+    public void Sidebar_CollapsedStateRoundTrips_SectionIdsAreNormalized()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+
+        // Hand-edited: unknown and repeated ids go, the spelling is forgiven.
+        File.WriteAllText(file, """{"sidebar_collapsed":true,"sidebar_collapsed_sections":["pc"," Quick ","bogus",null,"quick"]}""");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        Assert.True(store.Current.SidebarCollapsed);
+        Assert.Equal([SidebarSections.Quick, SidebarSections.Pc], store.Current.SidebarCollapsedSections);
+        Assert.True(store.Current.IsSectionCollapsed(SidebarSections.Quick));
+        Assert.False(store.Current.IsSectionCollapsed(SidebarSections.Registered));
+
+        store.Update(s =>
+        {
+            s.SidebarCollapsed = false;
+            s.SetSectionCollapsed(SidebarSections.Quick, false);
+            s.SetSectionCollapsed(SidebarSections.Registered, true);
+        });
+        store.Flush();
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        Assert.False(reloaded.Current.SidebarCollapsed);
+        Assert.Equal([SidebarSections.Registered, SidebarSections.Pc], reloaded.Current.SidebarCollapsedSections);
+
+        // A file without the keys: the sidebar is shown and every section is open.
+        var fresh = new AppSettings();
+        fresh.Normalize();
+        Assert.False(fresh.SidebarCollapsed);
+        Assert.Empty(fresh.SidebarCollapsedSections!);
     }
 
     [Fact]

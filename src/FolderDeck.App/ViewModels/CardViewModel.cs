@@ -3,6 +3,7 @@ using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using FolderDeck.Core.Infrastructure;
 using FolderDeck.Core.Listing;
+using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
 using FolderDeck.Core.Text;
 using FolderDeck.Services;
@@ -37,9 +38,10 @@ public enum BadgeMode
 }
 
 /// <summary>
-/// One card (§6). Created with only a name and kind; details (counts, child list, cover and
-/// thumbnail) load when the card is realized on screen and are cancelled when it scrolls away
-/// (§7.4.1).
+/// One item of a tab, shown as a card (§6) or as a row of the details list. Created with only a
+/// name and kind; details (counts, child list, cover and thumbnail) load when the card is realized
+/// on screen and are cancelled when it scrolls away (§7.4.1). A row of the details list never
+/// realizes its item: it shows only what is known already or cached per extension.
 /// </summary>
 public sealed partial class CardViewModel : ObservableObject
 {
@@ -50,6 +52,10 @@ public sealed partial class CardViewModel : ObservableObject
     private int _iconPx;
     private string? _coverPath;
     private bool _coverSearched;
+    private ImageSource? _icon;
+    private bool _iconRequested;
+    private string? _typeText;
+    private bool _typeRequested;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsFolderLike), nameof(IsDisabled), nameof(BadgeMode), nameof(ActionText), nameof(ToolTipText), nameof(ShowWarning))]
@@ -72,6 +78,14 @@ public sealed partial class CardViewModel : ObservableObject
     /// <summary>The card is being dragged to a new position (drawn semi-transparent).</summary>
     [ObservableProperty]
     private bool _isDragged;
+
+    /// <summary>Part of the tab's selection (set by <see cref="TabViewModel"/> from its <c>Selection</c>).</summary>
+    [ObservableProperty]
+    private bool _isSelected;
+
+    /// <summary>On the clipboard as this app's pending cut (drawn dimmed until it is pasted or replaced).</summary>
+    [ObservableProperty]
+    private bool _isCut;
 
     [ObservableProperty]
     private bool _isBusy;
@@ -170,6 +184,64 @@ public sealed partial class CardViewModel : ObservableObject
     public string ExtensionText => Extension.Length > 1 ? Extension[1..].ToUpperInvariant() : "ファイル";
 
     public string? SizeText => Length is { } l ? Formatting.FileSize(l) : null;
+
+    // ---- details list: what a row shows. Read by bindings only, so cards never pay for it. --------
+
+    /// <summary>16 px shell icon. Loaded lazily: only the rows the virtualized list realizes ask for one.</summary>
+    public ImageSource? Icon
+    {
+        get
+        {
+            if (!_iconRequested)
+            {
+                _iconRequested = true;
+                if (_services.Icons.TryGet(Path, IsFolderLike, out var cached))
+                {
+                    _icon = cached;
+                }
+                else
+                {
+                    _ = LoadIconAsync();
+                }
+            }
+
+            return _icon;
+        }
+    }
+
+    /// <summary>更新日時 column: <c>yyyy/MM/dd HH:mm</c> in local time, empty when the time is not known.</summary>
+    public string ModifiedText => CardOrdering.KnownTime(ModifiedUtc) is { } utc
+        ? Formatting.DateTimeText(new DateTimeOffset(DateTime.SpecifyKind(utc, DateTimeKind.Utc)))
+        : string.Empty;
+
+    /// <summary>
+    /// 種類 column: the shell's type name of the extension. Until the shell has answered (once per
+    /// extension) it is the built-in text ("JPG ファイル"), then the name arrives as a change.
+    /// </summary>
+    public string TypeText
+    {
+        get
+        {
+            if (!_typeRequested)
+            {
+                _typeRequested = true;
+                bool known = _services.TypeNames.TryGet(Extension, IsFolderLike, out string name);
+
+                // Assign before asking: the request can complete at once (another row's request for
+                // the same extension has just filled the cache) and must not be overwritten.
+                _typeText = name;
+                if (!known)
+                {
+                    _ = LoadTypeTextAsync();
+                }
+            }
+
+            return _typeText ?? string.Empty;
+        }
+    }
+
+    /// <summary>サイズ column: whole kilobytes as in Explorer; empty for a folder and while the size is not known.</summary>
+    public string SizeColumnText => IsFile && Length is { } l ? DetailsText.FileSizeKb(l) : string.Empty;
 
     public string ActionText => Kind switch
     {
@@ -342,6 +414,8 @@ public sealed partial class CardViewModel : ObservableObject
                 Length = e.Length;
                 ModifiedUtc = e.LastWriteTimeUtc;
                 OnPropertyChanged(nameof(SizeText));
+                OnPropertyChanged(nameof(SizeColumnText));
+                OnPropertyChanged(nameof(ModifiedText));
             }
         }
 
@@ -367,6 +441,23 @@ public sealed partial class CardViewModel : ObservableObject
         string? cover = await Task.Run(() => CoverFinder.Find(_services.FileSystem, Path, listing.Entries, hidden, ct), ct);
         _services.Covers.Set(Path, cover ?? string.Empty);
         return cover;
+    }
+
+    private async Task LoadIconAsync()
+    {
+        var icon = await _services.Icons.GetAsync(Path, IsFolderLike);
+        _icon = icon;
+        OnPropertyChanged(nameof(Icon));
+    }
+
+    private async Task LoadTypeTextAsync()
+    {
+        string name = await _services.TypeNames.GetAsync(Extension, IsFolderLike);
+        if (!string.Equals(name, _typeText, StringComparison.Ordinal))
+        {
+            _typeText = name;
+            OnPropertyChanged(nameof(TypeText));
+        }
     }
 
     private void ApplyListing(FolderListing listing)

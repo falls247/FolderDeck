@@ -105,8 +105,14 @@ public class CardOrderingTests
     [InlineData(CardSortMode.NameDesc, "name_desc")]
     [InlineData(CardSortMode.ModifiedAsc, "modified_asc")]
     [InlineData(CardSortMode.ModifiedDesc, "modified_desc")]
+    [InlineData(CardSortMode.SizeAsc, "size_asc")]
+    [InlineData(CardSortMode.SizeDesc, "size_desc")]
+    [InlineData(CardSortMode.TypeAsc, "type_asc")]
+    [InlineData(CardSortMode.TypeDesc, "type_desc")]
     public void SortModes_RoundTripSettingValues(CardSortMode mode, string value)
     {
+        Assert.Equal(9, CardSortModes.All.Count);
+        Assert.Contains(mode, CardSortModes.All);
         Assert.Equal(value, CardSortModes.ToSetting(mode));
         Assert.Equal(mode, CardSortModes.FromSetting(value));
         Assert.Equal(mode, CardSortModes.FromSetting(" " + value.ToUpperInvariant() + " "));
@@ -119,6 +125,51 @@ public class CardOrderingTests
     public void SortModes_UnknownIsManual(string? value)
     {
         Assert.Equal(CardSortMode.Manual, CardSortModes.FromSetting(value));
+        Assert.Null(CardSortModes.ColumnOf(CardSortMode.Manual));
+    }
+
+    private sealed record Sized(string Name, long? Size = null);
+
+    [Fact]
+    public void BySize_UnknownSizesGoLast_TiesAreByNameAscending()
+    {
+        Sized[] items = [new("dir2"), new("b.txt", 10), new("big.bin", 500), new("a.txt", 10), new("dir1"), new("zero", 0)];
+        var asc = CardOrdering.ComparerFor<Sized>(CardSortMode.SizeAsc, i => i.Name, _ => null, i => i.Size);
+        var desc = CardOrdering.ComparerFor<Sized>(CardSortMode.SizeDesc, i => i.Name, _ => null, i => i.Size);
+        Assert.Equal(["zero", "a.txt", "b.txt", "big.bin", "dir1", "dir2"], items.OrderBy(i => i, asc).Select(i => i.Name));
+        Assert.Equal(["big.bin", "a.txt", "b.txt", "zero", "dir1", "dir2"], items.OrderBy(i => i, desc).Select(i => i.Name));
+    }
+
+    [Fact]
+    public void ByType_ComparesExtensionsIgnoringCase_TiesAreByNameAscending()
+    {
+        string[] names = ["b.JPG", "notes.txt", "a.jpg", "folder", "c.Jpg", "z.bmp"];
+        static string Ext(string name) => Path.GetExtension(name);
+        var asc = CardOrdering.ComparerFor<string>(CardSortMode.TypeAsc, n => n, _ => null, typeOf: Ext);
+        var desc = CardOrdering.ComparerFor<string>(CardSortMode.TypeDesc, n => n, _ => null, typeOf: Ext);
+        Assert.Equal(["folder", "z.bmp", "a.jpg", "b.JPG", "c.Jpg", "notes.txt"], names.OrderBy(n => n, asc));
+        Assert.Equal(["notes.txt", "a.jpg", "b.JPG", "c.Jpg", "z.bmp", "folder"], names.OrderBy(n => n, desc));
+    }
+
+    [Theory]
+    // a new column starts ascending for name / type and descending for modified / size
+    [InlineData(CardSortMode.Manual, SortColumn.Name, CardSortMode.NameAsc)]
+    [InlineData(CardSortMode.Manual, SortColumn.Type, CardSortMode.TypeAsc)]
+    [InlineData(CardSortMode.Manual, SortColumn.Modified, CardSortMode.ModifiedDesc)]
+    [InlineData(CardSortMode.NameDesc, SortColumn.Size, CardSortMode.SizeDesc)]
+    // the same column flips
+    [InlineData(CardSortMode.NameAsc, SortColumn.Name, CardSortMode.NameDesc)]
+    [InlineData(CardSortMode.NameDesc, SortColumn.Name, CardSortMode.NameAsc)]
+    [InlineData(CardSortMode.ModifiedDesc, SortColumn.Modified, CardSortMode.ModifiedAsc)]
+    [InlineData(CardSortMode.TypeAsc, SortColumn.Type, CardSortMode.TypeDesc)]
+    [InlineData(CardSortMode.SizeDesc, SortColumn.Size, CardSortMode.SizeAsc)]
+    [InlineData(CardSortMode.SizeAsc, SortColumn.Size, CardSortMode.SizeDesc)]
+    public void Next_FlipsTheSameColumn_AndStartsANewOneInItsOwnDirection(CardSortMode current, SortColumn column, CardSortMode expected)
+    {
+        var next = CardSortModes.Next(current, column);
+        Assert.Equal(expected, next);
+        Assert.Equal(column, CardSortModes.ColumnOf(next));
+        Assert.Equal(expected.ToString().EndsWith("Desc", StringComparison.Ordinal), CardSortModes.IsDescending(next));
     }
 }
 
@@ -194,6 +245,8 @@ public class ExistenceProbeTests
         Assert.NotNull(folder.LastWriteTimeUtc);
         Assert.Equal(ExistState.File, file.State);
         Assert.NotNull(file.LastWriteTimeUtc);
+        Assert.Null(folder.Length); // a size is reported for files only
+        Assert.Equal(fs.GetEntry(@"C:\r\a.txt")!.Value.Length, file.Length);
         Assert.Equal(new ExistProbe(ExistState.Missing, null), missing);
     }
 

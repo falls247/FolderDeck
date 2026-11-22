@@ -16,6 +16,10 @@ public static class SortModeLabels
         CardSortMode.NameDesc => "名前 ↓",
         CardSortMode.ModifiedAsc => "更新日 ↑",
         CardSortMode.ModifiedDesc => "更新日 ↓",
+        CardSortMode.SizeAsc => "サイズ ↑",
+        CardSortMode.SizeDesc => "サイズ ↓",
+        CardSortMode.TypeAsc => "種類 ↑",
+        CardSortMode.TypeDesc => "種類 ↓",
         _ => "手動",
     };
 
@@ -26,6 +30,10 @@ public static class SortModeLabels
         CardSortMode.NameDesc => "名前（降順）",
         CardSortMode.ModifiedAsc => "更新日（昇順）",
         CardSortMode.ModifiedDesc => "更新日（降順）",
+        CardSortMode.SizeAsc => "サイズ（昇順）",
+        CardSortMode.SizeDesc => "サイズ（降順）",
+        CardSortMode.TypeAsc => "種類（昇順）",
+        CardSortMode.TypeDesc => "種類（降順）",
         _ => "手動（ドラッグで並べた順）",
     };
 }

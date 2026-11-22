@@ -41,13 +41,26 @@ public static class CardOrdering
         return result;
     }
 
-    /// <summary>The comparer of a sort mode, or null for <see cref="CardSortMode.Manual"/> (keep the base order).</summary>
-    public static IComparer<T>? ComparerFor<T>(CardSortMode mode, Func<T, string> nameOf, Func<T, DateTime?> modifiedOf) => mode switch
+    /// <summary>
+    /// The comparer of a sort mode, or null for <see cref="CardSortMode.Manual"/> (keep the base order).
+    /// Without <paramref name="sizeOf"/> / <paramref name="typeOf"/> every item counts as having no
+    /// size / no extension, so those modes fall back to the name.
+    /// </summary>
+    public static IComparer<T>? ComparerFor<T>(
+        CardSortMode mode,
+        Func<T, string> nameOf,
+        Func<T, DateTime?> modifiedOf,
+        Func<T, long?>? sizeOf = null,
+        Func<T, string>? typeOf = null) => mode switch
     {
         CardSortMode.NameAsc => ByName(nameOf, descending: false),
         CardSortMode.NameDesc => ByName(nameOf, descending: true),
         CardSortMode.ModifiedAsc => ByModified(modifiedOf, descending: false),
         CardSortMode.ModifiedDesc => ByModified(modifiedOf, descending: true),
+        CardSortMode.SizeAsc => BySize(sizeOf ?? (_ => null), nameOf, descending: false),
+        CardSortMode.SizeDesc => BySize(sizeOf ?? (_ => null), nameOf, descending: true),
+        CardSortMode.TypeAsc => ByType(typeOf ?? (_ => string.Empty), nameOf, descending: false),
+        CardSortMode.TypeDesc => ByType(typeOf ?? (_ => string.Empty), nameOf, descending: true),
         _ => null,
     };
 
@@ -78,6 +91,42 @@ public static class CardOrdering
         int c = x.Value.CompareTo(y.Value);
         return descending ? -c : c;
     });
+
+    /// <summary>
+    /// By size; items without one (null: folders, files not read yet) go last in both directions.
+    /// Equal sizes are in natural name order, ascending in both directions.
+    /// </summary>
+    public static IComparer<T> BySize<T>(Func<T, long?> sizeOf, Func<T, string> nameOf, bool descending)
+    {
+        var byName = ByName(nameOf, descending: false);
+        return Comparer<T>.Create((a, b) =>
+        {
+            long? x = sizeOf(a);
+            long? y = sizeOf(b);
+            if (x is null || y is null)
+            {
+                return x is null ? (y is null ? byName.Compare(a, b) : 1) : -1;
+            }
+
+            int c = x.Value.CompareTo(y.Value);
+            return c == 0 ? byName.Compare(a, b) : descending ? -c : c;
+        });
+    }
+
+    /// <summary>
+    /// By type, whose key is the extension that <paramref name="typeOf"/> returns, compared without
+    /// regard to case (".JPG" and ".jpg" are one type; no extension sorts first when ascending).
+    /// Items of one type are in natural name order, ascending in both directions.
+    /// </summary>
+    public static IComparer<T> ByType<T>(Func<T, string> typeOf, Func<T, string> nameOf, bool descending)
+    {
+        var byName = ByName(nameOf, descending: false);
+        return Comparer<T>.Create((a, b) =>
+        {
+            int c = string.Compare(typeOf(a), typeOf(b), StringComparison.OrdinalIgnoreCase);
+            return c == 0 ? byName.Compare(a, b) : descending ? -c : c;
+        });
+    }
 
     /// <summary>Folders before files, then <paramref name="inner"/> inside each group (used inside folders).</summary>
     public static IComparer<T> FoldersFirst<T>(Func<T, bool> isFolder, IComparer<T> inner) => Comparer<T>.Create((a, b) =>

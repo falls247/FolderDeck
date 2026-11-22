@@ -5,43 +5,62 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
-using FolderDeck.Core.Input;
-using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
 using FolderDeck.ViewModels;
 
 namespace FolderDeck.Views;
 
-/// <summary>Where cards report pointer and click events (the main window).</summary>
+/// <summary>
+/// Where the views of a tab's items (cards, rows of the details list) report pointer and click events: the main window.
+/// Hovering is reported with the element, because the cascade hangs on it; everything else is
+/// reported with the item, so that any view of it can raise it.
+/// </summary>
 public interface ICardHost
 {
     void CardMouseEnter(CardView card);
 
     void CardMouseLeave(CardView card);
 
-    void CardActivate(CardView card);
-
-    void CardContextMenu(CardView card);
-
-    void CardRemove(CardView card);
-
-    /// <summary>The 📌 of a pinned card was clicked: unpins it.</summary>
-    void CardUnpin(CardView card);
+    /// <summary>
+    /// The pointer entered the name of an item shown as a row. <paramref name="nameCell"/> is both
+    /// what is hovered and what the folder's list is placed beside.
+    /// </summary>
+    void RowMouseEnter(FrameworkElement nameCell, CardViewModel vm);
 
     /// <summary>
-    /// The card was left-clicked with the right button held and the right button was then released:
+    /// The pointer moved on that name with no button held (and no press on the row since it came
+    /// there): after a list was closed under a resting pointer, a real move asks for it again.
+    /// </summary>
+    void RowMouseMove(FrameworkElement nameCell, CardViewModel vm);
+
+    /// <summary>The pointer left the name, or the element now shows another item.</summary>
+    void RowMouseLeave(FrameworkElement nameCell);
+
+    /// <summary>The item was clicked (decided on the release), with <paramref name="modifiers"/> held.</summary>
+    void ItemClick(CardViewModel vm, FrameworkElement element, ModifierKeys modifiers);
+
+    /// <summary>The item was right-clicked: its menu opens on <paramref name="element"/>.</summary>
+    void ItemContextMenu(CardViewModel vm, FrameworkElement element);
+
+    void ItemRemove(CardViewModel vm);
+
+    /// <summary>The 📌 of a pinned item was clicked: unpins it.</summary>
+    void ItemUnpin(CardViewModel vm);
+
+    /// <summary>
+    /// The item was left-clicked with the right button held and the right button was then released:
     /// shows it in Explorer (instead of opening it or showing its menu).
     /// </summary>
-    void CardShowInExplorer(CardView card);
+    void ItemShowInExplorer(CardViewModel vm);
 
     /// <summary>
-    /// True when the card may be dragged at all (to other apps; at the top level also to a new
-    /// position). Missing / not responding cards cannot: their press stays a click.
+    /// True when the item may be dragged at all (to other apps; at the top level also to a new
+    /// position). Missing / not responding items cannot: their press stays a click.
     /// </summary>
-    bool CanDragCard(CardView card);
+    bool CanDragItem(CardViewModel vm);
 
     /// <summary>The pointer moved past the drag threshold with the button held: runs the drag (blocks until it ends).</summary>
-    void CardDrag(CardView card);
+    void ItemDrag(CardViewModel vm);
 }
 
 public partial class CardView : UserControl
@@ -60,25 +79,24 @@ public partial class CardView : UserControl
     private CardViewModel? _vm;
     private CardViewModel? _realized;
     private CardGrid? _grid;
-    private bool _pressed;
-    private bool _dragCandidate;
-    private Point _pressedAt;
     private bool _hot;
 
     /// <summary>
-    /// Right button held + left click on the card: it is shown in Explorer when the right button
-    /// is released. (Rows of the overlay do the same for themselves, in their list.)
+    /// Clicks, the drag threshold and "right button held + left click" (the card is then shown in
+    /// Explorer when the right button is released). Rows of the overlay do all of that for
+    /// themselves, in their list: a press on them never drags the card.
     /// </summary>
-    private readonly RockerGesture<CardViewModel> _rocker = new();
+    private readonly ItemPointerTracker _pointer;
 
     public CardView()
     {
         InitializeComponent();
         _hoverShadow.Freeze();
+        _pointer = new ItemPointerTracker(this, () => _vm, IsOnOverlay);
 
         // Tunnelling, handled or not: a right press anywhere on the card (also on an overlay row,
         // which handles it) starts afresh.
-        AddHandler(PreviewMouseRightButtonDownEvent, new MouseButtonEventHandler((_, _) => _rocker.RightDown()), handledEventsToo: true);
+        AddHandler(PreviewMouseRightButtonDownEvent, new MouseButtonEventHandler((_, _) => _pointer.RightDown()), handledEventsToo: true);
         DataContextChanged += OnDataContextChanged;
         Loaded += (_, _) => Realize();
         Unloaded += (_, _) => Unrealize();
@@ -109,129 +127,57 @@ public partial class CardView : UserControl
     protected override void OnMouseLeave(MouseEventArgs e)
     {
         base.OnMouseLeave(e);
-        TryStartDrag(e); // left the card with the button held: that is a drag too
-        _pressed = false;
-        _dragCandidate = false;
-        _rocker.Cancel();
+        _pointer.Leave(e); // left the card with the button held: that is a drag too
         UpdateHot();
         Host?.CardMouseLeave(this);
     }
 
+    // The press is not marked handled here (only the gesture's is): see ItemPointerTracker.
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
-
-        // Right button held + left click: the card is shown in Explorer once the right button is
-        // released. This press is neither a click nor the start of a drag. (A press on a row of
-        // the overlay never gets here: the list handles its own. A press on × or 📌 is theirs.)
-        bool rightHeld = e.RightButton == MouseButtonState.Pressed;
-        bool onButton = FindAncestor<System.Windows.Controls.Primitives.ButtonBase>(e.OriginalSource as DependencyObject) is not null;
-        if (_rocker.LeftDown(rightHeld, e.Handled || onButton ? null : _vm))
-        {
-            _pressed = false;
-            _dragCandidate = false;
-            e.Handled = true;
-            return;
-        }
-
-        if (rightHeld)
-        {
-            _pressed = false; // with the right button down a press is never an ordinary click
-            _dragCandidate = false;
-            return;
-        }
-
-        // A double click must not run twice (§6.8): only the first press counts.
-        _pressed = e.ClickCount == 1;
-        _pressedAt = e.GetPosition(this);
-        _dragCandidate = _pressed && !e.Handled && !IsOnOverlayOrButton(e.OriginalSource as DependencyObject);
+        _pointer.LeftDown(e);
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        TryStartDrag(e);
+        _pointer.Move(e);
     }
 
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
-        _dragCandidate = false;
-        if (_rocker.LeftUp())
-        {
-            _pressed = false; // the left click of the gesture: waits for the right button
-            e.Handled = true;
-            return;
-        }
-
-        if (_pressed && IsMouseOver)
-        {
-            _pressed = false;
-            e.Handled = true;
-            Host?.CardActivate(this);
-        }
+        _pointer.LeftUp(e);
     }
 
     protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseRightButtonUp(e);
-        e.Handled = true;
-        if (_rocker.RightUp() is { } armed)
-        {
-            if (ReferenceEquals(armed, _vm))
-            {
-                Host?.CardShowInExplorer(this);
-            }
-
-            return;
-        }
-
-        Host?.CardContextMenu(this);
+        _pointer.RightUp(e);
     }
 
     private void OnCloseClick(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
-        Host?.CardRemove(this);
+        if (_vm is { } vm)
+        {
+            Host?.ItemRemove(vm);
+        }
     }
 
     private void OnPinClick(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
-        Host?.CardUnpin(this);
+        if (_vm is { } vm)
+        {
+            Host?.ItemUnpin(vm);
+        }
     }
 
-    /// <summary>
-    /// Starts a drag (to other apps; at the top level also to a new position) once the pointer
-    /// moved past the system drag distance with the button held.
-    /// </summary>
-    private void TryStartDrag(MouseEventArgs e)
-    {
-        if (!_dragCandidate || !_pressed || e.LeftButton != MouseButtonState.Pressed)
-        {
-            return;
-        }
-
-        Vector moved = e.GetPosition(this) - _pressedAt;
-        if (!FileDrag.IsDragGesture(moved.X, moved.Y, SystemParameters.MinimumHorizontalDragDistance, SystemParameters.MinimumVerticalDragDistance))
-        {
-            return;
-        }
-
-        _dragCandidate = false;
-        if (Host is not { } host || !host.CanDragCard(this))
-        {
-            return; // a missing card: the press stays a click (which does nothing for it)
-        }
-
-        _pressed = false; // a drag never opens the card on mouse up
-        host.CardDrag(this);
-    }
-
-    /// <summary>Presses on the overlay's rows or on a button (×, 📌) never start a card drag.</summary>
-    private bool IsOnOverlayOrButton(DependencyObject? source) =>
-        (CurrentOverlay is not null && FindAncestor<OverlayView>(source) is not null)
-        || FindAncestor<System.Windows.Controls.Primitives.ButtonBase>(source) is not null;
+    /// <summary>A press on the rows of the overlay belongs to their list.</summary>
+    private bool IsOnOverlay(DependencyObject? source) =>
+        CurrentOverlay is not null && FindAncestor<OverlayView>(source) is not null;
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
@@ -242,7 +188,7 @@ public partial class CardView : UserControl
 
         Unrealize();
         OverlayHost.Content = null;
-        _rocker.Cancel();
+        _pointer.ItemChanged();
         _vm = e.NewValue as CardViewModel;
         if (_vm is not null)
         {
@@ -303,6 +249,7 @@ public partial class CardView : UserControl
                 UpdateHot();
                 break;
             case nameof(CardViewModel.IsDragged):
+            case nameof(CardViewModel.IsCut):
                 UpdateOpacity();
                 break;
         }
@@ -356,7 +303,8 @@ public partial class CardView : UserControl
     private void UpdateOpacity()
     {
         var vm = _vm;
-        Root.Opacity = vm?.IsDragged == true ? 0.4 : vm?.IsDisabled == true ? 0.6 : 1.0;
+        // Being dragged wins over a pending cut (dimmed like Explorer's), which wins over missing.
+        Root.Opacity = vm?.IsDragged == true ? 0.4 : vm?.IsCut == true ? 0.5 : vm?.IsDisabled == true ? 0.6 : 1.0;
     }
 
     private void UpdateHot()

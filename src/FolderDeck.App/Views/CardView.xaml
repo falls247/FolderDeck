@@ -44,7 +44,18 @@
         <Border x:Name="FakeShadow" CornerRadius="10" Background="{DynamicResource Brush.CardShadow}" Margin="0,1,0,-1" />
 
         <Border x:Name="CardBorder" CornerRadius="10" BorderThickness="1"
-                BorderBrush="{DynamicResource Brush.Border}" Background="{DynamicResource Brush.Surface2}">
+                BorderBrush="{DynamicResource Brush.Border}">
+            <Border.Style>
+                <Style TargetType="{x:Type Border}">
+                    <Setter Property="Background" Value="{DynamicResource Brush.Surface2}" />
+                    <Style.Triggers>
+                        <!-- selected: the footer takes the accent tint (the frame is SelectionFrame below) -->
+                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Brush.AccentSoft}" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
             <Border.RenderTransform>
                 <TranslateTransform x:Name="Lift" Y="0" />
             </Border.RenderTransform>
@@ -161,6 +172,25 @@
                     </Grid>
                 </StackPanel>
             </Grid>
+        </Border>
+
+        <!--
+          Selection frame: 2 px of accent over the card's own 1 px border, drawn on top so that the
+          layout does not move; it moves with the card's lift and lets every press through.
+        -->
+        <Border x:Name="SelectionFrame" CornerRadius="10" BorderThickness="2" IsHitTestVisible="False"
+                RenderTransform="{Binding RenderTransform, ElementName=CardBorder}">
+            <Border.Style>
+                <Style TargetType="{x:Type Border}">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Accent}" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
         </Border>
 
         <!-- × (§6.7) -->

@@ -5,6 +5,7 @@ using FolderDeck.Core.Listing;
 using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
 using FolderDeck.Core.Ranking;
+using FolderDeck.Core.Selection;
 using FolderDeck.Core.Stores;
 using FolderDeck.Core.Text;
 using FolderDeck.Services;
@@ -22,8 +23,10 @@ public enum LoadOutcome
 
 /// <summary>
 /// One tab (§5.2, §10): its location, its cards, and how to load them. 最近の履歴 and よく使う項目
-/// are fixed tabs with a top level; a folder tab (<see cref="TabKind.Folder"/>) is opened from the
-/// 登録フォルダ sidebar, always shows a folder and can be closed and moved.
+/// are fixed tabs with a top level (one instance each for the whole session, on the tab strip only
+/// while <see cref="IsOpen"/>); a folder tab (<see cref="TabKind.Folder"/>) is opened from the
+/// 登録フォルダ sidebar and always shows a folder. The placeholder (<see cref="TabKind.None"/>) is
+/// what is selected while no tab is open: it has no title, no crumb, no cards and no commands.
 /// </summary>
 public sealed partial class TabViewModel : ObservableObject
 {
@@ -41,6 +44,15 @@ public sealed partial class TabViewModel : ObservableObject
     /// <summary>The base order with the sort mode applied, before the filter (<see cref="Cards"/> is what the filter leaves).</summary>
     private IReadOnlyList<CardViewModel> _orderedCards = [];
 
+    /// <summary>The paths of the pending cut of this app (dimmed), or null; the same set on every tab.</summary>
+    private IReadOnlySet<string>? _cutPaths;
+
+    /// <summary>
+    /// The location whose last load ended well (Ok, no banner); null after a change of location and
+    /// while nothing was loaded there yet. Paste goes only into a folder that is really on screen.
+    /// </summary>
+    private NavLocation? _loadedLocation;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsTop), nameof(ShowClearHistory), nameof(ShowFilter), nameof(CanGoUp), nameof(Title), nameof(ToolTipText))]
     private NavLocation _location;
@@ -52,6 +64,10 @@ public sealed partial class TabViewModel : ObservableObject
     /// <summary>The tab is the one shown (tab strip highlight).</summary>
     [ObservableProperty]
     private bool _isSelected;
+
+    /// <summary>The tab is on the tab strip. Set by <c>MainViewModel</c> together with its <c>Tabs</c>.</summary>
+    [ObservableProperty]
+    private bool _isOpen;
 
     [ObservableProperty]
     private bool _isLoading;
@@ -74,6 +90,10 @@ public sealed partial class TabViewModel : ObservableObject
     [ObservableProperty]
     private string? _noticeText;
 
+    /// <summary>「3 個を選択」 while items are selected, else null (toolbar, beside the count).</summary>
+    [ObservableProperty]
+    private string? _selectionText;
+
     /// <summary>This tab's sort mode (top level and every folder opened in it). Folder tabs share one.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SortModeText))]
@@ -84,15 +104,22 @@ public sealed partial class TabViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(FilterText))]
     private ItemFilter _filter;
 
-    /// <summary>A fixed tab (最近の履歴 / よく使う項目), or a folder tab at <paramref name="location"/>.</summary>
+    /// <summary>
+    /// A fixed tab (最近の履歴 / よく使う項目), a folder tab at <paramref name="location"/>, or the
+    /// placeholder (<see cref="TabKind.None"/>: no saved sort mode or filter).
+    /// </summary>
     public TabViewModel(AppServices services, TabKind kind, NavLocation? location = null)
     {
         _services = services;
         Kind = kind;
         _location = location ?? NavLocation.Top(kind);
-        var settings = services.Stores.Settings.Current;
-        _sortMode = settings.SortModeOf(TabKinds.ToSetting(kind));
-        _filter = kind == TabKind.Folder ? ItemFilter.All : settings.FilterOf(TabKinds.ToSetting(kind));
+        if (kind != TabKind.None)
+        {
+            var settings = services.Stores.Settings.Current;
+            _sortMode = settings.SortModeOf(TabKinds.ToSetting(kind));
+            _filter = kind == TabKind.Folder ? ItemFilter.All : settings.FilterOf(TabKinds.ToSetting(kind));
+        }
+
         _slowTimer.Tick += (_, _) =>
         {
             _slowTimer.Stop();
@@ -101,39 +128,105 @@ public sealed partial class TabViewModel : ObservableObject
                 IsSlow = true;
             }
         };
+        Selection.Changed += () =>
+        {
+            ApplyItemFlags();
+            SelectionText = Selection.Count > 0 ? $"{Selection.Count:N0} 個を選択" : null;
+        };
         UpdateBreadcrumbs();
+    }
+
+    /// <summary>
+    /// The selected items of the shown list, by path (cards are recreated on every load). Only
+    /// enabled cards of <see cref="Cards"/> can be in it: <see cref="Show"/> prunes the rest. Cleared
+    /// when the tab moves to another location.
+    /// </summary>
+    public SelectionModel Selection { get; } = new();
+
+    /// <summary>
+    /// The paths of this app's pending cut (dimmed cards), or null. <c>MainViewModel</c> sets the same
+    /// set on every tab; the cards follow at once.
+    /// </summary>
+    public IReadOnlySet<string>? CutPaths
+    {
+        get => _cutPaths;
+        set
+        {
+            _cutPaths = value;
+            ApplyItemFlags();
+        }
+    }
+
+    /// <summary>The paths of the cards that can be selected, in display order (enabled cards of <see cref="Cards"/>).</summary>
+    public IReadOnlyList<string> SelectableKeys() =>
+        Cards.Where(c => !c.IsDisabled).Select(c => c.Path).ToList();
+
+    /// <summary>The selected cards in display order.</summary>
+    public IReadOnlyList<CardViewModel> SelectedCards() =>
+        Selection.Count == 0 ? [] : Cards.Where(c => Selection.Contains(c.Path)).ToList();
+
+    /// <summary>
+    /// The folder this tab shows, when it is a real folder (inside a folder tab, or a folder opened
+    /// inside 最近の履歴 / よく使う項目); null on the top lists and the placeholder.
+    /// </summary>
+    public string? FolderTargetPath => IsPlaceholder || Location.IsTop ? null : CurrentFolderPath;
+
+    /// <summary>
+    /// <see cref="FolderTargetPath"/> only while that folder is what is on screen: its last load
+    /// ended well, no load is running and nothing marked the tab stale. Where a paste without a
+    /// folder item goes (Ctrl+V, the menu of the blank area).
+    /// </summary>
+    public string? TransferTargetPath =>
+        _loadedLocation is { } loaded && loaded == Location && !IsLoading && !IsStale ? FolderTargetPath : null;
+
+    /// <summary>Mirrors the selection and the cut onto the shown cards (<c>IsSelected</c> / <c>IsCut</c>).</summary>
+    private void ApplyItemFlags()
+    {
+        var cut = _cutPaths;
+        foreach (var card in Cards)
+        {
+            card.IsSelected = Selection.Contains(card.Path);
+            card.IsCut = cut is not null && cut.Contains(card.Path);
+        }
     }
 
     public TabKind Kind { get; }
 
     public bool IsFolderTab => Kind == TabKind.Folder;
 
+    /// <summary>The stand-in that is selected while no tab is open (<see cref="TabKind.None"/>).</summary>
+    public bool IsPlaceholder => Kind == TabKind.None;
+
+    /// <summary>A fixed tab: 最近の履歴 or よく使う項目 (a top level, a filter, a manual order).</summary>
+    private bool IsFixedTab => Kind is TabKind.Recent or TabKind.Frequent;
+
     /// <summary>Tab strip text: the fixed tab's name, or the name of the folder a folder tab shows.</summary>
     public string Title => IsFolderTab
         ? (CurrentFolderPath is { } path ? PathTools.DisplayName(path) : "（不明）")
         : TabKinds.Title(Kind);
 
-    public string? ToolTipText => IsFolderTab ? CurrentFolderPath : null;
+    /// <summary>The folder a tab shows, whatever its kind (null at a top level: the title says it all).</summary>
+    public string? ToolTipText => CurrentFolderPath;
 
     public bool IsTop => Location.IsTop;
 
     public bool ShowClearHistory => Kind == TabKind.Recent && IsTop;
 
     /// <summary>The filter is offered where it applies: the top level of 最近の履歴 / よく使う項目.</summary>
-    public bool ShowFilter => !IsFolderTab && IsTop;
+    public bool ShowFilter => IsFixedTab && IsTop;
 
     public string FilterText => FilterLabels.Short(Filter);
 
     public string SortModeText => SortModeLabels.Short(SortMode);
 
     /// <summary>「1つ上へ」: inside a folder of a fixed tab, or below the root of a folder tab.</summary>
-    public bool CanGoUp => IsFolderTab ? Location.Rel.Length > 0 : !IsTop;
+    public bool CanGoUp => IsFolderTab ? Location.Rel.Length > 0 : IsFixedTab && !IsTop;
 
     /// <summary>Text of the button on the error banner (a folder tab has no list to go back to).</summary>
-    public string BackText => IsFolderTab ? "タブを閉じる" : TabKinds.Title(Kind) + "の一覧に戻る";
+    public string BackText => IsFolderTab ? "タブを閉じる" : IsFixedTab ? TabKinds.Title(Kind) + "の一覧に戻る" : string.Empty;
 
     /// <summary>Cards can be dragged to a new position: top level only, not while loading.</summary>
-    public bool CanReorder => IsTop && _baseIsTop && !IsLoading;
+    public bool CanReorder => IsFixedTab && IsTop && _baseIsTop && !IsLoading;
 
     /// <summary>The tab's data changed while hidden: reload when shown.</summary>
     public bool IsStale { get; set; } = true;
@@ -145,6 +238,23 @@ public sealed partial class TabViewModel : ObservableObject
 
     /// <summary>Scroll position when the tab was left for another one (a folder tab comes back to it).</summary>
     public double SavedScrollOffset { get; set; }
+
+    /// <summary>
+    /// Forgets every remembered scroll position (the saved one and those of the back / forward
+    /// history): they are offsets of the view that showed the items, and mean nothing in another
+    /// view (cards ↔ details list).
+    /// </summary>
+    public void ResetScrollOffsets()
+    {
+        SavedScrollOffset = 0;
+        foreach (var stack in new[] { BackStack, ForwardStack })
+        {
+            for (int i = 0; i < stack.Count; i++)
+            {
+                stack[i] = stack[i] with { ScrollOffset = 0 };
+            }
+        }
+    }
 
     /// <summary>Absolute path of the current location, or null at the top level.</summary>
     public string? CurrentFolderPath => ResolvePath(Location);
@@ -167,6 +277,26 @@ public sealed partial class TabViewModel : ObservableObject
         _loadCts?.Cancel();
     }
 
+    /// <summary>
+    /// A fixed tab was closed: it goes back to its top level and forgets its history, cards and
+    /// scroll position, so opening it again starts fresh (the instance lives on for the session).
+    /// The caller cancels a running load first.
+    /// </summary>
+    public void ResetToTop()
+    {
+        Location = NavLocation.Top(Kind);
+        BackStack.Clear();
+        ForwardStack.Clear();
+        ClearCards();
+        _baseIsTop = true;
+        EmptyText = null;
+        BannerText = null;
+        NoticeText = null;
+        CountText = string.Empty;
+        SavedScrollOffset = 0;
+        IsStale = true;
+    }
+
     public async Task<LoadOutcome> LoadAsync()
     {
         _loadCts?.Cancel();
@@ -183,7 +313,14 @@ public sealed partial class TabViewModel : ObservableObject
         IsStale = false;
         try
         {
-            LoadOutcome outcome = Location.IsTop ? await LoadTopAsync(ct) : await LoadFolderAsync(ct);
+            var location = Location;
+            LoadOutcome outcome = location.IsTop ? await LoadTopAsync(ct) : await LoadFolderAsync(ct);
+            if (ReferenceEquals(_loadCts, cts))
+            {
+                // A paste target only once its folder is really listed (not an error banner, not an older load).
+                _loadedLocation = outcome == LoadOutcome.Ok && BannerText is null && location == Location ? location : null;
+            }
+
             return outcome;
         }
         catch (OperationCanceledException)
@@ -267,8 +404,17 @@ public sealed partial class TabViewModel : ObservableObject
     {
         TabKind.Recent => LoadRecentAsync(ct),
         TabKind.Frequent => LoadFrequentAsync(ct),
+        TabKind.None => LoadPlaceholderAsync(),
         _ => LoadNothingAsync(),
     };
+
+    /// <summary>The placeholder has nothing to list and nothing to say: no cards, no texts, no error.</summary>
+    private Task<LoadOutcome> LoadPlaceholderAsync()
+    {
+        NoticeText = null;
+        ClearCards();
+        return Task.FromResult(LoadOutcome.Ok);
+    }
 
     /// <summary>A folder tab without a folder (never created that way): an error banner, not a crash.</summary>
     private Task<LoadOutcome> LoadNothingAsync()
@@ -312,7 +458,7 @@ public sealed partial class TabViewModel : ObservableObject
 
         var now = _services.Clock.UtcNow;
         var pins = PinSet();
-        var cards = kept.Select(k => MakeTopCard(k.Item.Path, KindOf(k.Probe.State, k.Item.Kind), k.Item.LastUsed, pins.Contains(k.Item.Path), k.Probe.LastWriteTimeUtc,
+        var cards = kept.Select(k => MakeTopCard(k.Item.Path, KindOf(k.Probe.State, k.Item.Kind), k.Item.LastUsed, pins.Contains(k.Item.Path), k.Probe,
             sub: $"{Formatting.RelativeTime(k.Item.LastUsed, now)} · {PathTools.ParentOf(k.Item.Path)}")).ToList();
 
         ShowCards(ManualOrder.Apply(cards, _services.Stores.CardOrders.Get(CardOrderList.Recent), c => c.Path), isTop: true);
@@ -337,14 +483,18 @@ public sealed partial class TabViewModel : ObservableObject
         var cards = new List<CardViewModel>(pinned.Count + ranked.Count);
         foreach (var (entry, probe) in pinned.Concat(ranked))
         {
-            cards.Add(MakeTopCard(entry.Path, KindOf(probe.State, entry.Kind), entry.LastUsed, entry.IsPinned, probe.LastWriteTimeUtc, sub: PathTools.ParentOf(entry.Path)));
+            cards.Add(MakeTopCard(entry.Path, KindOf(probe.State, entry.Kind), entry.LastUsed, entry.IsPinned, probe, sub: PathTools.ParentOf(entry.Path)));
         }
 
         ShowCards(ManualOrder.Apply(cards, _services.Stores.CardOrders.Get(CardOrderList.Frequent), c => c.Path), isTop: true);
         return LoadOutcome.Ok;
     }
 
-    private CardViewModel MakeTopCard(string path, CardKind kind, DateTimeOffset? lastUsed, bool pinned, DateTime? modifiedUtc, string sub)
+    /// <summary>
+    /// A card of a top level. The probe that found the item also gives what the sort modes and the
+    /// details list show (modified time; the size of a file), so they need no second look at the disk.
+    /// </summary>
+    private CardViewModel MakeTopCard(string path, CardKind kind, DateTimeOffset? lastUsed, bool pinned, ExistProbe probe, string sub)
     {
         string normalized = PathTools.NormalizeOrSelf(path);
         return new CardViewModel(_services, normalized, kind, kind == CardKind.Folder ? new NavLocation(Kind, normalized, string.Empty) : null, ItemContext.TopCard)
@@ -353,7 +503,8 @@ public sealed partial class TabViewModel : ObservableObject
             SubText = sub,
             LastUsed = lastUsed,
             IsPinned = pinned,
-            ModifiedUtc = modifiedUtc ?? default,
+            ModifiedUtc = probe.LastWriteTimeUtc ?? default,
+            Length = kind == CardKind.File ? probe.Length : null,
         };
     }
 
@@ -484,6 +635,7 @@ public sealed partial class TabViewModel : ObservableObject
         _baseCards = [];
         _orderedCards = [];
         Cards = [];
+        Selection.Clear();
     }
 
     /// <summary>
@@ -498,20 +650,28 @@ public sealed partial class TabViewModel : ObservableObject
     }
 
     /// <summary>The filter applies to what is loaded: the top level of 最近の履歴 / よく使う項目.</summary>
-    private bool FilterApplies => !IsFolderTab && _baseIsTop && Filter != ItemFilter.All;
+    private bool FilterApplies => IsFixedTab && _baseIsTop && Filter != ItemFilter.All;
 
     /// <summary>Shows <paramref name="ordered"/> (every card, sorted) through the filter.</summary>
     private void Show(IReadOnlyList<CardViewModel> ordered)
     {
         _orderedCards = ordered;
         Cards = FilterApplies ? ItemFilters.Apply(ordered, Filter, c => c.IsFolderLike) : ordered;
+
+        // The selection keeps the items still shown (a reload, a re-sort, the filter); new card
+        // instances get their flags here, since a prune that removes nothing raises nothing.
+        Selection.Prune(SelectableKeys());
+        ApplyItemFlags();
         UpdateTopSummary();
     }
 
-    /// <summary>Count and empty text of a top level (they depend on the filter); a folder sets its own.</summary>
+    /// <summary>
+    /// Count and empty text of a top level (they depend on the filter); a folder sets its own and
+    /// the placeholder has neither.
+    /// </summary>
     private void UpdateTopSummary()
     {
-        if (IsFolderTab || !_baseIsTop)
+        if (!IsFixedTab || !_baseIsTop)
         {
             return;
         }
@@ -542,7 +702,13 @@ public sealed partial class TabViewModel : ObservableObject
 
     private IReadOnlyList<CardViewModel> Ordered(IReadOnlyList<CardViewModel> baseOrder)
     {
-        var comparer = CardOrdering.ComparerFor<CardViewModel>(SortMode, c => c.Name, c => CardOrdering.KnownTime(c.ModifiedUtc));
+        // A folder has no size, and 種類 goes by the extension (a folder has none): see CardOrdering.
+        var comparer = CardOrdering.ComparerFor<CardViewModel>(
+            SortMode,
+            c => c.Name,
+            c => CardOrdering.KnownTime(c.ModifiedUtc),
+            c => c.IsFolderLike ? null : c.Length,
+            c => c.Extension);
         if (comparer is null || baseOrder.Count < 2)
         {
             return baseOrder;
@@ -582,9 +748,9 @@ public sealed partial class TabViewModel : ObservableObject
 
     public void UpdateBreadcrumbs()
     {
-        // A fixed tab starts at its list; a folder tab at its root folder.
+        // A fixed tab starts at its list; a folder tab at its root folder; the placeholder has no crumb.
         var items = new List<(string Text, NavLocation Target, string? Tip)>();
-        if (!IsFolderTab)
+        if (IsFixedTab)
         {
             items.Add((TabKinds.Title(Kind), NavLocation.Top(Kind), null));
         }
@@ -630,5 +796,10 @@ public sealed partial class TabViewModel : ObservableObject
         Breadcrumbs = crumbs.Select((c, i) => new BreadcrumbItem(c.Text, c.Item2, c.Tip, i == crumbs.Count - 1)).ToList();
     }
 
-    partial void OnLocationChanged(NavLocation value) => UpdateBreadcrumbs();
+    partial void OnLocationChanged(NavLocation value)
+    {
+        _loadedLocation = null; // nothing of the new location is listed yet
+        Selection.Clear();
+        UpdateBreadcrumbs();
+    }
 }

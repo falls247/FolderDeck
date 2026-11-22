@@ -1,0 +1,177 @@
+<UserControl x:Class="FolderDeck.Views.DetailsListView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:FolderDeck.Views"
+             Focusable="False">
+    <!--
+      The details view of a tab's items: a header and one fixed-height row per item, virtualized by a
+      VirtualizingStackPanel (recycling, pixel scrolling), so thousands of items stay cheap.
+      A plain ItemsControl, not a ListView / ListBox: their built-in selection and mouse capture
+      would fight the app's own pointer handling (ItemPointerTracker reads clicks without capture).
+      The header and the rows share one set of column widths (Metrics); the paddings around the rows
+      and the scroll bar are mirrored in the header's margin (see the constants in the code-behind).
+    -->
+    <UserControl.Resources>
+        <!-- one column title: a click sorts by the column (again: the other direction) -->
+        <Style x:Key="HeaderCell" TargetType="{x:Type Button}">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource Brush.Muted}" />
+            <Setter Property="FontFamily" Value="{StaticResource Font.UI}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="ToolTip" Value="クリックでこの列で並べ替え（もう一度クリックで逆順）" />
+            <Setter Property="ToolTipService.InitialShowDelay" Value="900" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Surface3}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ascending / descending mark of the sorted column (the glyph is set in code) -->
+        <Style x:Key="HeaderArrow" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontFamily" Value="{StaticResource Font.Icons}" />
+            <Setter Property="FontSize" Value="8" />
+            <Setter Property="Margin" Value="5,1,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Visibility" Value="Collapsed" />
+        </Style>
+
+        <!--
+          Grip on the left edge of a resizable column (the columns are anchored to the right, so the
+          left edge is the one that follows the pointer). It draws the divider between two titles.
+        -->
+        <Style x:Key="HeaderGrip" TargetType="{x:Type Thumb}">
+            <Setter Property="Width" Value="9" />
+            <Setter Property="Margin" Value="-4,0,0,0" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="Cursor" Value="SizeWE" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="ToolTip" Value="ドラッグで列の幅を変更" />
+            <Setter Property="ToolTipService.InitialShowDelay" Value="900" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Thumb}">
+                        <Border Background="Transparent">
+                            <Rectangle x:Name="Line" Width="1" Margin="0,6" HorizontalAlignment="Center" Fill="{DynamicResource Brush.BorderStrong}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Line" Property="Fill" Value="{DynamicResource Brush.Accent}" />
+                                <Setter TargetName="Line" Property="Width" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="Line" Property="Fill" Value="{DynamicResource Brush.Accent}" />
+                                <Setter TargetName="Line" Property="Width" Value="2" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Header. Margin: left = the rows' left padding; right = their right padding + the scroll bar. -->
+        <Border Grid.Row="0" Margin="12,8,12,0" Height="28" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition x:Name="HeaderModified" Width="150" />
+                    <ColumnDefinition x:Name="HeaderType" Width="170" />
+                    <ColumnDefinition x:Name="HeaderSize" Width="96" />
+                    <ColumnDefinition x:Name="HeaderEnd" Width="8" />
+                </Grid.ColumnDefinitions>
+
+                <Button x:Name="NameHeader" Grid.Column="0" Style="{StaticResource HeaderCell}" Padding="6,0,8,0" Click="OnHeaderClick"
+                        AutomationProperties.Name="名前">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="名前" />
+                        <TextBlock x:Name="NameArrow" Style="{StaticResource HeaderArrow}" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="ModifiedHeader" Grid.Column="1" Style="{StaticResource HeaderCell}" Click="OnHeaderClick"
+                        AutomationProperties.Name="更新日時">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="更新日時" />
+                        <TextBlock x:Name="ModifiedArrow" Style="{StaticResource HeaderArrow}" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="TypeHeader" Grid.Column="2" Style="{StaticResource HeaderCell}" Click="OnHeaderClick"
+                        AutomationProperties.Name="種類">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="種類" />
+                        <TextBlock x:Name="TypeArrow" Style="{StaticResource HeaderArrow}" />
+                    </StackPanel>
+                </Button>
+                <!-- right-aligned like the sizes below it; the mark goes before the title, which keeps its place -->
+                <Button x:Name="SizeHeader" Grid.Column="3" Style="{StaticResource HeaderCell}" HorizontalContentAlignment="Right" Click="OnHeaderClick"
+                        AutomationProperties.Name="サイズ">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="SizeArrow" Style="{StaticResource HeaderArrow}" Margin="0,1,5,0" />
+                        <TextBlock Text="サイズ" />
+                    </StackPanel>
+                </Button>
+
+                <!-- after the titles, so that the grips lie on top of them (Tag: the DetailsColumns key) -->
+                <Thumb Grid.Column="1" Style="{StaticResource HeaderGrip}" Tag="modified"
+                       DragStarted="OnGripDragStarted" DragDelta="OnGripDragDelta" DragCompleted="OnGripDragCompleted" />
+                <Thumb Grid.Column="2" Style="{StaticResource HeaderGrip}" Tag="type"
+                       DragStarted="OnGripDragStarted" DragDelta="OnGripDragDelta" DragCompleted="OnGripDragCompleted" />
+                <Thumb Grid.Column="3" Style="{StaticResource HeaderGrip}" Tag="size"
+                       DragStarted="OnGripDragStarted" DragDelta="OnGripDragDelta" DragCompleted="OnGripDragCompleted" />
+            </Grid>
+        </Border>
+
+        <ItemsControl x:Name="RowsHost" Grid.Row="1"
+                      Focusable="False"
+                      VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling"
+                      VirtualizingPanel.ScrollUnit="Pixel"
+                      VirtualizingPanel.CacheLengthUnit="Page"
+                      VirtualizingPanel.CacheLength="0.5,0.5"
+                      ScrollViewer.CanContentScroll="True">
+            <ItemsControl.Template>
+                <ControlTemplate TargetType="{x:Type ItemsControl}">
+                    <!--
+                      Transparent (not null) background: the area below the last row must be hit-testable,
+                      or a row dragged there would be routed to the window and the drop cancelled.
+                      The scroll bar is always there: its width is reserved in the header, and the
+                      columns must not shift when the list gets long enough to scroll.
+                    -->
+                    <ScrollViewer x:Name="PART_Scroll" Focusable="False" CanContentScroll="True" Background="Transparent"
+                                  HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Visible">
+                        <ItemsPresenter Margin="12,3,2,4" />
+                    </ScrollViewer>
+                </ControlTemplate>
+            </ItemsControl.Template>
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <VirtualizingStackPanel />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <views:DetailsRowView />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </Grid>
+</UserControl>
