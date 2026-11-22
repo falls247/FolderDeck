@@ -29,7 +29,7 @@
 | §4 | スレッドと非同期の規約 | UI スレッドで待たない、STA ワーカーとタイムアウト、専用 STA スレッド（ごみ箱・コピー・移動・エクスプローラーのメニュー）、ドライブの確認、キャンセル |
 | §5 | 改修レシピ | よくある改修ごとに触るファイルの順番と注意・関連テスト |
 | §6 | テスト・ビルド | 関連テストだけ流すコマンド、テストファイルと対象の対応表 |
-| §7 | 守ること・落とし穴 | 削除はごみ箱へだけ（メニューと Delete キー、複数は 1 つの操作）、コピー・移動は `FileTransfer` だけ、名前の変更・新しいフォルダーは `ShellFileOps` だけ（同じ名前は先に確かめる、予約名はシェルが断らない、名前の入力欄の終わらせ方）、エクスプローラーのメニューから外す操作（背景メニューの undo / redo を含む）、「Windows のメニュー」（アプリの項目の ID の範囲、open を外す条件、WPF のメニューの経路を残す）、詳細表示の列の幅（表示用の幅を保存しない、見出しと行の列の並び）、階層なしのプレビュー（`IsOpen`、`ParentIndex` の確認）、パス比較、設定のコピー、コメント記号（§ / R / P / AC） |
+| §7 | 守ること・落とし穴 | 削除はごみ箱へだけ（メニューと Delete キー、複数は 1 つの操作）、コピー・移動は `FileTransfer` だけ、名前の変更・新しいフォルダーは `ShellFileOps` だけ（同じ名前は先に確かめる、予約名はシェルが断らない、名前の入力欄の終わらせ方）、エクスプローラーのメニューから外す操作（背景メニューの undo / redo を含む）、「Windows のメニュー」（アプリの項目の ID の範囲、open を外す条件、WPF のメニューの経路を残す）、詳細表示の列の幅（表示用の幅を保存しない、見出しと行の列の並び）、階層なしのプレビュー（`IsOpen`、`ParentIndex` の確認）、パス比較、設定のコピー、ReadyToRun の中間出力（self-contained と framework-dependent の切り替え）、コメント記号（§ / R / P / AC） |
 | §8 | 調べ方のショートカット | `rg` での引き方、ログの見方 |
 | §9 | 本書の更新ルール | どの変更で本書と目次を更新するか |
 
@@ -50,7 +50,7 @@
 
 - WPF + .NET 10（`net10.0-windows`、x64）、C#（`LangVersion latest`、`Nullable enable`、`ImplicitUsings enable`。共通設定は `Directory.Build.props`）
 - パッケージ：CommunityToolkit.Mvvm 8.4.2（`[ObservableProperty]` / `[RelayCommand]` のソース生成）、Microsoft.Windows.CsWin32 0.3.371（各プロジェクトの `NativeMethods.txt` から P/Invoke を生成）、テストは xUnit 2.9.3
-- 配布：single-file exe（ReadyToRun）。`publish.bat` → `dist\FolderDeck.exe`（self-contained・圧縮 `EnableCompressionInSingleFile`、約 65 MB）、`publish.bat framework` → `dist\framework-dependent\FolderDeck.exe`（.NET 10 デスクトップ ランタイムが必要、約 2 MB）。圧縮は csproj で `SelfContained == true` のときだけ有効。WPF はトリミング非対応のため使わない
+- 配布：single-file exe（ReadyToRun）。`publish.bat` → `dist\FolderDeck.exe`（self-contained・圧縮 `EnableCompressionInSingleFile`、約 65 MB）、`publish.bat uncompressed` → `dist\uncompressed\FolderDeck.exe`（self-contained・圧縮なし、約 145 MB）、`publish.bat framework` → `dist\framework-dependent\FolderDeck.exe`（.NET 10 デスクトップ ランタイムが必要、約 3.5 MB）。`publish-all.bat` はこの 3 つを続けて作る。圧縮は csproj で `SelfContained == true` のときだけ有効（uncompressed は引数で切る）。self-contained の ReadyToRun は SDK の既定で composite（`FolderDeck.r2r.dll` に .NET ごとまとめる）、framework-dependent は非 composite で、中間出力のフォルダを共有するため csproj の `FolderDeckInvalidateR2ROnModeChange` が切り替え時に作り直させる（[§7](#7-守ること落とし穴)）。WPF はトリミング非対応のため使わない
 
 ### 1.1 プロジェクトと依存方向
 
@@ -246,7 +246,7 @@ App
 | パス | 内容 |
 |---|---|
 | `tools/dev.ps1` | build / test / run / all / publish の中身。**UTF-8（BOM 付き）で保存**。起動中の FolderDeck による exe ロックを確認してから閉じる |
-| `build.bat` `test.bat` `run.bat` `build-test-run.bat` `publish.bat` | `tools/dev.ps1` を呼ぶだけ。**ASCII のみ**（コードページ違いで文字化けさせないため） |
+| `build.bat` `test.bat` `run.bat` `build-test-run.bat` `publish.bat` `publish-all.bat` | `tools/dev.ps1` を呼ぶだけ（`publish-all.bat` は `publish all`）。**ASCII のみ**（コードページ違いで文字化けさせないため） |
 | `tools/make-fixture.ps1` | 検証用フォルダ（深い入れ子、大量ファイル、長いパス、循環ジャンクション、アクセス拒否など、§19.3） |
 | `tools/analyze-log.ps1` | `app.log` を起動ごとに分けて終わり方を表示（`-Events`） |
 
@@ -580,6 +580,7 @@ App
 - カスケードの開閉判断を `CascadeController` の外に書かない。ドラッグ中にポップアップを破棄しない（`DoDragDrop` がボタンを離したことに気づかなくなる）。
 - シェルが返すビットマップの上下と非乗算アルファの扱いは `ShellInterop` に閉じている（README「実装メモ」）。安易に反転しない。
 - `tools/dev.ps1` は UTF-8（BOM 付き）、BAT は ASCII のみ。
+- **csproj の `FolderDeckInvalidateR2ROnModeChange` を消さない**。self-contained（composite：`FolderDeck.r2r.dll` + 中身のない部品の dll）と framework-dependent（非 composite）は、ReadyToRun の中間出力 `obj\Release\net10.0-windows\win-x64\R2R` を共有する。SDK の `_CreateR2RImages` は IL より新しければ作り直さないので、このターゲットがないと `publish.bat` の直後の `publish.bat framework` が composite の部品だけを同梱し、起動直後に coreclr が fail fast する（0xc0000602、`app.log` は 1 行も出ない。`DOTNET_ReadyToRun=0` では起きないので、R2R を疑う）。ターゲットは SDK の内部名（`_CreateR2RImages`、`_ReadyToRunOutputPath`）に依存し、名前が変わると黙って動かなくなる。SDK を上げたら `publish.bat` → `publish.bat framework` の順に作り、2 回目のログに `ReadyToRun: mode changed` が出ること・その exe が起動することを確かめる。`-p:SelfContained` 以外で R2R の作り方を変える引数（`PublishReadyToRunComposite` など）を足すときは、モードの文字列（`_FolderDeckR2RMode`）にも入れる。
 - コード中のコメントは英語、UI 文言は日本語の直書き。
 - コメントの記号：`§n.n` = 旧仕様書の節、`R1`〜 = 旧仕様書 §20 のリスク、`P0` / `P1` / `P2` = 優先度、`AC-nn` = 旧仕様書 §18 の受け入れ基準。旧仕様書は削除済みで、読むときは [§0](#0-このドキュメントの位置づけ) の `git show` を使う。
 

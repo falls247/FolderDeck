@@ -5,12 +5,15 @@
 #   tools\dev.ps1 run     [アプリへの引数]   Debug ビルドして起動（例: --data-dir E:\tmp\data）
 #   tools\dev.ps1 all     [アプリへの引数]   ソリューションを Debug ビルド → Core のテスト → 起動（別名 build-test-run）。
 #                                           失敗した段階で止まる（引数は run と同じくアプリに渡す）
-#   tools\dev.ps1 publish [framework]       配布用の single-file exe を作り dist\ にコピー
+#   tools\dev.ps1 publish [uncompressed|framework|all]
+#                                           配布用の single-file exe を作り dist\ にコピー
 #                                           既定: .NET を同梱して圧縮した exe（dist\FolderDeck.exe、約 65 MB）
+#                                           uncompressed: .NET を同梱し、圧縮しない exe（dist\uncompressed\FolderDeck.exe、約 145 MB）
 #                                           framework: .NET 10 デスクトップ ランタイムを別に入れて使う exe
-#                                           （dist\framework-dependent\FolderDeck.exe、約 2 MB）
+#                                           （dist\framework-dependent\FolderDeck.exe、約 3.5 MB）
+#                                           all: 上の 3 種類を続けて作る（publish-all.bat）。失敗したところで止まる
 #
-# ルートの build.bat / test.bat / run.bat / build-test-run.bat / publish.bat から呼ばれます（ダブルクリック可）。
+# ルートの build.bat / test.bat / run.bat / build-test-run.bat / publish.bat / publish-all.bat から呼ばれます（ダブルクリック可）。
 # このフォルダの中で起動中の FolderDeck はファイルをロックするため、ビルド前に終了を確認します。
 # 確認なしで終了させたいときは、環境変数 FOLDERDECK_AUTOCLOSE=1 を設定してください。
 #
@@ -25,6 +28,14 @@ $DebugExe = Join-Path $Root 'src\FolderDeck.App\bin\Debug\net10.0-windows\Folder
 $PublishExe = Join-Path $Root 'src\FolderDeck.App\bin\Release\net10.0-windows\win-x64\publish\FolderDeck.exe'
 $DistDir = Join-Path $Root 'dist'
 $DistFrameworkDir = Join-Path $DistDir 'framework-dependent'
+
+# publish の種類。all はこの順に作る：self-contained の 2 つは ReadyToRun の中間出力（composite）を共有でき、
+# framework-dependent は作り直しになる（csproj の FolderDeckInvalidateR2ROnModeChange。数秒で済む）。
+$PublishVariants = [ordered]@{
+    'default'      = @{ Label = 'self-contained / 圧縮'; SelfContained = 'true'; Extra = @(); Dest = $DistDir }
+    'uncompressed' = @{ Label = 'self-contained / 圧縮なし'; SelfContained = 'true'; Extra = @('-p:EnableCompressionInSingleFile=false'); Dest = (Join-Path $DistDir 'uncompressed') }
+    'framework'    = @{ Label = 'framework-dependent'; SelfContained = 'false'; Extra = @(); Dest = $DistFrameworkDir }
+}
 
 # 各タスクが上書きする exe のフォルダ。ここから起動中の FolderDeck だけが邪魔になる。
 # publish はコピー先（dist または dist\framework-dependent）をこれに足して確認する。
@@ -242,8 +253,10 @@ function Show-Help {
     Write-Host '  run.bat            [アプリへの引数]   Debug ビルドして起動（例: run.bat --data-dir E:\tmp\data）'
     Write-Host '  build-test-run.bat [アプリへの引数]   ビルド（Debug）→ テスト → 起動を続けて実行。失敗した段階で止まる（引数は run.bat と同じ）'
     Write-Host '  publish.bat                           配布用の exe（.NET 同梱・圧縮、約 65 MB）を作って dist\FolderDeck.exe にコピー'
-    Write-Host '  publish.bat framework                 .NET 10 デスクトップ ランタイムが必要な小さい exe（約 2 MB）を作って'
+    Write-Host '  publish.bat uncompressed              .NET 同梱・圧縮なしの exe（約 145 MB）を作って dist\uncompressed\FolderDeck.exe にコピー'
+    Write-Host '  publish.bat framework                 .NET 10 デスクトップ ランタイムが必要な小さい exe（約 3.5 MB）を作って'
     Write-Host '                                        dist\framework-dependent\FolderDeck.exe にコピー'
+    Write-Host '  publish-all.bat                       上の 3 種類を続けて作る（publish.bat all と同じ）。失敗したところで止まる'
 }
 
 $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -337,53 +350,75 @@ try {
         }
     }
     elseif ($task -eq 'publish') {
-        # 既定は .NET 同梱（self-contained）。framework は .NET を同梱しない（framework-dependent）。
-        # 圧縮（EnableCompressionInSingleFile）は self-contained のときだけ csproj で有効になる。
-        $framework = $false
+        # 既定は .NET 同梱・圧縮（self-contained）。uncompressed は .NET 同梱・圧縮なし、framework は .NET を
+        # 同梱しない（framework-dependent）。all は 3 種類を $PublishVariants の順に作る。
+        # 圧縮（EnableCompressionInSingleFile）は self-contained のときだけ csproj で有効になる（uncompressed は引数で切る）。
+        $names = @('default')
         if ($rest.Count -gt 0) {
-            if ([string]$rest[0] -ieq 'framework') { $framework = $true }
+            $kindArg = ([string]$rest[0]).ToLowerInvariant()
+            if ($kindArg -eq 'all') { $names = @($PublishVariants.Keys) }
+            elseif ($kindArg -ne 'default' -and $PublishVariants.Contains($kindArg)) { $names = @($kindArg) }
             else {
-                Write-Host "publish の引数は framework だけです（指定: $($rest[0])）。" -ForegroundColor Red
+                Write-Host "publish の引数は uncompressed / framework / all のどれかです（指定: $($rest[0])）。" -ForegroundColor Red
                 $code = 2
             }
         }
 
-        $destDir = if ($framework) { $DistFrameworkDir } else { $DistDir }
-        $selfContained = if ($framework) { 'false' } else { 'true' }
-        if ($code -eq 0 -and (-not (Test-Dotnet) -or -not (Stop-RunningApp ($PublishDirs + $destDir)))) {
+        $destDirs = @($names | ForEach-Object { $PublishVariants[$_].Dest })
+        if ($code -eq 0 -and (-not (Test-Dotnet) -or -not (Stop-RunningApp ($PublishDirs + $destDirs)))) {
             $code = 1
         }
 
-        if ($code -eq 0) {
-            $kind = if ($framework) { 'framework-dependent' } else { 'self-contained / 圧縮' }
-            Write-Step "配布用 exe の作成（Release / win-x64 / $kind / single-file）"
-            Write-Command "dotnet publish src\FolderDeck.App -c Release -r win-x64 -p:SelfContained=$selfContained -p:PublishSingleFile=true"
-            & dotnet publish $AppProject -c Release -r win-x64 "-p:SelfContained=$selfContained" -p:PublishSingleFile=true --nologo
+        $made = @()
+        $index = 0
+        foreach ($name in $names) {
+            if ($code -ne 0) { break }
+            $index++
+            $variant = $PublishVariants[$name]
+            $extra = @($variant.Extra)
+            $prefix = if ($names.Count -gt 1) { "$index/$($names.Count) " } else { '' }
+            Write-Step "${prefix}配布用 exe の作成（Release / win-x64 / $($variant.Label) / single-file）"
+            $commandText = "dotnet publish src\FolderDeck.App -c Release -r win-x64 -p:SelfContained=$($variant.SelfContained) -p:PublishSingleFile=true " + ($extra -join ' ')
+            Write-Command $commandText.TrimEnd()
+            & dotnet publish $AppProject -c Release -r win-x64 "-p:SelfContained=$($variant.SelfContained)" -p:PublishSingleFile=true @extra --nologo
             $code = $LASTEXITCODE
+            if ($code -eq 0 -and -not (Test-Path -LiteralPath $PublishExe)) {
+                Write-Host "exe が見つかりません: $PublishExe" -ForegroundColor Red
+                $code = 1
+            }
+
             if ($code -eq 0) {
-                if (-not (Test-Path -LiteralPath $PublishExe)) {
-                    Write-Host "exe が見つかりません: $PublishExe" -ForegroundColor Red
+                try {
+                    New-Item -ItemType Directory -Force -Path $variant.Dest | Out-Null
+                    $target = Join-Path $variant.Dest 'FolderDeck.exe'
+                    Copy-Item -LiteralPath $PublishExe -Destination $target -Force -ErrorAction Stop
+                    $sizeMb = [Math]::Round((Get-Item -LiteralPath $target).Length / 1MB, 1)
+                    $made += "  $target（$($variant.Label)、$sizeMb MB）"
+                    Write-Host ''
+                    Write-Host "配布用 exe: $target（$sizeMb MB）" -ForegroundColor Green
+                }
+                catch {
+                    Write-Host "dist へのコピーに失敗しました: $($_.Exception.Message)" -ForegroundColor Red
                     $code = 1
                 }
-                else {
-                    try {
-                        New-Item -ItemType Directory -Force -Path $destDir | Out-Null
-                        $target = Join-Path $destDir 'FolderDeck.exe'
-                        Copy-Item -LiteralPath $PublishExe -Destination $target -Force -ErrorAction Stop
-                        $sizeMb = [Math]::Round((Get-Item -LiteralPath $target).Length / 1MB, 1)
-                        Write-Host ''
-                        Write-Host "配布用 exe: $target（$sizeMb MB）" -ForegroundColor Green
-                        if ($framework) {
-                            Write-Host '使う PC に .NET 10 デスクトップ ランタイム（x64）が必要です。入っていない PC では、起動時にダウンロードを促す画面が出て起動しません。'
-                        }
-                        Write-Host '新しい exe を初めて起動するときは、ウイルス対策ソフトのスキャンで 30 秒ほどかかることがあります。'
-                    }
-                    catch {
-                        Write-Host "dist へのコピーに失敗しました: $($_.Exception.Message)" -ForegroundColor Red
-                        $code = 1
-                    }
-                }
             }
+
+            if ($code -ne 0 -and $index -lt $names.Count) {
+                Write-Host "「$($variant.Label)」で失敗しました。残りは作りません。" -ForegroundColor Red
+            }
+        }
+
+        if ($made.Count -gt 1) {
+            Write-Host ''
+            Write-Host '作った exe:' -ForegroundColor Green
+            $made | ForEach-Object { Write-Host $_ }
+        }
+
+        if ($made.Count -gt 0) {
+            if ($names -contains 'framework' -and $code -eq 0) {
+                Write-Host 'framework-dependent の exe は、使う PC に .NET 10 デスクトップ ランタイム（x64）が必要です。入っていない PC では、起動時にダウンロードを促す画面が出て起動しません。'
+            }
+            Write-Host '新しい exe を初めて起動するときは、ウイルス対策ソフトのスキャンで 30 秒ほどかかることがあります。'
         }
     }
     elseif ($task -in @('help', '-h', '--help', '/?')) {

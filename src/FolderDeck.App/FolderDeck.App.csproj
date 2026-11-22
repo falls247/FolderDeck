@@ -21,6 +21,42 @@
     <EnableCompressionInSingleFile Condition="'$(SelfContained)' == 'true'">true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
+  <!--
+    Stale ReadyToRun output after switching between self-contained and framework-dependent publish.
+    Cause (SDK 10.0.112, Microsoft.NET.CrossGen.targets):
+      - A self-contained single-file publish compiles R2R in composite mode: one FolderDeck.r2r.dll holds the
+        native code, and FolderDeck.dll / FolderDeck.Core.dll / CommunityToolkit.Mvvm.dll become component stubs
+        that point to it. A framework-dependent publish compiles non-composite (each dll has its own code).
+      - Both write the same folder, $(IntermediateOutputPath)R2R, and _CreateR2RImages is skipped when those
+        files are newer than the IL. The mode is not one of its inputs.
+      - So `publish.bat framework` right after `publish.bat` (no source change) bundled the component stubs
+        without FolderDeck.r2r.dll. coreclr cannot find the owner composite image and fails fast while loading
+        FolderDeck.dll: 0xc0000602 in coreclr.dll, before app.log is written. DOTNET_ReadyToRun=0 and
+        PublishReadyToRun=false hide it because the stubs are then never used.
+    Fix: remember the mode; when it differs from the last R2R compile (or is unknown), delete the R2R output so
+    _CreateR2RImages compiles again. Depends on the SDK's internal names (_CreateR2RImages, _ReadyToRunOutputPath);
+    if they change, this target stops running, so check again after an SDK upgrade (overview §7).
+  -->
+  <Target Name="FolderDeckInvalidateR2ROnModeChange"
+          BeforeTargets="_CreateR2RImages"
+          Condition="'$(PublishReadyToRun)' == 'true' and '$(_ReadyToRunOutputPath)' != ''">
+    <PropertyGroup>
+      <_FolderDeckR2RModeFile>$(IntermediateOutputPath)FolderDeck.r2r-mode.txt</_FolderDeckR2RModeFile>
+      <!-- ',' not ';': WriteLinesToFile would split on ';' and the read-back would never match. -->
+      <_FolderDeckR2RMode>SelfContained=$(SelfContained),Composite=$(PublishReadyToRunComposite)</_FolderDeckR2RMode>
+      <_FolderDeckR2RLastMode Condition="Exists('$(_FolderDeckR2RModeFile)')">$([System.IO.File]::ReadAllText('$(_FolderDeckR2RModeFile)').Trim())</_FolderDeckR2RLastMode>
+    </PropertyGroup>
+    <Message Importance="high"
+             Condition="'$(_FolderDeckR2RLastMode)' != '$(_FolderDeckR2RMode)'"
+             Text="ReadyToRun: mode changed ('$(_FolderDeckR2RLastMode)' -> '$(_FolderDeckR2RMode)'); recompiling." />
+    <RemoveDir Condition="'$(_FolderDeckR2RLastMode)' != '$(_FolderDeckR2RMode)'" Directories="$(_ReadyToRunOutputPath)" />
+    <MakeDir Directories="$(_ReadyToRunOutputPath)" />
+    <WriteLinesToFile File="$(_FolderDeckR2RModeFile)" Lines="$(_FolderDeckR2RMode)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <FileWrites Include="$(_FolderDeckR2RModeFile)" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.371">
