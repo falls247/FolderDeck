@@ -144,7 +144,7 @@
         </Setter>
     </Style>
 
-    <!-- × of a folder tab -->
+    <!-- × of a tab (tab strip) -->
     <Style x:Key="Btn.TabClose" TargetType="{x:Type Button}">
         <Setter Property="Width" Value="22" />
         <Setter Property="Height" Value="22" />
@@ -325,37 +325,6 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Surface3}" />
-                        </Trigger>
-                    </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-    </Style>
-
-    <!-- Tabs: RadioButtons with an accent underline when checked -->
-    <Style x:Key="TabButton" TargetType="{x:Type RadioButton}">
-        <Setter Property="Foreground" Value="{DynamicResource Brush.Muted}" />
-        <Setter Property="FontFamily" Value="{StaticResource Font.UI}" />
-        <Setter Property="FontSize" Value="14" />
-        <Setter Property="Padding" Value="14,10,14,8" />
-        <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="{x:Type RadioButton}">
-                    <Grid Background="Transparent">
-                        <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
-                        <Border x:Name="Line" Height="3" VerticalAlignment="Bottom" CornerRadius="2" Margin="10,0"
-                                Background="{DynamicResource Brush.Accent}" Visibility="Hidden" />
-                    </Grid>
-                    <ControlTemplate.Triggers>
-                        <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="Line" Property="Visibility" Value="Visible" />
-                            <Setter Property="Foreground" Value="{DynamicResource Brush.Text}" />
-                            <Setter Property="FontWeight" Value="SemiBold" />
-                        </Trigger>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Foreground" Value="{DynamicResource Brush.Text}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

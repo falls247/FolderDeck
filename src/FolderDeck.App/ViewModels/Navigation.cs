@@ -2,14 +2,20 @@ namespace FolderDeck.ViewModels;
 
 public enum TabKind
 {
-    /// <summary>最近の履歴 (fixed tab).</summary>
+    /// <summary>最近の履歴 (fixed tab: one instance, with a top level; open only while it is on the tab strip).</summary>
     Recent,
 
-    /// <summary>よく使う項目 (fixed tab).</summary>
+    /// <summary>よく使う項目 (fixed tab: one instance, with a top level; open only while it is on the tab strip).</summary>
     Frequent,
 
-    /// <summary>A folder tab: opened from the 登録フォルダ sidebar, any number of them, closable and movable.</summary>
+    /// <summary>A folder tab: opened from the 登録フォルダ sidebar, any number of them.</summary>
     Folder,
+
+    /// <summary>
+    /// No tab is open: the kind of the placeholder that is selected then (<c>MainViewModel.NoTab</c>).
+    /// It is never on the tab strip, never loads anything and is never a navigation target.
+    /// </summary>
+    None,
 }
 
 /// <summary>
@@ -35,6 +41,12 @@ public enum ItemContext
 
     /// <summary>A 登録フォルダ row of the sidebar.</summary>
     Sidebar,
+
+    /// <summary>
+    /// A drive row of the sidebar's PC section: the root of a drive. It is never pinned, deleted or
+    /// unregistered, and using it is not recorded in the history.
+    /// </summary>
+    Drive,
 }
 
 /// <summary>
@@ -50,6 +62,12 @@ public sealed record ItemRef(string Path, bool IsFolder, NavLocation? Target, It
     /// and everything in the cascade opened from it.
     /// </summary>
     public bool NewTab { get; init; }
+
+    /// <summary>
+    /// The sidebar row this item stands for cannot be opened now (a missing 登録フォルダ, a drive that
+    /// is not connected or does not answer). Cards carry their own state (<see cref="Card"/>).
+    /// </summary>
+    public bool IsDisabled { get; init; }
 }
 
 public sealed class BreadcrumbItem
@@ -77,26 +95,35 @@ public sealed class BreadcrumbItem
 
 public static class TabKinds
 {
-    /// <summary>Title of a fixed tab (a folder tab shows the name of its folder).</summary>
+    /// <summary>Title of a fixed tab (a folder tab shows the name of its folder; the placeholder has none).</summary>
     public static string Title(TabKind kind) => kind switch
     {
         TabKind.Recent => "最近の履歴",
         TabKind.Frequent => "よく使う項目",
+        TabKind.None => string.Empty,
         _ => "フォルダ",
     };
 
-    /// <summary>Key in settings.json (sort mode, filter, location, last tab). Every folder tab shares one.</summary>
+    /// <summary>
+    /// Key in settings.json (sort mode, filter, kind of an open tab). Every folder tab shares one.
+    /// The placeholder's key is in no settings list: nothing is saved for it.
+    /// </summary>
     public static string ToSetting(TabKind kind) => kind switch
     {
         TabKind.Recent => Core.Stores.AppSettings.TabRecent,
         TabKind.Frequent => Core.Stores.AppSettings.TabFrequent,
+        TabKind.None => "none",
         _ => Core.Stores.AppSettings.TabFolder,
     };
 
+    /// <summary>
+    /// Kind of an <c>open_tabs</c> entry. Anything but the two fixed kinds is a folder tab, as in
+    /// <c>AppSettings.Normalize</c> (never the placeholder).
+    /// </summary>
     public static TabKind FromSetting(string? value) => value switch
     {
+        Core.Stores.AppSettings.TabRecent => TabKind.Recent,
         Core.Stores.AppSettings.TabFrequent => TabKind.Frequent,
-        Core.Stores.AppSettings.TabFolder => TabKind.Folder,
-        _ => TabKind.Recent,
+        _ => TabKind.Folder,
     };
 }

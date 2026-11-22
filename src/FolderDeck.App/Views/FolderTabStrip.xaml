@@ -3,11 +3,11 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:FolderDeck.ViewModels"
              Focusable="False">
-    <!-- The folder tabs (opened from the sidebar), right of the two fixed tabs. Like Explorer's tabs:
-         click to show, × or middle click to close, drag to move. Their colour (Brush.Folder) sets
-         them apart from 最近の履歴 / よく使う項目 (Brush.Accent). -->
+    <!-- The tab strip: every open tab, of any kind. Like Explorer's tabs: click to show, × or middle
+         click to close, drag to move. 最近の履歴 / よく使う項目 carry their own icon and the accent
+         colour (Brush.Accent); folder tabs the folder colour (Brush.Folder). -->
     <ScrollViewer x:Name="Scroller" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" Focusable="False">
-        <ItemsControl x:Name="Tabs" ItemsSource="{Binding FolderTabs}" Focusable="False" Background="Transparent">
+        <ItemsControl x:Name="Tabs" ItemsSource="{Binding Tabs}" Focusable="False" Background="Transparent">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
                     <StackPanel Orientation="Horizontal" />
@@ -22,7 +22,7 @@
                             <Button DockPanel.Dock="Right" Style="{StaticResource Btn.TabClose}" ToolTip="タブを閉じる（中クリックでも閉じます）"
                                     Command="{Binding DataContext.CloseTabCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
                                     CommandParameter="{Binding}" />
-                            <TextBlock DockPanel.Dock="Left" Text="&#xE8B7;" FontFamily="{StaticResource Font.Icons}" FontSize="13"
+                            <TextBlock x:Name="Glyph" DockPanel.Dock="Left" Text="&#xE8B7;" FontFamily="{StaticResource Font.Icons}" FontSize="13"
                                        VerticalAlignment="Center" Margin="0,0,7,0" Foreground="{DynamicResource Brush.Folder}" />
                             <TextBlock x:Name="TitleText" Text="{Binding Title}" FontSize="13" TextTrimming="CharacterEllipsis"
                                        VerticalAlignment="Center" Margin="0,0,4,0" Foreground="{DynamicResource Brush.Muted}" />
@@ -31,6 +31,17 @@
                                 Background="{DynamicResource Brush.Folder}" Visibility="Hidden" />
                     </Grid>
                     <DataTemplate.Triggers>
+                        <!-- fixed tabs: their icon, the accent colour -->
+                        <DataTrigger Binding="{Binding Kind}" Value="{x:Static vm:TabKind.Recent}">
+                            <Setter TargetName="Glyph" Property="Text" Value="&#xE81C;" />
+                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource Brush.Accent}" />
+                            <Setter TargetName="Line" Property="Background" Value="{DynamicResource Brush.Accent}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Kind}" Value="{x:Static vm:TabKind.Frequent}">
+                            <Setter TargetName="Glyph" Property="Text" Value="&#xE734;" />
+                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource Brush.Accent}" />
+                            <Setter TargetName="Line" Property="Background" Value="{DynamicResource Brush.Accent}" />
+                        </DataTrigger>
                         <Trigger SourceName="Tab" Property="IsMouseOver" Value="True">
                             <Setter TargetName="Chip" Property="Background" Value="{DynamicResource Brush.Surface3}" />
                             <Setter TargetName="TitleText" Property="Foreground" Value="{DynamicResource Brush.Text}" />
@@ -41,6 +52,14 @@
                             <Setter TargetName="TitleText" Property="Foreground" Value="{DynamicResource Brush.Text}" />
                             <Setter TargetName="TitleText" Property="FontWeight" Value="SemiBold" />
                         </DataTrigger>
+                        <!-- after the trigger above: a selected fixed tab is filled with the accent colour -->
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsSelected}" Value="True" />
+                                <Condition Binding="{Binding IsFolderTab}" Value="False" />
+                            </MultiDataTrigger.Conditions>
+                            <Setter TargetName="Chip" Property="Background" Value="{DynamicResource Brush.AccentSoft}" />
+                        </MultiDataTrigger>
                     </DataTemplate.Triggers>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>

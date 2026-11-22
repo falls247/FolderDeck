@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using FolderDeck.Core.Infrastructure;
 using FolderDeck.Core.Layout;
 using FolderDeck.Core.Ordering;
@@ -24,6 +25,36 @@ public sealed class LocationSetting
     public string Path { get; set; } = string.Empty;
 }
 
+/// <summary>
+/// One open tab of the tab strip (<c>open_tabs</c>): its kind (<see cref="AppSettings.TabRecent"/>,
+/// <see cref="AppSettings.TabFrequent"/> or <see cref="AppSettings.TabFolder"/>), its root folder
+/// (a normalized path; "" = the top level of 最近の履歴 / よく使う項目) and the path below that root.
+/// </summary>
+public sealed class OpenTabSetting
+{
+    /// <summary>An entry without a kind is a folder tab: that is what the version 1 files hold.</summary>
+    public string? Kind { get; set; } = AppSettings.TabFolder;
+
+    public string Root { get; set; } = string.Empty;
+
+    public string Path { get; set; } = string.Empty;
+}
+
+/// <summary>Ids of the sidebar's collapsible sections (<c>sidebar_collapsed_sections</c>).</summary>
+public static class SidebarSections
+{
+    /// <summary>クイック アクセス: 最近の履歴 and よく使う項目.</summary>
+    public const string Quick = "quick";
+
+    /// <summary>登録フォルダ.</summary>
+    public const string Registered = "registered";
+
+    /// <summary>PC: the drives.</summary>
+    public const string Pc = "pc";
+
+    public static IReadOnlyList<string> All { get; } = [Quick, Registered, Pc];
+}
+
 /// <summary>settings.json (§13.2). Missing keys keep these defaults.</summary>
 public sealed class AppSettings
 {
@@ -39,48 +70,93 @@ public sealed class AppSettings
     public const double SidebarWidthMax = 480;
     public const double SidebarWidthDefault = 220;
 
+    /// <summary>
+    /// Version of the file layout. 2: one tab strip (<see cref="OpenTabs"/> holds every tab and
+    /// <see cref="SelectedTab"/> says which is shown). 1: two fixed tabs plus folder tabs
+    /// (<see cref="LastTab"/>, <see cref="Locations"/>, <see cref="SelectedFolderTab"/>).
+    /// </summary>
+    public const int CurrentVersion = 2;
+
     /// <summary>Folder tabs remembered across restarts (more are simply not saved).</summary>
     public const int OpenTabsMax = 50;
 
     public const string TabRecent = "recent";
     public const string TabFrequent = "frequent";
 
-    /// <summary>The folder tabs (opened from the sidebar): one key for all of them.</summary>
+    /// <summary>The folder tabs: one key for all of them.</summary>
     public const string TabFolder = "folder";
 
     /// <summary>Key of the former 登録フォルダ tab (now the sidebar): only read to carry its sort mode over.</summary>
     private const string LegacyTabRegistered = "registered";
 
-    public int Version { get; set; } = 1;
+    /// <summary>A file without the key is one this layout wrote (the version 1 program always wrote 1).</summary>
+    public int Version { get; set; } = CurrentVersion;
 
     public WindowPlacementSetting? Window { get; set; } = new();
 
-    /// <summary><see cref="TabRecent"/>, <see cref="TabFrequent"/> or <see cref="TabFolder"/> (then <see cref="SelectedFolderTab"/> tells which).</summary>
-    public string? LastTab { get; set; } = TabRecent;
+    /// <summary>
+    /// The open tabs, left to right: 最近の履歴 and よく使う項目 (each at most once) and the folder
+    /// tabs. Null only until <see cref="Normalize"/>: settings that never held the key open
+    /// 最近の履歴; a saved empty list stays empty (every tab was closed).
+    /// </summary>
+    public List<OpenTabSetting>? OpenTabs { get; set; }
 
-    /// <summary>Where 最近の履歴 and よく使う項目 were (root "" = their top level).</summary>
-    public Dictionary<string, LocationSetting>? Locations { get; set; } = new();
+    /// <summary>Index in <see cref="OpenTabs"/> of the shown tab; -1 when no tab is open.</summary>
+    public int SelectedTab { get; set; }
 
-    /// <summary>The open folder tabs, left to right: root folder (normalized path) and the path below it.</summary>
-    public List<LocationSetting>? OpenTabs { get; set; } = new();
+    /// <summary>
+    /// Version 1 only: which tab was shown (<see cref="TabRecent"/>, <see cref="TabFrequent"/> or
+    /// <see cref="TabFolder"/>). Read by <see cref="MigrateLegacyTabs"/>, then null and not written.
+    /// The version 1 program writes it back when it saves a file of this layout, which is how an
+    /// upgrade after a downgrade is noticed.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LastTab { get; set; }
 
-    /// <summary>Index in <see cref="OpenTabs"/> of the folder tab that was selected.</summary>
-    public int SelectedFolderTab { get; set; }
+    /// <summary>Version 1 only: where 最近の履歴 and よく使う項目 were (root "" = their top level).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, LocationSetting>? Locations { get; set; }
 
-    /// <summary>Width of the 登録フォルダ sidebar (DIP).</summary>
+    /// <summary>
+    /// Version 1 only: index of the shown folder tab among the folder tabs. Never written as null:
+    /// the version 1 program reads it as a plain number and would reject the whole file.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SelectedFolderTab { get; set; }
+
+    /// <summary>Width of the sidebar (DIP); kept while the sidebar is hidden.</summary>
     public double SidebarWidth { get; set; } = SidebarWidthDefault;
+
+    /// <summary>The whole sidebar is hidden (the toggle at the left end of the tab row).</summary>
+    public bool SidebarCollapsed { get; set; }
+
+    /// <summary>
+    /// The sidebar sections that are folded to their header (<see cref="SidebarSections"/> ids).
+    /// A section that is not listed is expanded, so a section added later starts expanded.
+    /// </summary>
+    public List<string>? SidebarCollapsedSections { get; set; }
 
     public int CardSize { get; set; } = CardSizeDefault;
 
-    /// <summary>Card shape for every tab: <c>portrait</c> (3:4 thumbnail) or <c>square</c> (1:1).</summary>
+    /// <summary>
+    /// How every tab shows its items: cards, <c>portrait</c> (3:4 thumbnail) or <c>square</c> (1:1),
+    /// or the <c>details</c> list.
+    /// </summary>
     public string? CardShape { get; set; } = CardShapes.Portrait;
+
+    /// <summary>
+    /// Widths (DIP) of the resizable columns of the details list: <c>modified</c>, <c>type</c>,
+    /// <c>size</c> (see <see cref="Layout.DetailsColumns"/>; the 名前 column takes the rest).
+    /// </summary>
+    public Dictionary<string, double>? DetailsColumns { get; set; }
 
     /// <summary>Colour theme: <c>system</c> (follow Windows), <c>light</c> or <c>dark</c>.</summary>
     public string? Theme { get; set; } = AppThemes.System;
 
     /// <summary>
     /// Sort mode per tab: <see cref="TabRecent"/> / <see cref="TabFrequent"/> / <see cref="TabFolder"/> →
-    /// <c>manual</c>, <c>name_asc</c>, <c>name_desc</c>, <c>modified_asc</c>, <c>modified_desc</c>.
+    /// <c>manual</c>, <c>name_asc</c>, <c>name_desc</c>, <c>modified_asc</c>, <c>modified_desc</c>,
+    /// <c>size_asc</c>, <c>size_desc</c>, <c>type_asc</c>, <c>type_desc</c>.
     /// </summary>
     public Dictionary<string, string>? SortModes { get; set; } = new();
 
@@ -143,10 +219,138 @@ public sealed class AppSettings
     public static double ClampSidebarWidth(double value) =>
         double.IsFinite(value) ? Math.Clamp(Math.Round(value), SidebarWidthMin, SidebarWidthMax) : SidebarWidthDefault;
 
+    /// <summary>The sidebar section <paramref name="id"/> (<see cref="SidebarSections"/>) is folded to its header.</summary>
+    public bool IsSectionCollapsed(string id) => SidebarCollapsedSections?.Contains(id) == true;
+
+    public void SetSectionCollapsed(string id, bool collapsed)
+    {
+        SidebarCollapsedSections ??= [];
+        SidebarCollapsedSections.Remove(id);
+        if (collapsed)
+        {
+            SidebarCollapsedSections.Add(id);
+        }
+    }
+
+    /// <summary>
+    /// Turns the version 1 tab keys into <see cref="OpenTabs"/> / <see cref="SelectedTab"/>: 最近の履歴
+    /// and よく使う項目 (both were always there, at their saved locations), then the folder tabs, with
+    /// the tab that was shown selected. Every entry of a version 1 <c>open_tabs</c> is a folder tab,
+    /// whatever kind it carries. Does nothing to settings that are already in the current layout.
+    /// </summary>
+    public void MigrateLegacyTabs()
+    {
+        if (Version >= CurrentVersion && LastTab is null)
+        {
+            return;
+        }
+
+        // Same order as version 1: entries without a root go first, then the index is clamped.
+        var folders = (OpenTabs ?? [])
+            .Where(t => t is not null && !string.IsNullOrWhiteSpace(t.Root))
+            .Take(OpenTabsMax)
+            .Select(t => new OpenTabSetting { Kind = TabFolder, Root = t.Root, Path = t.Path ?? string.Empty })
+            .ToList();
+        int selectedFolder = Math.Clamp(SelectedFolderTab ?? 0, 0, Math.Max(0, folders.Count - 1));
+
+        OpenTabSetting Fixed(string kind)
+        {
+            LocationSetting? loc = null;
+            Locations?.TryGetValue(kind, out loc);
+            return loc is null || string.IsNullOrWhiteSpace(loc.Root)
+                ? new OpenTabSetting { Kind = kind }
+                : new OpenTabSetting { Kind = kind, Root = loc.Root, Path = loc.Path ?? string.Empty };
+        }
+
+        OpenTabs = [Fixed(TabRecent), Fixed(TabFrequent), .. folders];
+        SelectedTab = LastTab switch
+        {
+            TabFrequent => 1,
+            TabFolder when folders.Count > 0 => 2 + selectedFolder,
+            _ => 0,
+        };
+        LastTab = null;
+        Locations = null;
+        SelectedFolderTab = null;
+        Version = CurrentVersion;
+    }
+
+    /// <summary>
+    /// Brings <see cref="OpenTabs"/> into shape and keeps <see cref="SelectedTab"/> on the entry it
+    /// pointed at while entries are dropped (when that very entry goes: on the one after it).
+    /// </summary>
+    private void NormalizeOpenTabs()
+    {
+        if (OpenTabs is null)
+        {
+            OpenTabs = [new OpenTabSetting { Kind = TabRecent }]; // first run
+            SelectedTab = 0;
+            return;
+        }
+
+        var kept = new List<OpenTabSetting>(OpenTabs.Count);
+        int selected = -1;
+        bool recent = false;
+        bool frequent = false;
+        int folders = 0;
+        for (int i = 0; i < OpenTabs.Count; i++)
+        {
+            if (i == SelectedTab)
+            {
+                selected = kept.Count;
+            }
+
+            var tab = OpenTabs[i];
+            if (tab is null)
+            {
+                continue;
+            }
+
+            // An entry of unknown kind is a folder tab (with a root) or nothing, never 最近の履歴.
+            string kind = tab.Kind?.Trim().ToLowerInvariant() switch
+            {
+                TabRecent => TabRecent,
+                TabFrequent => TabFrequent,
+                _ => TabFolder,
+            };
+            bool blankRoot = string.IsNullOrWhiteSpace(tab.Root);
+            bool keep = kind switch
+            {
+                TabRecent => !recent,
+                TabFrequent => !frequent,
+                _ => !blankRoot && folders < OpenTabsMax,
+            };
+            if (!keep)
+            {
+                continue;
+            }
+
+            recent |= kind == TabRecent;
+            frequent |= kind == TabFrequent;
+            folders += kind == TabFolder ? 1 : 0;
+            tab.Kind = kind;
+            tab.Root = blankRoot ? string.Empty : tab.Root;
+            tab.Path = blankRoot ? string.Empty : tab.Path ?? string.Empty;
+            kept.Add(tab);
+        }
+
+        OpenTabs = kept;
+        SelectedTab = kept.Count == 0 ? -1 : Math.Clamp(selected < 0 ? SelectedTab : selected, 0, kept.Count - 1);
+    }
+
     /// <summary>Fills gaps and pulls out-of-range values back into range.</summary>
     public void Normalize()
     {
-        Version = 1;
+        if (Version < CurrentVersion || LastTab is not null)
+        {
+            MigrateLegacyTabs();
+        }
+
+        LastTab = null;
+        Locations = null;
+        SelectedFolderTab = null;
+        Version = CurrentVersion;
+        NormalizeOpenTabs();
         Window ??= new WindowPlacementSetting();
         if (Window.Width < 200 || double.IsNaN(Window.Width))
         {
@@ -156,39 +360,6 @@ public sealed class AppSettings
         if (Window.Height < 150 || double.IsNaN(Window.Height))
         {
             Window.Height = 800;
-        }
-
-        Locations ??= new Dictionary<string, LocationSetting>();
-        Locations.Remove(LegacyTabRegistered); // an id of the former 登録フォルダ tab: means nothing now
-        foreach (string tab in new[] { TabRecent, TabFrequent })
-        {
-            if (!Locations.TryGetValue(tab, out var loc) || loc is null)
-            {
-                Locations[tab] = new LocationSetting();
-            }
-            else
-            {
-                loc.Root ??= string.Empty;
-                loc.Path ??= string.Empty;
-            }
-        }
-
-        OpenTabs ??= new List<LocationSetting>();
-        OpenTabs.RemoveAll(t => t is null || string.IsNullOrWhiteSpace(t.Root));
-        if (OpenTabs.Count > OpenTabsMax)
-        {
-            OpenTabs.RemoveRange(OpenTabsMax, OpenTabs.Count - OpenTabsMax);
-        }
-
-        foreach (var tab in OpenTabs)
-        {
-            tab.Path ??= string.Empty;
-        }
-
-        SelectedFolderTab = Math.Clamp(SelectedFolderTab, 0, Math.Max(0, OpenTabs.Count - 1));
-        if (LastTab is not (TabRecent or TabFrequent or TabFolder) || (LastTab == TabFolder && OpenTabs.Count == 0))
-        {
-            LastTab = TabRecent;
         }
 
         SortModes ??= new Dictionary<string, string>();
@@ -211,8 +382,13 @@ public sealed class AppSettings
         }
 
         SidebarWidth = ClampSidebarWidth(SidebarWidth);
+
+        // Known ids only, each once, in the order of the sections (a typed-in "Quick " still counts).
+        var collapsed = (SidebarCollapsedSections ?? []).Select(id => id?.Trim().ToLowerInvariant()).ToHashSet();
+        SidebarCollapsedSections = SidebarSections.All.Where(collapsed.Contains).ToList();
         CardSize = ClampCardSize(CardSize);
         CardShape = CardShapes.ToSetting(CardShapes.FromSetting(CardShape));
+        DetailsColumns = Layout.DetailsColumns.Normalize(DetailsColumns);
         Theme = AppThemes.ToSetting(AppThemes.FromSetting(Theme));
         RecentLimit = Math.Clamp(RecentLimit, 10, 500);
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
@@ -231,7 +407,9 @@ public sealed class AppSettings
             Maximized = Window.Maximized,
         };
         copy.Locations = Locations?.ToDictionary(kv => kv.Key, kv => new LocationSetting { Root = kv.Value.Root, Path = kv.Value.Path });
-        copy.OpenTabs = OpenTabs?.Select(t => new LocationSetting { Root = t.Root, Path = t.Path }).ToList();
+        copy.OpenTabs = OpenTabs?.Select(t => new OpenTabSetting { Kind = t.Kind, Root = t.Root, Path = t.Path }).ToList();
+        copy.SidebarCollapsedSections = SidebarCollapsedSections?.ToList();
+        copy.DetailsColumns = DetailsColumns is null ? null : new Dictionary<string, double>(DetailsColumns);
         copy.SortModes = SortModes is null ? null : new Dictionary<string, string>(SortModes);
         copy.FilterModes = FilterModes is null ? null : new Dictionary<string, string>(FilterModes);
         return copy;

@@ -32,6 +32,9 @@ public sealed class CascadeController
     private const double RowLead = 10;
     private const double WorkMargin = 16;
 
+    /// <summary>How long to wait for the foreground to come back after Explorer's menu (see <see cref="SetNativeMenuOpen"/>).</summary>
+    private static readonly TimeSpan NativeMenuHandBack = TimeSpan.FromMilliseconds(300);
+
     private readonly Window _window;
     private readonly MainViewModel _vm;
     private readonly AppServices _services;
@@ -43,24 +46,29 @@ public sealed class CascadeController
     private readonly DispatcherTimer _exitTimer;
     private readonly DispatcherTimer _previewTimer;
     private readonly DispatcherTimer _previewCloseTimer;
+    private readonly DispatcherTimer _foregroundTimer;
     private readonly PreviewTextCache _previewTexts = new();
 
     private CardView? _card;
 
     /// <summary>
-    /// The sidebar row the cascade was (or is about to be) opened from, and its 登録フォルダ. Then
-    /// level 0 is a flyout beside that row (not an overlay on a card) and folders open in a folder
-    /// tab of their own. Never set together with <see cref="_card"/>.
+    /// What the cascade was (or is about to be) opened from when that is not a card (a sidebar row):
+    /// the element the pointer rests on, the element the list is placed beside (often the same) and
+    /// the folder it stands for. Then level 0 is a flyout beside the element (not an overlay on a
+    /// card), and <see cref="ICascadeAnchor.OpensInNewTab"/> says where its folders open. The three
+    /// are set and cleared together, and never together with <see cref="_card"/>.
     /// </summary>
     private FrameworkElement? _anchor;
-    private SidebarItemViewModel? _anchorItem;
+    private FrameworkElement? _anchorPlacement;
+    private ICascadeAnchor? _anchorItem;
 
     /// <summary>
-    /// Another sidebar row the pointer is on while a list is open: the cascade moves there only when
-    /// the pointer rests on it (it may just be crossing the row on its way to the list).
+    /// Another anchor the pointer is on while a list is open: the cascade moves there only when the
+    /// pointer rests on it (it may just be crossing the element on its way to the list).
     /// </summary>
     private FrameworkElement? _pendingAnchor;
-    private SidebarItemViewModel? _pendingAnchorItem;
+    private FrameworkElement? _pendingAnchorPlacement;
+    private ICascadeAnchor? _pendingAnchorItem;
     private CardViewModel? _waitingFor;
     private PendingOpen? _pendingOpen;
     private PendingPreview? _pendingPreview;
@@ -70,7 +78,23 @@ public sealed class CascadeController
     private bool _menuOpen;
     private bool _suspended;
     private bool _dragging;
+
+    /// <summary>Explorer's own menu is open (see <see cref="SetNativeMenuOpen"/>): the cascade is frozen.</summary>
+    private bool _nativeMenu;
+
+    /// <summary>
+    /// A CloseAll arrived while the native menu was being prepared and the window was still active
+    /// (a tab click, a scroll, the end of a drag: not the Deactivated the menu itself causes): run
+    /// it as soon as the menu is over.
+    /// </summary>
+    private bool _closeAfterNativeMenu;
     private int _generation;
+
+    /// <summary>The foreground window when a cascade opened over the inactive main window (see <see cref="WatchForeground"/>).</summary>
+    private nint _foregroundAtOpen;
+
+    /// <summary>Where the pointer was first seen on an anchor that has no cascade (see <see cref="AnchorMouseMove"/>).</summary>
+    private Point? _rearmFrom;
 
     public CascadeController(Window window, MainViewModel vm, ContextMenuFactory menus)
     {
@@ -84,13 +108,18 @@ public sealed class CascadeController
         _exitTimer = NewTimer(HoverTimings.Exit, OnExitTimer);
         _previewTimer = NewTimer(HoverTimings.Preview, OnPreviewTimer);
         _previewCloseTimer = NewTimer(HoverTimings.Grace, OnPreviewCloseTimer);
+        _foregroundTimer = NewTimer(HoverTimings.ForegroundWatch, OnForegroundTimer);
         _menus.MenuOpened += () => _menuOpen = true;
         _menus.MenuClosed += () =>
         {
             _menuOpen = false;
-            Restart(_exitTimer); // back to rule 3
+            if (!_nativeMenu)
+            {
+                Restart(_exitTimer); // back to rule 3 (after Explorer's menu: see SetNativeMenuOpen)
+            }
         };
         _menus.BeforeNavigate = CloseAll;
+        _menus.NativeMenuChanged += SetNativeMenuOpen;
     }
 
     public bool IsOpen => _levels.Count > 0;
@@ -147,6 +176,77 @@ public sealed class CascadeController
         _suspended = false;
     }
 
+    /// <summary>
+    /// Explorer's own menu (「その他のメニュー（Windows）」) opens or closes. It runs on another thread
+    /// and takes the foreground, so meanwhile the main window is inactive and gets no pointer input.
+    /// <para>
+    /// <c>true</c> (raised before the menu is even built): the cascade is frozen, not hidden; the
+    /// menu was asked for from one of its rows and comes back to it. <see cref="CloseAll"/> does
+    /// nothing (Deactivated, a tab that finishes loading…), no hover opens anything, every timer is
+    /// stopped and their tick handlers return at once. <c>_suspended</c> is needed as well:
+    /// <see cref="CardMouseEnter"/> and <see cref="AnchorMouseEnter"/> would otherwise call
+    /// <see cref="CloseAll"/> (which does nothing) and then put a new owner under the open levels.
+    /// </para>
+    /// <para>
+    /// <c>false</c> (every outcome, also a menu that never showed): with the window active again the
+    /// cascade goes back to rule 3 (it closes when the pointer is not in it). The menu thread hands
+    /// the foreground back only when nothing else took it, and that arrives a moment later, so an
+    /// inactive window is judged after <see cref="NativeMenuHandBack"/>: still inactive means the
+    /// user went to another window (or a command opened one), and the cascade closes as on
+    /// Deactivated.
+    /// </para>
+    /// </summary>
+    public void SetNativeMenuOpen(bool open)
+    {
+        if (open)
+        {
+            _nativeMenu = true;
+            _suspended = true;
+            StopTimers();
+            return;
+        }
+
+        if (!_nativeMenu)
+        {
+            return;
+        }
+
+        _nativeMenu = false;
+        _suspended = _dragging;
+        if (_closeAfterNativeMenu)
+        {
+            _closeAfterNativeMenu = false;
+            CloseAll();
+            return;
+        }
+
+        if (_window.IsActive)
+        {
+            Restart(_exitTimer);
+            return;
+        }
+
+        _ = AfterNativeMenuAsync(_generation);
+    }
+
+    private async Task AfterNativeMenuAsync(int generation)
+    {
+        await Task.Delay(NativeMenuHandBack);
+        if (_nativeMenu || generation != _generation)
+        {
+            return; // another menu, or the cascade was closed or replaced meanwhile
+        }
+
+        if (_window.IsActive)
+        {
+            Restart(_exitTimer);
+        }
+        else
+        {
+            CloseAll();
+        }
+    }
+
     // ---- card events --------------------------------------------------------------------------
 
     public void CardMouseEnter(CardView card)
@@ -157,11 +257,10 @@ public sealed class CascadeController
             return; // dragging a card
         }
 
-        if (!_window.IsActive)
-        {
-            return; // rule 7: nothing opens over an inactive window
-        }
-
+        // Rule 7 (revised): the window does not have to be active. FolderDeck is used beside other
+        // apps, and a hover that silently did nothing until the window was clicked read as a bug.
+        // What the old rule protected is kept by RestartOverlay (a longer rest while inactive),
+        // WatchForeground (closes when another window comes to the front) and ActivateWindow.
         if (!ReferenceEquals(card, _card))
         {
             CloseAll(); // rule 4
@@ -171,7 +270,7 @@ public sealed class CascadeController
         var vm = card.ViewModel;
         if (_levels.Count == 0 && vm is not null && vm.IsFolderLike && !vm.IsDisabled)
         {
-            Restart(_overlayTimer);
+            RestartOverlay();
         }
     }
 
@@ -183,80 +282,148 @@ public sealed class CascadeController
         }
     }
 
-    // ---- sidebar events -----------------------------------------------------------------------
+    // ---- anchor events (sidebar rows) ---------------------------------------------------------
 
     /// <summary>
-    /// The pointer entered a 登録フォルダ row of the sidebar: resting there opens the folder's list
-    /// beside the row (the same hover intent as a card's overlay).
+    /// The pointer entered <paramref name="hover"/>, which stands for the folder
+    /// <paramref name="item"/> (a 登録フォルダ or drive row of the sidebar): resting there opens the
+    /// folder's list beside <paramref name="placement"/>, at the height of <paramref name="hover"/>
+    /// (the same hover intent as a card's overlay). The anchor is known by <paramref name="hover"/>:
+    /// the later events of the same anchor must pass the same element.
     /// </summary>
-    public void SidebarMouseEnter(FrameworkElement row, SidebarItemViewModel item)
+    public void AnchorMouseEnter(FrameworkElement hover, FrameworkElement placement, ICascadeAnchor item)
     {
         _exitTimer.Stop();
-        if (_suspended || !_window.IsActive)
+        _rearmFrom = null;
+        if (_suspended)
         {
-            return; // dragging; rule 7: nothing opens over an inactive window
+            return; // dragging (an inactive window is fine: see CardMouseEnter)
         }
 
-        if (ReferenceEquals(row, _anchor))
+        if (ReferenceEquals(hover, _anchor))
         {
-            // Back on the row the list belongs to: it stays (a switch that was pending is off).
+            // Back on the anchor the list belongs to: it stays (a switch that was pending is off).
             if (_pendingAnchor is not null)
             {
-                _pendingAnchor = null;
-                _pendingAnchorItem = null;
+                ClearPendingAnchor();
                 _overlayTimer.Stop();
             }
         }
         else if (_anchor is not null && _levels.Count > 0)
         {
-            // Another row while a list is open: the rows are stacked, so the pointer crosses the
-            // neighbours on its way to the list. Switch only when it rests here.
-            _pendingAnchor = row;
+            // Another anchor while a list is open: sidebar rows are stacked, so the pointer crosses
+            // the neighbours on its way to the list. Switch only when it rests here.
+            _pendingAnchor = hover;
+            _pendingAnchorPlacement = placement;
             _pendingAnchorItem = item;
-            Restart(_overlayTimer);
+            RestartOverlay();
             return;
         }
         else
         {
             CloseAll(); // rule 4
-            _anchor = row;
+            _anchor = hover;
+            _anchorPlacement = placement;
             _anchorItem = item;
         }
 
         if (_levels.Count == 0 && !item.IsDisabled)
         {
-            Restart(_overlayTimer);
+            RestartOverlay();
         }
     }
 
-    public void SidebarMouseLeave(FrameworkElement row)
+    /// <summary>
+    /// The pointer moved on an anchor (<paramref name="position"/> in coordinates that do not move
+    /// with the anchor, such as those of the view it is in).
+    /// A hover starts at MouseEnter only, so after everything was closed under a resting pointer
+    /// (the window lost activation, a drag ended, another window came to the front…) nothing would
+    /// open until the pointer left the anchor and came back. A real move, further than the system
+    /// drag distance from where the pointer was first seen, arms the anchor again.
+    /// </summary>
+    public void AnchorMouseMove(FrameworkElement hover, FrameworkElement placement, ICascadeAnchor item, Point position)
     {
-        if (ReferenceEquals(row, _pendingAnchor))
+        if (_suspended || _levels.Count > 0 || _anchor is not null)
         {
-            _pendingAnchor = null;
-            _pendingAnchorItem = null;
+            _rearmFrom = null;
+            return; // armed or open already
+        }
+
+        if (_rearmFrom is not { } from)
+        {
+            _rearmFrom = position;
+            return;
+        }
+
+        if (Math.Abs(position.X - from.X) >= SystemParameters.MinimumHorizontalDragDistance
+            || Math.Abs(position.Y - from.Y) >= SystemParameters.MinimumVerticalDragDistance)
+        {
+            AnchorMouseEnter(hover, placement, item);
+        }
+    }
+
+    public void AnchorMouseLeave(FrameworkElement hover)
+    {
+        _rearmFrom = null;
+        if (ReferenceEquals(hover, _pendingAnchor))
+        {
+            ClearPendingAnchor();
             _overlayTimer.Stop();
             Restart(_exitTimer);
         }
-        else if (ReferenceEquals(row, _anchor))
+        else if (ReferenceEquals(hover, _anchor))
         {
             Restart(_exitTimer);
         }
+    }
+
+    /// <summary>
+    /// An anchor's element went away while the pointer may still be on it (a drive was unplugged and
+    /// its row left the sidebar). The element raises no MouseLeave, so nothing else would close the
+    /// list beside it or call off a hover that is waiting to open or to switch to it.
+    /// </summary>
+    public void AnchorRemoved(ICascadeAnchor item)
+    {
+        if (ReferenceEquals(item, _pendingAnchorItem))
+        {
+            ClearPendingAnchor();
+            _overlayTimer.Stop();
+        }
+
+        if (ReferenceEquals(item, _anchorItem))
+        {
+            _rearmFrom = null;
+            CloseAll();
+        }
+    }
+
+    private void ClearPendingAnchor()
+    {
+        _pendingAnchor = null;
+        _pendingAnchorPlacement = null;
+        _pendingAnchorItem = null;
     }
 
     // ---- closing ------------------------------------------------------------------------------
 
     /// <summary>
     /// Closes everything at once (rule 5: scroll, resize, tab switch, navigation, deactivation…).
-    /// During a drag the cascade is already hidden and closes when the drag ends (see <see cref="BeginDrag"/>).
+    /// During a drag the cascade is already hidden and closes when the drag ends (see <see cref="BeginDrag"/>);
+    /// while Explorer's menu is open it stays as it is (see <see cref="SetNativeMenuOpen"/>).
     /// </summary>
     public void CloseAll()
     {
-        if (_dragging)
+        if (_nativeMenu && _window.IsActive)
+        {
+            _closeAfterNativeMenu = true;
+        }
+
+        if (_dragging || _nativeMenu)
         {
             return;
         }
 
+        _closeAfterNativeMenu = false;
         StopTimers();
         _keyLevel = -1;
         CloseFrom(0);
@@ -272,13 +439,49 @@ public sealed class CascadeController
 
         _card = null;
         _anchor = null;
+        _anchorPlacement = null;
         _anchorItem = null;
         _generation++;
     }
 
+    /// <summary>
+    /// Closes a cascade that hangs on an item of the shown tab (a card), for reasons that only
+    /// concern the tab's content (it scrolled, its items were rebuilt). A cascade opened from outside
+    /// the tab (a sidebar row: <see cref="ICascadeAnchor.OpensInNewTab"/>) is not anchored to the
+    /// content and stays: a tab that finishes loading must not take away the list the user is in.
+    /// </summary>
+    public void CloseCardCascade()
+    {
+        if (_anchorItem is not { OpensInNewTab: true })
+        {
+            CloseAll();
+        }
+    }
+
+    /// <summary>
+    /// Ctrl or Shift went down: the user is about to select items of the list. What hangs on an item
+    /// of the list (a card's overlay, the list beside a details row: an anchor that
+    /// <see cref="ICascadeAnchor.YieldsToModifiers"/>) closes, since it covers the items next to it.
+    /// A list beside a sidebar row is not in the way and stays.
+    /// </summary>
+    public void CloseForSelectionKeys()
+    {
+        if (_levels.Count > 0 && (_card is not null || _anchorItem is { YieldsToModifiers: true }))
+        {
+            CloseAll();
+        }
+    }
+
+    /// <summary>Ctrl or Shift is held (read when a hover timer fires).</summary>
+    private static bool SelectionKeysDown => (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
+
+    /// <summary>The anchor gives way to a selection gesture that is under way (Ctrl / Shift held).</summary>
+    private static bool Yields(ICascadeAnchor item) => item.YieldsToModifiers && SelectionKeysDown;
+
     /// <summary>Stops every hover timer and forgets what they were about to open or close.</summary>
     private void StopTimers()
     {
+        _foregroundTimer.Stop();
         _overlayTimer.Stop();
         _openTimer.Stop();
         _graceTimer.Stop();
@@ -287,8 +490,7 @@ public sealed class CascadeController
         _previewCloseTimer.Stop();
         _pendingOpen = null;
         _pendingPreview = null;
-        _pendingAnchor = null;
-        _pendingAnchorItem = null;
+        ClearPendingAnchor();
         _graceLevel = -1;
         StopWaiting();
     }
@@ -351,7 +553,7 @@ public sealed class CascadeController
 
             if (i == 0 && level.Flyout is not null && _anchorItem is { } anchorItem)
             {
-                anchorItem.IsHoverHeld = false; // the list beside a sidebar row closed
+                anchorItem.IsHoverHeld = false; // the list beside an anchor closed
             }
         }
 
@@ -383,32 +585,37 @@ public sealed class CascadeController
     private void OnOverlayTimer()
     {
         _overlayTimer.Stop();
-        if (_pendingAnchor is { } pending && _pendingAnchorItem is { } pendingItem)
+        if (_nativeMenu)
         {
-            // The pointer rested on another sidebar row: the cascade moves there.
-            _pendingAnchor = null;
-            _pendingAnchorItem = null;
-            if (_suspended || !_window.IsActive || !pending.IsMouseOver)
+            return; // frozen under Explorer's menu
+        }
+
+        if (_pendingAnchor is { } pending && _pendingAnchorPlacement is { } pendingPlacement && _pendingAnchorItem is { } pendingItem)
+        {
+            // The pointer rested on another anchor: the cascade moves there.
+            ClearPendingAnchor();
+            if (_suspended || !pending.IsMouseOver || Yields(pendingItem))
             {
                 return;
             }
 
             CloseAll();
             _anchor = pending;
+            _anchorPlacement = pendingPlacement;
             _anchorItem = pendingItem;
             if (!pendingItem.IsDisabled)
             {
-                OpenRoot(pending, pendingItem);
+                OpenRoot(pending, pendingPlacement, pendingItem);
             }
 
             return;
         }
 
-        if (_anchor is { } anchor && _anchorItem is { } item)
+        if (_anchor is { } anchor && _anchorPlacement is { } placement && _anchorItem is { } item)
         {
-            if (!_suspended && _levels.Count == 0 && _window.IsActive && anchor.IsMouseOver && !item.IsDisabled)
+            if (!_suspended && _levels.Count == 0 && anchor.IsMouseOver && !item.IsDisabled && !Yields(item))
             {
-                OpenRoot(anchor, item);
+                OpenRoot(anchor, placement, item);
             }
 
             return;
@@ -416,9 +623,9 @@ public sealed class CascadeController
 
         var card = _card;
         var vm = card?.ViewModel;
-        if (card is null || vm is null || _suspended || _levels.Count > 0 || !_window.IsActive || !card.IsMouseOver)
+        if (card is null || vm is null || _suspended || _levels.Count > 0 || !card.IsMouseOver || SelectionKeysDown)
         {
-            return;
+            return; // with Ctrl / Shift the user is selecting cards: an overlay would cover the next one
         }
 
         if (!vm.CountsLoaded)
@@ -442,7 +649,7 @@ public sealed class CascadeController
 
         StopWaiting();
         var card = _card;
-        if (card is not null && !_suspended && ReferenceEquals(card.ViewModel, vm) && card.IsMouseOver && _window.IsActive && _levels.Count == 0)
+        if (card is not null && !_suspended && ReferenceEquals(card.ViewModel, vm) && card.IsMouseOver && _levels.Count == 0 && !SelectionKeysDown)
         {
             _ = OpenOverlayAsync(card, vm);
         }
@@ -475,7 +682,7 @@ public sealed class CascadeController
             return;
         }
 
-        if (_suspended || generation != _generation || !ReferenceEquals(_card, card) || !ReferenceEquals(card.ViewModel, vm) || _levels.Count > 0)
+        if (_suspended || generation != _generation || !ReferenceEquals(_card, card) || !ReferenceEquals(card.ViewModel, vm) || _levels.Count > 0 || SelectionKeysDown)
         {
             return;
         }
@@ -491,6 +698,7 @@ public sealed class CascadeController
         var level = new Level(0, model, overlay.List) { Overlay = overlay, Card = card };
         Wire(level);
         _levels.Add(level);
+        WatchForeground();
         card.SetOverlay(overlay);
         vm.IsHoverHeld = true;
         overlay.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, HoverTimings.OverlayFadeIn));
@@ -516,7 +724,7 @@ public sealed class CascadeController
     {
         level.List.RowHovered += (_, row, _) => OnRowHovered(level, row);
         level.List.RowClicked += (_, row) => OnRowClicked(row);
-        level.List.RowContextMenu += (_, row, element) => _menus.Show(ItemOf(row), element);
+        level.List.RowContextMenu += (_, row, element) => ShowMenu(ItemOf(row), element);
         level.List.RowExplorerRequested += (_, row) => OnRowExplorer(row);
         level.List.RowDragRequested += (_, row) => DragOut(row, "row");
 
@@ -533,7 +741,7 @@ public sealed class CascadeController
             flyout.MouseEnter += (_, _) => OnFlyoutEnter(level);
             flyout.MouseLeave += (_, _) => Restart(_exitTimer);
             flyout.HeaderClicked += _ => OnHeaderClicked(level);
-            flyout.HeaderContextMenu += _ => _menus.Show(HeaderOf(level), flyout.HeaderElement);
+            flyout.HeaderContextMenu += _ => ShowMenu(HeaderOf(level), flyout.HeaderElement);
             flyout.CardElement.SizeChanged += (_, _) => Position(level, reveal: false);
         }
     }
@@ -575,9 +783,8 @@ public sealed class CascadeController
         _exitTimer.Stop();
         if (_pendingAnchor is not null)
         {
-            // Reached the list: the sidebar row crossed on the way does not take the cascade.
-            _pendingAnchor = null;
-            _pendingAnchorItem = null;
+            // Reached the list: the anchor crossed on the way does not take the cascade.
+            ClearPendingAnchor();
             _overlayTimer.Stop();
         }
 
@@ -602,13 +809,18 @@ public sealed class CascadeController
     private void OnOpenTimer()
     {
         _openTimer.Stop();
+        if (_nativeMenu)
+        {
+            return; // frozen under Explorer's menu
+        }
+
         if (_pendingOpen is not { } p)
         {
             return;
         }
 
         _pendingOpen = null;
-        if (!_window.IsActive || p.Level >= _levels.Count)
+        if (p.Level >= _levels.Count)
         {
             return;
         }
@@ -631,6 +843,11 @@ public sealed class CascadeController
     private void OnGraceTimer()
     {
         _graceTimer.Stop();
+        if (_nativeMenu)
+        {
+            return; // frozen under Explorer's menu
+        }
+
         int index = _graceLevel;
         _graceLevel = -1;
         if (index < 0 || index >= _levels.Count)
@@ -649,6 +866,11 @@ public sealed class CascadeController
     private void OnExitTimer()
     {
         _exitTimer.Stop();
+        if (_nativeMenu)
+        {
+            return; // frozen under Explorer's menu
+        }
+
         if (_menuOpen)
         {
             return; // rule 8
@@ -704,6 +926,7 @@ public sealed class CascadeController
     private void OnRowClicked(EntryRowViewModel row)
     {
         var item = ItemOf(row);
+        ActivateWindow();
         CloseAll();
         _ = _vm.OpenItemAsync(item);
     }
@@ -711,6 +934,7 @@ public sealed class CascadeController
     private void OnHeaderClicked(Level level)
     {
         var item = HeaderOf(level);
+        ActivateWindow();
         CloseAll();
         _ = _vm.OpenItemAsync(item);
     }
@@ -719,15 +943,21 @@ public sealed class CascadeController
     private void OnRowExplorer(EntryRowViewModel row)
     {
         var item = ItemOf(row);
+        ActivateWindow();
         CloseAll();
         _ = _vm.ShowInExplorerAsync(item);
     }
 
-    /// <summary>A row as an item. In the cascade of a sidebar row, folders open in a folder tab of their own.</summary>
-    private ItemRef ItemOf(EntryRowViewModel row) => row.ToItemRef() with { NewTab = _anchor is not null };
+    /// <summary>
+    /// A row as an item. In the cascade of an anchor outside the tab (a sidebar row), folders open
+    /// in a folder tab of their own; in a card's cascade they navigate inside the tab.
+    /// </summary>
+    private ItemRef ItemOf(EntryRowViewModel row) => row.ToItemRef() with { NewTab = OpensInNewTab };
 
     private ItemRef HeaderOf(Level level) =>
-        new(level.Model.Path, true, level.Model.Location, ItemContext.FlyoutHeader) { NewTab = _anchor is not null };
+        new(level.Model.Path, true, level.Model.Location, ItemContext.FlyoutHeader) { NewTab = OpensInNewTab };
+
+    private bool OpensInNewTab => _anchorItem is { OpensInNewTab: true };
 
     // ---- dragging out to other apps -----------------------------------------------------------
 
@@ -773,18 +1003,20 @@ public sealed class CascadeController
     }
 
     /// <summary>
-    /// Level 0 of a cascade opened from the sidebar: the list of a 登録フォルダ, in a flyout beside
-    /// its row (the row is both the "row" and the "parent card" of the placement).
+    /// Level 0 of a cascade opened from an anchor: the list of its folder, in a flyout. For the
+    /// placement <paramref name="hover"/> is the "row" (the list opens at its height) and
+    /// <paramref name="placement"/> the "parent card" (the list goes beside it). A sidebar row is both.
     /// </summary>
-    private void OpenRoot(FrameworkElement anchor, SidebarItemViewModel item)
+    private void OpenRoot(FrameworkElement hover, FrameworkElement placement, ICascadeAnchor item)
     {
-        if (!anchor.IsVisible)
+        if (!hover.IsVisible || !placement.IsVisible)
         {
             return;
         }
 
-        Rect rowRect = ScreenRect(anchor);
-        OpenFlyout(0, item.Path, item.Target, rowRect, rowRect, preferLeft: false, parentRow: null);
+        Rect rowRect = ScreenRect(hover);
+        Rect anchorRect = ReferenceEquals(placement, hover) ? rowRect : ScreenRect(placement);
+        OpenFlyout(0, item.Path, item.Target, rowRect, anchorRect, preferLeft: false, parentRow: null);
         item.IsHoverHeld = true;
     }
 
@@ -817,6 +1049,10 @@ public sealed class CascadeController
         };
         _levels.Add(level);
         Wire(level);
+        if (index == 0)
+        {
+            WatchForeground();
+        }
 
         // Rough position first (main window DPI), exact position once the popup has a size.
         double scale = VisualTreeHelper.GetDpi(_window).DpiScaleX;
@@ -1031,13 +1267,18 @@ public sealed class CascadeController
     private void OnPreviewTimer()
     {
         _previewTimer.Stop();
+        if (_nativeMenu)
+        {
+            return; // frozen under Explorer's menu
+        }
+
         if (_pendingPreview is not { } p)
         {
             return;
         }
 
         _pendingPreview = null;
-        if (!_window.IsActive || p.Level >= _levels.Count)
+        if (p.Level >= _levels.Count)
         {
             return;
         }
@@ -1055,6 +1296,11 @@ public sealed class CascadeController
     private void OnPreviewCloseTimer()
     {
         _previewCloseTimer.Stop();
+        if (_nativeMenu)
+        {
+            return; // frozen under Explorer's menu
+        }
+
         if (_preview is not { } preview || preview.View.IsMouseOver)
         {
             return;
@@ -1138,7 +1384,7 @@ public sealed class CascadeController
         };
         view.MouseLeave += (_, _) => Restart(_exitTimer);
         view.Clicked += _ => OnRowClicked(row);
-        view.ContextMenuRequested += _ => _menus.Show(row.ToItemRef(), view.CardElement);
+        view.ContextMenuRequested += _ => ShowMenu(row.ToItemRef(), view.CardElement);
         view.DragRequested += _ => DragOut(row, "preview");
         view.CardElement.SizeChanged += (_, _) => PositionPreview(preview, reveal: false);
 
@@ -1461,6 +1707,82 @@ public sealed class CascadeController
     {
         timer.Stop();
         timer.Start();
+    }
+
+    /// <summary>
+    /// Starts the wait before level 0 opens. Over an inactive window the pointer has to rest longer,
+    /// so that crossing a FolderDeck that shows behind another app opens nothing.
+    /// </summary>
+    private void RestartOverlay()
+    {
+        _overlayTimer.Interval = _window.IsActive ? HoverTimings.Overlay : HoverTimings.OverlayInactive;
+        Restart(_overlayTimer);
+    }
+
+    /// <summary>
+    /// Level 0 opened while the main window is inactive: no Deactivated will come to close it, and
+    /// the popups are topmost windows, so they would stay over whatever app the user switches to.
+    /// Watches the foreground window instead and closes when it changes. (Popups never become the
+    /// foreground window, so the cascade does not close itself.)
+    /// </summary>
+    private void WatchForeground()
+    {
+        if (_window.IsActive)
+        {
+            return; // Deactivated closes the cascade
+        }
+
+        _foregroundAtOpen = ShellInterop.GetForegroundWindow();
+        Restart(_foregroundTimer);
+    }
+
+    private void OnForegroundTimer()
+    {
+        if (_nativeMenu)
+        {
+            _foregroundTimer.Stop(); // frozen under Explorer's menu, which has the foreground
+            return;
+        }
+
+        if (_levels.Count == 0 || _window.IsActive)
+        {
+            _foregroundTimer.Stop(); // closed, or activated by a click: Deactivated takes over
+            return;
+        }
+
+        nint now = ShellInterop.GetForegroundWindow();
+        if (now == 0)
+        {
+            return; // between two windows: decide on the next tick
+        }
+
+        if (_foregroundAtOpen == 0)
+        {
+            _foregroundAtOpen = now;
+        }
+        else if (now != _foregroundAtOpen)
+        {
+            CloseAll();
+        }
+    }
+
+    /// <summary>
+    /// A click inside the cascade. The popups do not take activation (WS_EX_NOACTIVATE), so a
+    /// cascade opened over the inactive main window would otherwise open tabs, dialogs and menus in
+    /// a window that is not in front (and a context menu would not close on an outside click).
+    /// </summary>
+    private void ActivateWindow()
+    {
+        if (!_window.IsActive)
+        {
+            _window.Activate();
+        }
+    }
+
+    private void ShowMenu(ItemRef item, FrameworkElement target)
+    {
+        ActivateWindow();
+        _menus.Show(item, target);
     }
 
     private sealed record PendingOpen(int Level, EntryRowViewModel Row);

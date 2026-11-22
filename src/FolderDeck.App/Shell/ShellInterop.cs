@@ -361,6 +361,18 @@ internal static class ShellInterop
 
     public static void AllowAnyForeground() => PInvoke.AllowSetForegroundWindow(unchecked((uint)-1));
 
+    /// <summary>The window the user is working in (0 while Windows switches between two windows).</summary>
+    public static nint GetForegroundWindow() => (IntPtr)PInvoke.GetForegroundWindow();
+
+    /// <summary>The pointer in screen coordinates (physical pixels for this per-monitor aware process).</summary>
+    public static bool TryGetCursorPos(out int x, out int y)
+    {
+        bool ok = PInvoke.GetCursorPos(out System.Drawing.Point point);
+        x = point.X;
+        y = point.Y;
+        return ok;
+    }
+
     public static void BringToFront(IntPtr hwnd)
     {
         var h = new HWND(hwnd);

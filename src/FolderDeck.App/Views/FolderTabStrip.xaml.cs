@@ -11,9 +11,10 @@ using FolderDeck.ViewModels;
 namespace FolderDeck.Views;
 
 /// <summary>
-/// The strip of folder tabs: a press shows the tab, dragging it sideways moves it among the other
-/// folder tabs (they swap as the pointer passes the middle of a neighbour), a middle click or ×
-/// closes it, the wheel scrolls the strip when the tabs do not fit.
+/// The tab strip (every open tab: 最近の履歴, よく使う項目 and the folder tabs): a press shows the
+/// tab, dragging it sideways moves it among the others (they swap as the pointer passes the middle
+/// of a neighbour), a middle click or × closes it, the wheel scrolls the strip when the tabs do
+/// not fit.
 /// </summary>
 public partial class FolderTabStrip : UserControl
 {
@@ -54,14 +55,14 @@ public partial class FolderTabStrip : UserControl
         if (_vm is not null)
         {
             _vm.PropertyChanged -= OnVmPropertyChanged;
-            _vm.FolderTabs.CollectionChanged -= OnTabsChanged;
+            _vm.Tabs.CollectionChanged -= OnTabsChanged;
         }
 
         _vm = e.NewValue as MainViewModel;
         if (_vm is not null)
         {
             _vm.PropertyChanged += OnVmPropertyChanged;
-            _vm.FolderTabs.CollectionChanged += OnTabsChanged;
+            _vm.Tabs.CollectionChanged += OnTabsChanged;
         }
     }
 
@@ -80,7 +81,7 @@ public partial class FolderTabStrip : UserControl
     {
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
-            if (_vm?.SelectedTab is { IsFolderTab: true } tab && !_moving
+            if (_vm?.SelectedTab is { IsPlaceholder: false } tab && !_moving
                 && Tabs.ItemContainerGenerator.ContainerFromItem(tab) is FrameworkElement container)
             {
                 container.BringIntoView();
@@ -142,7 +143,7 @@ public partial class FolderTabStrip : UserControl
             return;
         }
 
-        var tabs = _vm.FolderTabs;
+        var tabs = _vm.Tabs;
         int from = tabs.IndexOf(tab);
         if (from < 0)
         {
@@ -165,7 +166,7 @@ public partial class FolderTabStrip : UserControl
 
         if (to != from)
         {
-            _vm.MoveFolderTab(tab, to);
+            _vm.MoveTab(tab, to);
             Tabs.UpdateLayout(); // the next move is judged against the new positions
         }
     }
@@ -212,7 +213,7 @@ public partial class FolderTabStrip : UserControl
         var close = new MenuItem { Header = "タブを閉じる" };
         close.Click += (_, _) => vm.CloseTabCommand.Execute(tab);
         menu.Items.Add(close);
-        var others = new MenuItem { Header = "ほかのタブを閉じる", IsEnabled = vm.FolderTabs.Count > 1 };
+        var others = new MenuItem { Header = "ほかのタブを閉じる", IsEnabled = vm.Tabs.Count > 1 };
         others.Click += (_, _) => _ = vm.CloseOtherTabsAsync(tab);
         menu.Items.Add(others);
         menu.IsOpen = true;

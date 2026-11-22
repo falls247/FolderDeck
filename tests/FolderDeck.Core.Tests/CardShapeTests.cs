@@ -10,6 +10,7 @@ public class CardShapeTests
     [InlineData(null, "portrait")]
     [InlineData("\"bogus\"", "portrait")]
     [InlineData("\" Square \"", "square")]
+    [InlineData("\"DETAILS\"", "details")]
     public void Load_NormalizesCardShape_AndSavesItUnderCardShapeKey(string? json, string expected)
     {
         using var tmp = new TempDir();
@@ -26,6 +27,11 @@ public class CardShapeTests
         var reloaded = new SettingsStore(file, FakeClock.Fixed());
         reloaded.Load();
         Assert.Equal(CardShape.Square, CardShapes.FromSetting(reloaded.Current.CardShape));
+
+        // the details list is the third value of the same key, and the only one that shows no cards
+        Assert.Equal(CardShapes.Details, CardShapes.ToSetting(CardShape.Details));
+        Assert.False(CardShapes.IsCards(CardShape.Details));
+        Assert.True(CardShapes.IsCards(CardShape.Portrait) && CardShapes.IsCards(CardShape.Square));
     }
 
     [Theory]

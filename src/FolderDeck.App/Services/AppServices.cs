@@ -14,6 +14,7 @@ public sealed class AppServices : IDisposable
     /// <summary>The picture thumbnail cache, inside the data folder.</summary>
     public const string ThumbCacheFolderName = "thumbs";
 
+    private readonly StaWorkerPool _typeNameWorker = new(1, "TypeNames");
     private volatile bool _showHidden;
 
     public AppServices(DataStores stores)
@@ -24,6 +25,7 @@ public sealed class AppServices : IDisposable
         Thumbnails = new ThumbnailService(
             Path.Combine(stores.DataDirectory, ThumbCacheFolderName),
             stores.Settings.Current.ThumbCacheMb * 1024L * 1024L);
+        TypeNames = new TypeNameCache(_typeNameWorker);
     }
 
     public DataStores Stores { get; }
@@ -43,6 +45,12 @@ public sealed class AppServices : IDisposable
 
     /// <summary>Single STA worker for other shell calls (reading .lnk files).</summary>
     public StaWorkerPool Shell { get; } = new(1, "Shell");
+
+    /// <summary>
+    /// Type names for the 種類 column of the details list. On a worker of its own: <see cref="Shell"/>
+    /// can be busy for seconds (reading the Windows recent items), and the names would wait behind it.
+    /// </summary>
+    public TypeNameCache TypeNames { get; }
 
     /// <summary>At most 8 cards load their details at the same time (§7.4.1).</summary>
     public SemaphoreSlim DetailGate { get; } = new(8, 8);
@@ -71,5 +79,6 @@ public sealed class AppServices : IDisposable
         Thumbnails.Dispose();
         Icons.Dispose();
         Shell.Dispose();
+        _typeNameWorker.Dispose();
     }
 }

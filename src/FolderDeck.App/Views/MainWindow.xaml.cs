@@ -23,6 +23,21 @@ public partial class MainWindow : Window, IMainView, ICardHost
     private readonly CascadeController _cascade;
     private readonly ContextMenuFactory _menus;
 
+    /// <summary>
+    /// Set when the sidebar was just shown or hidden: the toggle sits right of the sidebar and moves
+    /// with it, so the further presses of a double click would land on whatever took its place.
+    /// </summary>
+    private bool _sidebarJustToggled;
+
+    /// <summary>Window messages the app reacts to (a drive came or went); created once the window has its handle.</summary>
+    private MainWindowHook? _hook;
+
+    /// <summary>
+    /// When the drives were last read because the window was activated (<see cref="Environment.TickCount64"/>).
+    /// Starts at the creation of the window: the list is read at startup anyway.
+    /// </summary>
+    private long _drivesReadAt = Environment.TickCount64;
+
     public MainWindow(MainViewModel vm, ThemeManager theme)
     {
         InitializeComponent();
@@ -34,19 +49,44 @@ public partial class MainWindow : Window, IMainView, ICardHost
         vm.View = this;
         CardView.Host = this;
 
-        // The stores are loaded before the window is created: the sidebar opens at its saved width.
-        SidebarColumn.Width = new GridLength(AppSettings.ClampSidebarWidth(vm.Services.Stores.Settings.Current.SidebarWidth));
+        // The stores are loaded before the window is created: the sidebar opens as it was saved
+        // (shown at its width, or hidden).
+        ApplySidebarLayout();
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(MainViewModel.IsSidebarCollapsed))
+            {
+                ApplySidebarLayout();
+                _sidebarJustToggled = true;
+            }
+        };
 
-        Grid.Scrolled += (_, _) => _cascade.CloseAll();
+        Grid.Scrolled += (_, _) => _cascade.CloseCardCascade();
         Grid.CardSizeStepRequested += step => vm.StepCardSize(step);
 
-        Sidebar.ItemEntered += (row, item) => _cascade.SidebarMouseEnter(row, item);
-        Sidebar.ItemLeft += row => _cascade.SidebarMouseLeave(row);
+        // The details list: like the grid, its scrolling only concerns what hangs on its own rows.
+        Details.Scrolled += (_, _) => _cascade.CloseCardCascade();
+        Details.HeaderClicked += column => vm.SetSortMode(CardSortModes.Next(vm.SelectedTab.SortMode, column));
+        Details.ColumnResized += (key, width) => vm.SetDetailsColumnWidth(key, width);
+
+        // A sidebar row is one element: the pointer rests on it and its list goes beside it.
+        Sidebar.ItemEntered += (row, item) => _cascade.AnchorMouseEnter(row, row, item);
+        Sidebar.ItemMoved += (row, item, position) => _cascade.AnchorMouseMove(row, row, item, position);
+        Sidebar.ItemLeft += row => _cascade.AnchorMouseLeave(row);
         Sidebar.ItemClicked += OnSidebarClicked;
         Sidebar.ItemContextMenu += (item, row) => _menus.Show(item.ToItemRef(), row);
         Sidebar.ItemExplorerRequested += OnSidebarExplorer;
         Sidebar.ItemDragRequested += OnSidebarDrag;
         Sidebar.Scrolled += () => _cascade.CloseAll();
+        vm.DriveList.RowRemoved += row => _cascade.AnchorRemoved(row);
+        vm.DriveList.Drives.CollectionChanged += (_, _) =>
+        {
+            // A drive came or went above the row a list hangs on: the row moved, the list did not.
+            if (vm.DriveList.Drives.Any(d => d.IsHoverHeld))
+            {
+                _cascade.CloseAll();
+            }
+        };
         TabStrip.Interacted += () => _cascade.CloseAll();
 
         // §9.6 rule 5: these close every flyout at once (Popups are topmost windows).
@@ -57,6 +97,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
         Application.Current.Deactivated += (_, _) => _cascade.CloseAll();
 
         SourceInitialized += (_, _) => _theme.ApplyTitleBar(this);
+        SourceInitialized += (_, _) => WatchWindowMessages();
+        Activated += OnActivatedReadDrives;
+        Activated += (_, _) => _ = vm.OnActivatedAsync(); // a cut of ours may have been pasted in Explorer
+        Closed += (_, _) => _hook?.Dispose();
         theme.ThemeChanged += () => _theme.ApplyTitleBar(this);
         PreviewKeyDown += OnPreviewKeyDown;
         PreviewMouseDown += OnPreviewMouseDown;
@@ -64,7 +108,29 @@ public partial class MainWindow : Window, IMainView, ICardHost
         DragOver += OnDragOver;
         DragLeave += (_, _) => DropHint.Visibility = Visibility.Collapsed;
         Drop += OnDrop;
-        Closing += (_, _) => vm.SaveState(CapturePlacement());
+        Closing += OnClosing;
+
+        // The blank part of the item list: a press clears the selection, a right click offers paste.
+        // The cards' own presses are not handled (ItemPointerTracker), and the scroll viewer may
+        // mark a press handled when it takes the focus: handledEventsToo, then OriginalSource decides.
+        ContentHost.AddHandler(MouseLeftButtonDownEvent, new MouseButtonEventHandler(OnContentLeftDown), handledEventsToo: true);
+        ContentHost.MouseRightButtonUp += OnContentRightUp;
+    }
+
+    /// <summary>
+    /// The window refuses to close silently while a paste copies or moves files: the transfer runs
+    /// on a background thread and would be cut off halfway. Asks first (default: キャンセル).
+    /// </summary>
+    private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (_vm.IsTransferRunning
+            && !Confirm("終了しますか？", "ファイルの移動・コピーが実行中です。終了すると途中で中断されます。", null, "終了する", danger: true))
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        _vm.SaveState(CapturePlacement());
     }
 
     // ---- window placement (§5.5) ------------------------------------------------------------
@@ -146,6 +212,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
         bool inTextBox = Keyboard.FocusedElement is TextBox;
         Key key = e.Key == Key.System ? e.SystemKey : e.Key;
 
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift)
+        {
+            _cascade.CloseForSelectionKeys(); // a Ctrl / Shift click is coming: nothing may cover the items
+            return;
+        }
+
         if (_cascade.IsOpen && (!inTextBox || key == Key.Escape) && Keyboard.Modifiers == ModifierKeys.None)
         {
             if (_cascade.HandleKey(key))
@@ -153,6 +225,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 e.Handled = true;
                 return;
             }
+        }
+
+        if (!inTextBox && HandleSelectionKey(key, e))
+        {
+            e.Handled = true;
+            return;
         }
 
         switch (key)
@@ -165,8 +243,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 e.Handled = true;
                 _vm.GoUpCommand.Execute(null);
                 break;
-            case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.SelectedTab.IsFolderTab:
-                e.Handled = true; // like Explorer: closes the shown folder tab
+            case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
+                e.Handled = true; // like Explorer: closes the shown tab, whatever its kind
                 _vm.CloseTabCommand.Execute(_vm.SelectedTab);
                 break;
             case Key.Left when Keyboard.Modifiers == ModifierKeys.Alt:
@@ -184,6 +262,20 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (e.ChangedButton == MouseButton.Left && _sidebarJustToggled)
+        {
+            // ClickCount > 1: same spot and within the double-click time of the press that toggled
+            // the sidebar. That press is dropped (a section header or a tab is there now); the first
+            // press of a new click ends the guard.
+            if (e.ClickCount > 1)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            _sidebarJustToggled = false;
+        }
+
         if (e.ChangedButton == MouseButton.XButton1)
         {
             e.Handled = true;
@@ -196,12 +288,161 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
     }
 
+    /// <summary>
+    /// The selection keys (not in a text box): Ctrl+A, Esc (after the cascade had its turn) and
+    /// Ctrl+C / Ctrl+X / Ctrl+V. Copy and cut act on the selection only, never on the item under the
+    /// pointer; a held key repeats nothing (one paste per press). Returns true when the key was used.
+    /// </summary>
+    private bool HandleSelectionKey(Key key, KeyEventArgs e)
+    {
+        var modifiers = Keyboard.Modifiers;
+        if (key == Key.Escape && modifiers == ModifierKeys.None)
+        {
+            return _vm.ClearSelection();
+        }
+
+        if (modifiers != ModifierKeys.Control || key is not (Key.A or Key.C or Key.X or Key.V))
+        {
+            return false;
+        }
+
+        if (e.IsRepeat)
+        {
+            return true; // swallowed: a held Ctrl+V must not start one paste per repeat
+        }
+
+        switch (key)
+        {
+            case Key.A:
+                _cascade.CloseAll();
+                _vm.SelectAll();
+                break;
+            case Key.C:
+            case Key.X:
+                var items = _vm.SelectedItems();
+                if (items.Count > 0)
+                {
+                    _vm.CopyToClipboard(items, cut: key == Key.X);
+                }
+
+                break;
+            case Key.V:
+                if (_vm.PasteFolderOf(null) is { } folder)
+                {
+                    _ = _vm.PasteAsync(folder);
+                }
+                else
+                {
+                    _vm.Message.Info(_vm.HasTab && _vm.SelectedTab.FolderTargetPath is not null && _vm.SelectedTab.IsLoading
+                        ? "フォルダの読み込みが終わってから貼り付けてください。"
+                        : "この一覧には貼り付けできません。");
+                }
+
+                break;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// A left press in the item area clears the selection, unless it is on an item (its click
+    /// decides on release), on a scroll bar, a button or a grip, or a Ctrl / Shift click is meant.
+    /// </summary>
+    private void OnContentLeftDown(object sender, MouseButtonEventArgs e)
+    {
+        if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0 || IsOnItemOrControl(e.OriginalSource))
+        {
+            return;
+        }
+
+        _vm.ClearSelection();
+    }
+
+    /// <summary>A right click on the blank area that nothing else took: 貼り付け and 最新の情報に更新.</summary>
+    private void OnContentRightUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.Handled || !_vm.HasTab || IsOnItemOrControl(e.OriginalSource))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        _cascade.CloseAll();
+        _menus.ShowBlank(ContentHost);
+    }
+
+    /// <summary>The element pressed is (inside) a card, a details row, a scroll bar, a button or a grip.</summary>
+    private static bool IsOnItemOrControl(object source)
+    {
+        for (var node = source as DependencyObject; node is not null; node = Parent(node))
+        {
+            if (node is CardView or DetailsRowView or ScrollBar or ButtonBase or Thumb)
+            {
+                return true;
+            }
+        }
+
+        return false;
+
+        // Text runs are not visuals: walk them up through the logical tree.
+        static DependencyObject? Parent(DependencyObject node) =>
+            node is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D
+                ? System.Windows.Media.VisualTreeHelper.GetParent(node)
+                : LogicalTreeHelper.GetParent(node);
+    }
+
     private void OnHideMessage(object sender, RoutedEventArgs e) => _vm.Message.Hide();
 
     // The popups of the cascade are placed in screen coordinates: they close before the sidebar moves.
     private void OnSplitterDragStarted(object sender, DragStartedEventArgs e) => _cascade.CloseAll();
 
-    private void OnSplitterDragCompleted(object sender, DragCompletedEventArgs e) => _vm.SidebarWidth = SidebarColumn.ActualWidth;
+    private void OnSplitterDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (!_vm.IsSidebarCollapsed)
+        {
+            _vm.SidebarWidth = SidebarColumn.ActualWidth; // never the 0 of a hidden sidebar
+        }
+    }
+
+    /// <summary>
+    /// Shows the sidebar at its saved width, or hides it together with the splitter. The column's
+    /// minimum goes first: a width below the minimum is not applied, and a minimum left behind would
+    /// keep an empty strip where the sidebar was.
+    /// </summary>
+    private void ApplySidebarLayout()
+    {
+        _cascade.CloseAll(); // a list beside a sidebar row loses its row, the others move
+        bool collapsed = _vm.IsSidebarCollapsed;
+        if (collapsed)
+        {
+            SidebarColumn.MinWidth = 0;
+            SidebarColumn.Width = new GridLength(0);
+            DropHint.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            SidebarColumn.MinWidth = AppSettings.SidebarWidthMin;
+            SidebarColumn.Width = new GridLength(AppSettings.ClampSidebarWidth(_vm.SidebarWidth));
+        }
+
+        SidebarPane.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        SidebarSplitter.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>
+    /// A view mode button became the checked one. After a click the command sets the same value
+    /// again, and when the view model changed first this is its own value coming back: both do
+    /// nothing. What is left is a button checked from outside (UI Automation's "select"), which
+    /// runs no command.
+    /// </summary>
+    private void OnViewModeChecked(object sender, RoutedEventArgs e)
+    {
+        // DataContext, not _vm: the buttons exist before the constructor has set the field.
+        if (sender is RadioButton { CommandParameter: CardShape shape } && DataContext is MainViewModel vm)
+        {
+            vm.CardShape = shape;
+        }
+    }
 
     /// <summary>
     /// Toolbar filter button (top level of 最近の履歴 / よく使う項目): everything, folders only or
@@ -234,7 +475,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     }
 
     /// <summary>
-    /// Toolbar sort button: a menu of the five modes, the current one checked, and on 最近の履歴 /
+    /// Toolbar sort button: a menu of every mode, the current one checked, and on 最近の履歴 /
     /// よく使う項目 「手動の並びをリセット」 (enabled when cards were dragged there).
     /// </summary>
     private void OnSortClick(object sender, RoutedEventArgs e)
@@ -281,7 +522,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     // ---- drag & drop registration (§10.1, P1) -----------------------------------------------
 
     // Folders dropped from Explorer anywhere on the window are registered (the hint shows over the
-    // sidebar, where they land). Drags the app started itself (cards, rows, previews, sidebar rows)
+    // sidebar, where they land; no hint while the sidebar is hidden). Drags the app started itself (cards, rows, previews, sidebar rows)
     // carry a file drop too, for other apps: released over the window they are never a registration.
     private static bool CanDrop(DragEventArgs e) =>
         e.Data.GetDataPresent(DataFormats.FileDrop) && !IsOwnDrag(e.Data);
@@ -292,7 +533,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     {
         bool ok = CanDrop(e);
         e.Effects = ok ? DragDropEffects.Copy : DragDropEffects.None;
-        DropHint.Visibility = ok ? Visibility.Visible : Visibility.Collapsed;
+        DropHint.Visibility = ok && !_vm.IsSidebarCollapsed ? Visibility.Visible : Visibility.Collapsed;
         e.Handled = true;
     }
 
@@ -310,66 +551,105 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     // ---- ICardHost ----------------------------------------------------------------------------
 
+    /// <summary>
+    /// The view that shows the items of the tab right now, by the view mode: the card grid or the
+    /// details list. Scroll position and reorder drag go through it. The other one is hidden and
+    /// has no items (MainWindow.xaml), so its scroll position is never read or set.
+    /// </summary>
+    private IItemsView ActiveList => CardShapes.IsCards(_vm.CardShape) ? Grid : Details;
+
     public void CardMouseEnter(CardView card) => _cascade.CardMouseEnter(card);
 
     public void CardMouseLeave(CardView card) => _cascade.CardMouseLeave(card);
 
-    public void CardActivate(CardView card)
+    /// <summary>
+    /// A row of the details list: the name is both what the pointer rests on and what the list is
+    /// placed beside, so resting on the other columns opens nothing. Only a folder has a list; on
+    /// any other name nothing is armed and a list that is open closes as on leaving its row.
+    /// </summary>
+    public void RowMouseEnter(FrameworkElement nameCell, CardViewModel vm)
     {
-        if (card.ViewModel is not { } vm)
+        if (CardAnchor.For(vm) is { } anchor)
+        {
+            _cascade.AnchorMouseEnter(nameCell, nameCell, anchor);
+        }
+    }
+
+    /// <summary>The pointer moved on a name without a button held: arms the row again after everything was closed under it.</summary>
+    public void RowMouseMove(FrameworkElement nameCell, CardViewModel vm)
+    {
+        if (CardAnchor.For(vm) is { } anchor)
+        {
+            _cascade.AnchorMouseMove(nameCell, nameCell, anchor, Mouse.GetPosition(this));
+        }
+    }
+
+    public void RowMouseLeave(FrameworkElement nameCell) => _cascade.AnchorMouseLeave(nameCell);
+
+    /// <summary>
+    /// A click with Ctrl and / or Shift selects (Ctrl flips the item, Shift takes the range, both add
+    /// the range); a plain click clears the selection and opens the item.
+    /// </summary>
+    public void ItemClick(CardViewModel vm, FrameworkElement element, ModifierKeys modifiers)
+    {
+        _cascade.CloseAll();
+        if (_vm.ClickSelect(vm, modifiers))
         {
             return;
         }
 
-        _cascade.CloseAll();
+        _vm.ClearSelection();
         _ = _vm.ActivateCardAsync(vm);
     }
 
-    public void CardContextMenu(CardView card)
+    /// <summary>
+    /// The menu of an item that is part of a selection of several applies to the whole selection;
+    /// a right click outside the selection clears it and shows the item's own menu.
+    /// </summary>
+    public void ItemContextMenu(CardViewModel vm, FrameworkElement element)
     {
-        if (card.ViewModel is { } vm)
+        var item = vm.ToItemRef();
+        var targets = _vm.SelectionTargets(item);
+        if (targets.Count == 1 && !_vm.SelectedTab.Selection.Contains(vm.Path))
         {
-            _menus.Show(vm.ToItemRef(), card);
+            _vm.ClearSelection();
         }
+
+        _menus.Show(item, element, targets);
     }
 
-    public void CardRemove(CardView card)
-    {
-        if (card.ViewModel is { } vm)
-        {
-            _vm.RemoveCard(vm);
-        }
-    }
+    public void ItemRemove(CardViewModel vm) => _vm.RemoveCard(vm);
 
-    public void CardUnpin(CardView card)
+    public void ItemUnpin(CardViewModel vm)
     {
-        if (card.ViewModel is { IsDisabled: false } vm && _vm.IsPinned(vm.Path))
+        if (!vm.IsDisabled && _vm.IsPinned(vm.Path))
         {
             _cascade.CloseAll(); // the card may move to its sorted place
             _vm.TogglePin(vm.ToItemRef());
         }
     }
 
-    public void CardShowInExplorer(CardView card)
+    public void ItemShowInExplorer(CardViewModel vm)
     {
-        if (card.ViewModel is { IsDisabled: false } vm)
+        if (!vm.IsDisabled)
         {
             _cascade.CloseAll();
             _ = _vm.ShowInExplorerAsync(vm.ToItemRef());
         }
     }
 
-    // ---- sidebar (登録フォルダ) ----------------------------------------------------------------
+    // ---- sidebar rows (登録フォルダ, drives) ---------------------------------------------------
 
     private void OnSidebarClicked(SidebarItemViewModel item)
     {
         _cascade.CloseAll();
-        _ = _vm.OpenRegisteredAsync(item);
+        _ = item.IsDrive ? _vm.OpenDriveAsync(item) : _vm.OpenRegisteredAsync(item);
     }
 
     private void OnSidebarExplorer(SidebarItemViewModel item)
     {
-        if (!item.IsDisabled)
+        // A drive that is not connected is still handed to Explorer, which offers to reconnect it (as in its menu).
+        if (!item.IsDisabled || item.IsDrive)
         {
             _cascade.CloseAll();
             _ = _vm.ShowInExplorerAsync(item.ToItemRef());
@@ -377,11 +657,17 @@ public partial class MainWindow : Window, IMainView, ICardHost
     }
 
     /// <summary>
-    /// A sidebar row is dragged: released over the sidebar it moves the row, released over another
-    /// app that app gets the folder (a missing folder can only be moved).
+    /// A 登録フォルダ row is dragged (a drive row never is): released among the 登録フォルダ rows it
+    /// moves the row (a section header, a quick row or a drive row refuses it), released over
+    /// another app that app gets the folder (a missing folder can only be moved).
     /// </summary>
     private void OnSidebarDrag(SidebarItemViewModel item)
     {
+        if (item.IsDrive)
+        {
+            return;
+        }
+
         DataObject? data = item.IsDisabled ? null : FileDragOut.CreateData([item.Path], reorder: false);
         if (data is null)
         {
@@ -407,37 +693,41 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
     }
 
-    public bool CanDragCard(CardView card) => card.ViewModel is { IsDisabled: false } vm && FileDragOut.CanDrag(vm.Path);
+    public bool CanDragItem(CardViewModel vm) => !vm.IsDisabled && FileDragOut.CanDrag(vm.Path);
 
     /// <summary>
-    /// At the top level of a tab one drag carries both the reorder format and the file drop: released
-    /// over the grid it moves the card, released over another app that app gets the file or folder.
-    /// Inside folders the drag only hands the item to other apps.
+    /// A drag of an item that is part of the selection carries the whole selection (in display
+    /// order) to other apps, else the item alone. At the top level of a tab a drag of one card also
+    /// carries the reorder format: released over the list it moves the card, released over another
+    /// app that app gets the file or folder. Files are never moved inside the app by a drag.
     /// </summary>
-    public void CardDrag(CardView card)
+    public void ItemDrag(CardViewModel vm)
     {
-        if (card.ViewModel is not { } vm || !CanDragCard(card))
+        if (!CanDragItem(vm))
         {
             return;
         }
 
-        bool reorder = _vm.CanReorder(vm);
-        if (FileDragOut.CreateData([vm.Path], reorder) is not { } data)
+        var targets = _vm.SelectionTargets(vm.ToItemRef());
+        var paths = targets.Select(t => t.Path).Where(FileDragOut.CanDrag).ToList();
+        bool reorder = targets.Count == 1 && _vm.CanReorder(vm);
+        if (FileDragOut.CreateData(paths, reorder) is not { } data)
         {
             return;
         }
 
+        var list = ActiveList; // the view the drag started in, also once it has ended
         int? index = null;
         _cascade.BeginDrag();
         try
         {
             if (reorder)
             {
-                index = Grid.RunReorderDrag(vm, source => FileDragOut.Run(source, data, "top card"));
+                index = list.RunReorderDrag(vm, source => FileDragOut.Run(source, data, "top card"));
             }
             else
             {
-                FileDragOut.Run(this, data, "card"); // the window outlives any card container
+                FileDragOut.Run(this, data, targets.Count > 1 ? "selection" : "card"); // the window outlives any item container
             }
         }
         finally
@@ -447,19 +737,55 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
         if (index is { } i)
         {
-            double offset = Grid.VerticalOffset;
+            double offset = list.VerticalOffset;
             _vm.MoveCard(vm, i);
-            Grid.ScrollTo(offset); // the grid rebuilds its rows: stay where the card was dropped
+            list.ScrollTo(offset); // the list rebuilds its rows: stay where the item was dropped
         }
+    }
+
+    // ---- drives of the PC section --------------------------------------------------------------
+
+    /// <summary>How often, at most, an activation of the window reads the drives again.</summary>
+    private const long DrivesActivationIntervalMs = 5000;
+
+    /// <summary>
+    /// A volume came or went (USB drive, card, disc): the list is read again and every drive is
+    /// asked again (a card reader keeps its letter while the card changes). The clipboard changed:
+    /// a pending cut of this app ends when the clipboard holds something else.
+    /// </summary>
+    private void WatchWindowMessages()
+    {
+        _hook = new MainWindowHook(this);
+        _hook.DrivesChanged += () => _ = _vm.DriveList.RefreshAsync(recheck: true);
+        _hook.ClipboardChanged += _vm.OnClipboardChanged;
+    }
+
+    /// <summary>
+    /// Windows sends no message when a network drive is mapped, unmapped or reconnected: coming back
+    /// to the window is when the list is brought up to date, at most once in 5 s. Only new drives
+    /// and drives that were not usable are asked again (F5 asks all of them).
+    /// </summary>
+    private void OnActivatedReadDrives(object? sender, EventArgs e)
+    {
+        long now = Environment.TickCount64;
+        if (now - _drivesReadAt < DrivesActivationIntervalMs)
+        {
+            return;
+        }
+
+        _drivesReadAt = now;
+        _ = _vm.DriveList.RefreshAsync(recheck: false);
     }
 
     // ---- IMainView ----------------------------------------------------------------------------
 
     public void CloseCascade() => _cascade.CloseAll();
 
-    public double GetScrollOffset() => Grid.VerticalOffset;
+    public void CloseCardCascade() => _cascade.CloseCardCascade();
 
-    public void ScrollTo(double offset) => Grid.ScrollTo(offset);
+    public double GetScrollOffset() => ActiveList.VerticalOffset;
+
+    public void ScrollTo(double offset) => ActiveList.ScrollTo(offset);
 
     public nint WindowHandle => new WindowInteropHelper(this).Handle;
 

@@ -4,7 +4,7 @@
         xmlns:views="clr-namespace:FolderDeck.Views"
         xmlns:vm="clr-namespace:FolderDeck.ViewModels"
         xmlns:layout="clr-namespace:FolderDeck.Core.Layout;assembly=FolderDeck.Core"
-        Title="FolderDeck" Width="1280" Height="800" MinWidth="960" MinHeight="420"
+        Title="FolderDeck" Width="1280" Height="800" MinWidth="992" MinHeight="420"
         Background="{DynamicResource Brush.Bg}" Foreground="{DynamicResource Brush.Text}"
         FontFamily="{StaticResource Font.UI}" FontSize="13"
         UseLayoutRounding="True" SnapsToDevicePixels="True" AllowDrop="True"
@@ -39,35 +39,21 @@
 
     <Grid>
       <Grid.ColumnDefinitions>
-          <!-- the width is set from settings.json in code (sidebar_width) and changed with the splitter -->
+          <!-- the width is set from settings.json in code (sidebar_width; 0 while the sidebar is hidden) and changed with the splitter -->
           <ColumnDefinition x:Name="SidebarColumn" Width="220" MinWidth="140" MaxWidth="480" />
           <ColumnDefinition Width="Auto" />
-          <!-- 690: the toolbar of 最近の履歴 (count, clear, filter, sort, shape, size, refresh) without clipping -->
-          <ColumnDefinition Width="*" MinWidth="690" />
+          <!-- 724: the toolbar of 最近の履歴 (count, clear, filter, sort, view mode, size, refresh) without clipping -->
+          <ColumnDefinition Width="*" MinWidth="724" />
       </Grid.ColumnDefinitions>
 
-      <!-- Sidebar: 登録フォルダ (§10.1). One row per folder; resting on a row opens the cascade. -->
-      <Border Grid.Column="0" Background="{DynamicResource Brush.Surface}">
+      <!-- Sidebar (§10.1): its sections live in SidebarView. Hidden as a whole with the toggle at the
+           left end of the tab row (ApplySidebarLayout). -->
+      <Border x:Name="SidebarPane" Grid.Column="0" Background="{DynamicResource Brush.Surface}">
           <Grid>
-              <Grid.RowDefinitions>
-                  <RowDefinition Height="Auto" />
-                  <RowDefinition Height="*" />
-              </Grid.RowDefinitions>
-              <DockPanel Grid.Row="0" Margin="14,6,6,4" Height="32">
-                  <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="30" Height="28" FontSize="14" Content="&#xE8F4;"
-                          ToolTip="フォルダを選んで登録…（エクスプローラーからフォルダをドロップしても登録できます）" Command="{Binding BrowseCommand}" />
-                  <TextBlock Text="登録フォルダ" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Folder}" />
-                  <TextBlock Text="{Binding RegisteredCountText}" Margin="8,0,0,0" VerticalAlignment="Center"
-                             Foreground="{DynamicResource Brush.Muted}" Typography.NumeralAlignment="Tabular" />
-              </DockPanel>
-              <views:SidebarView x:Name="Sidebar" Grid.Row="1" />
-              <TextBlock Grid.Row="1" Margin="14,10,12,0" VerticalAlignment="Top" TextWrapping="Wrap" FontSize="12"
-                         Foreground="{DynamicResource Brush.Muted}" IsHitTestVisible="False"
-                         Text="登録フォルダはまだありません。右上のボタンでフォルダを選ぶか、エクスプローラーからフォルダをドロップして追加してください。"
-                         Visibility="{Binding HasNoRegistered, Converter={StaticResource BoolToVis}}" />
+              <views:SidebarView x:Name="Sidebar" />
 
               <!-- drop hint while dragging folders from Explorer over the window -->
-              <Border x:Name="DropHint" Grid.RowSpan="2" Margin="6" CornerRadius="10" BorderThickness="2" BorderBrush="{DynamicResource Brush.Folder}"
+              <Border x:Name="DropHint" Margin="6" CornerRadius="10" BorderThickness="2" BorderBrush="{DynamicResource Brush.Folder}"
                       Background="{DynamicResource Brush.FolderSoft}" Opacity="0.94" Visibility="Collapsed" IsHitTestVisible="False">
                   <TextBlock Text="ドロップして登録" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Folder}"
                              HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" Margin="8" />
@@ -77,7 +63,7 @@
 
       <GridSplitter x:Name="SidebarSplitter" Grid.Column="1" Width="5" HorizontalAlignment="Center" VerticalAlignment="Stretch"
                     ResizeBehavior="PreviousAndNext" ResizeDirection="Columns" Focusable="False" Cursor="SizeWE"
-                    Background="{DynamicResource Brush.Border}" ToolTip="ドラッグで登録フォルダの幅を変更"
+                    Background="{DynamicResource Brush.Border}" ToolTip="ドラッグでサイドメニューの幅を変更"
                     DragStarted="OnSplitterDragStarted" DragCompleted="OnSplitterDragCompleted" />
 
       <Grid Grid.Column="2">
@@ -88,27 +74,20 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Tabs + settings (§5.1): the two fixed tabs (accent colour), then the folder tabs (folder colour) -->
+        <!-- Sidebar toggle + tabs + settings (§5.1): one strip for every open tab (the row keeps its height without any tab) -->
         <Border Grid.Row="0" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
-            <DockPanel Margin="8,0,8,0">
+            <DockPanel Margin="8,0,8,0" MinHeight="38">
+                <Button DockPanel.Dock="Left" Style="{StaticResource Btn.Icon}" Content="&#xE90C;" ToolTip="サイドメニューを表示 / 隠す"
+                        Command="{Binding ToggleSidebarCommand}" VerticalAlignment="Center" Margin="0,0,6,0" />
                 <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Content="&#xE713;" ToolTip="設定"
                         Command="{Binding OpenSettingsCommand}" VerticalAlignment="Center" />
-                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                    <RadioButton Style="{StaticResource TabButton}" GroupName="Tabs" Content="最近の履歴"
-                                 IsChecked="{Binding RecentTab.IsSelected, Mode=OneWay}"
-                                 Command="{Binding SelectTabCommand}" CommandParameter="{Binding RecentTab}" />
-                    <RadioButton Style="{StaticResource TabButton}" GroupName="Tabs" Content="よく使う項目"
-                                 IsChecked="{Binding FrequentTab.IsSelected, Mode=OneWay}"
-                                 Command="{Binding SelectTabCommand}" CommandParameter="{Binding FrequentTab}" />
-                    <Border Width="1" Margin="6,10,8,10" Background="{DynamicResource Brush.Border}" />
-                </StackPanel>
                 <views:FolderTabStrip x:Name="TabStrip" />
             </DockPanel>
         </Border>
 
-        <!-- Toolbar (§5.3) -->
+        <!-- Toolbar (§5.3): only while a tab is shown -->
         <Border Grid.Row="1" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
-                Padding="8,6">
+                Padding="8,6" Visibility="{Binding HasTab, Converter={StaticResource BoolToVis}}">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -158,8 +137,14 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
-                <TextBlock Grid.Column="2" Text="{Binding SelectedTab.CountText}" Foreground="{DynamicResource Brush.Muted}"
-                           VerticalAlignment="Center" Margin="8,0,12,0" Typography.NumeralAlignment="Tabular" />
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,12,0">
+                    <TextBlock Text="{Binding SelectedTab.CountText}" Foreground="{DynamicResource Brush.Muted}"
+                               VerticalAlignment="Center" Typography.NumeralAlignment="Tabular" />
+                    <!-- 「3 個を選択」 while items are selected -->
+                    <TextBlock Text="{Binding SelectedTab.SelectionText}" Foreground="{DynamicResource Brush.Accent}" FontWeight="SemiBold"
+                               VerticalAlignment="Center" Margin="10,0,0,0" Typography.NumeralAlignment="Tabular"
+                               Visibility="{Binding SelectedTab.SelectionText, Converter={StaticResource NotEmptyToVis}}" />
+                </StackPanel>
 
                 <Button Grid.Column="3" Style="{StaticResource Btn}" Content="履歴をクリア" Margin="0,0,8,0" Padding="10,4"
                         Command="{Binding ClearHistoryCommand}"
@@ -188,24 +173,54 @@
                     </StackPanel>
                 </Button>
 
-                <!-- card shape (every tab): tall rectangle or square -->
+                <!--
+                  View mode (every tab): tall cards, square cards, or the details list. A click runs the
+                  command; Checked covers the choices made without a click (UI Automation selects a radio
+                  button by checking it), see OnViewModeChecked.
+                -->
                 <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
-                    <RadioButton Style="{StaticResource Toggle.Segment}" GroupName="CardShape" ToolTip="カードの形：縦長"
+                    <RadioButton Style="{StaticResource Toggle.Segment}" GroupName="CardShape" ToolTip="カードの形：縦長" AutomationProperties.Name="カードの形：縦長"
                                  IsChecked="{Binding CardShape, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Portrait}"
-                                 Command="{Binding SetCardShapeCommand}" CommandParameter="{x:Static layout:CardShape.Portrait}">
+                                 Command="{Binding SetCardShapeCommand}" CommandParameter="{x:Static layout:CardShape.Portrait}"
+                                 Checked="OnViewModeChecked">
                         <Rectangle Width="10" Height="14" RadiusX="1.5" RadiusY="1.5" StrokeThickness="1.5"
                                    Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type RadioButton}}}" />
                     </RadioButton>
-                    <RadioButton Style="{StaticResource Toggle.Segment}" GroupName="CardShape" ToolTip="カードの形：正方形" Margin="2,0,0,0"
+                    <RadioButton Style="{StaticResource Toggle.Segment}" GroupName="CardShape" ToolTip="カードの形：正方形" AutomationProperties.Name="カードの形：正方形" Margin="2,0,0,0"
                                  IsChecked="{Binding CardShape, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Square}"
-                                 Command="{Binding SetCardShapeCommand}" CommandParameter="{x:Static layout:CardShape.Square}">
+                                 Command="{Binding SetCardShapeCommand}" CommandParameter="{x:Static layout:CardShape.Square}"
+                                 Checked="OnViewModeChecked">
                         <Rectangle Width="13" Height="13" RadiusX="1.5" RadiusY="1.5" StrokeThickness="1.5"
                                    Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type RadioButton}}}" />
                     </RadioButton>
+                    <RadioButton Style="{StaticResource Toggle.Segment}" GroupName="CardShape" ToolTip="表示：詳細" AutomationProperties.Name="表示：詳細" Margin="2,0,0,0"
+                                 IsChecked="{Binding CardShape, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Details}"
+                                 Command="{Binding SetCardShapeCommand}" CommandParameter="{x:Static layout:CardShape.Details}"
+                                 Checked="OnViewModeChecked">
+                        <!-- three bars: the rows of a list -->
+                        <StackPanel Width="12">
+                            <Rectangle Height="1.5" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type RadioButton}}}" />
+                            <Rectangle Height="1.5" Margin="0,3,0,0" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type RadioButton}}}" />
+                            <Rectangle Height="1.5" Margin="0,3,0,0" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type RadioButton}}}" />
+                        </StackPanel>
+                    </RadioButton>
                 </StackPanel>
 
+                <!-- card size: nothing to size in the details list (disabled there, the value is kept) -->
                 <StackPanel Grid.Column="7" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0"
-                            ToolTip="カードの大きさ（Ctrl + ホイールでも変更できます）">
+                            ToolTipService.ShowOnDisabled="True">
+                    <StackPanel.Style>
+                        <Style TargetType="{x:Type StackPanel}">
+                            <Setter Property="ToolTip" Value="カードの大きさ（Ctrl + ホイールでも変更できます）" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CardShape}" Value="{x:Static layout:CardShape.Details}">
+                                    <Setter Property="IsEnabled" Value="False" />
+                                    <Setter Property="Opacity" Value="0.4" />
+                                    <Setter Property="ToolTip" Value="カードの大きさ（詳細表示では使いません）" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
                     <TextBlock Text="&#xE71E;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center"
                                Foreground="{DynamicResource Brush.Muted}" Margin="0,0,6,0" />
                     <Slider x:Name="SizeSlider" Width="110" Minimum="120" Maximum="400" TickFrequency="20" SmallChange="20" LargeChange="40"
@@ -247,20 +262,52 @@
             </Border>
         </StackPanel>
 
-        <!-- Card grid (§6) -->
-        <Grid Grid.Row="3">
-            <views:CardGrid x:Name="Grid" Items="{Binding SelectedTab.Cards}" CardSize="{Binding CardSize}" CardShape="{Binding CardShape}">
+        <!--
+          The items of the shown tab (§6): the card grid or the details list, by the view mode
+          (CardShape). Only the one that is shown has the items; the other gets none, so that it
+          keeps no containers alive and loads nothing while hidden.
+        -->
+        <!-- transparent, not null: a press on the blank area clears the selection, a right click there offers 貼り付け -->
+        <Grid x:Name="ContentHost" Grid.Row="3" Background="Transparent">
+            <views:CardGrid x:Name="Grid" CardSize="{Binding CardSize}" CardShape="{Binding CardShape}">
                 <views:CardGrid.Style>
                     <Style TargetType="{x:Type views:CardGrid}">
+                        <Setter Property="Items" Value="{Binding SelectedTab.Cards}" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding SelectedTab.IsLoading}" Value="True">
                                 <Setter Property="Opacity" Value="0.55" />
                                 <Setter Property="IsHitTestVisible" Value="False" />
                             </DataTrigger>
+                            <DataTrigger Binding="{Binding CardShape}" Value="{x:Static layout:CardShape.Details}">
+                                <Setter Property="Items" Value="{x:Null}" />
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
                         </Style.Triggers>
                     </Style>
                 </views:CardGrid.Style>
             </views:CardGrid>
+
+            <views:DetailsListView x:Name="Details" SortMode="{Binding SelectedTab.SortMode}" Columns="{Binding DetailsColumns}">
+                <views:DetailsListView.Style>
+                    <Style TargetType="{x:Type views:DetailsListView}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding SelectedTab.IsLoading}" Value="True">
+                                <Setter Property="Opacity" Value="0.55" />
+                                <Setter Property="IsHitTestVisible" Value="False" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding CardShape}" Value="{x:Static layout:CardShape.Details}">
+                                <Setter Property="Items" Value="{Binding SelectedTab.Cards}" />
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <!-- No tab: the column titles must not stay above the empty state (last trigger wins) -->
+                            <DataTrigger Binding="{Binding HasTab}" Value="False">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </views:DetailsListView.Style>
+            </views:DetailsListView>
 
             <TextBlock Text="{Binding SelectedTab.EmptyText}" HorizontalAlignment="Center" VerticalAlignment="Center"
                        Foreground="{DynamicResource Brush.Muted}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="560" Margin="24"
@@ -274,6 +321,28 @@
                     <TextBlock Text="応答がありません（待機中…）" Foreground="{DynamicResource Brush.Muted}" />
                 </StackPanel>
             </Border>
+
+            <!-- Empty state: every tab was closed (the placeholder tab is selected: no cards, no texts of its own) -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
+                <StackPanel.Style>
+                    <Style TargetType="{x:Type StackPanel}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding HasTab}" Value="False">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </StackPanel.Style>
+                <TextBlock Text="開いているタブはありません。左のメニューから項目を選んでください。" Foreground="{DynamicResource Brush.Muted}"
+                           TextWrapping="Wrap" TextAlignment="Center" MaxWidth="560" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,16,0,0">
+                    <Button Style="{StaticResource Btn}" Padding="14,6" Content="最近の履歴を開く"
+                            CommandParameter="{x:Static vm:TabKind.Recent}" Command="{Binding OpenQuickTabCommand}" />
+                    <Button Style="{StaticResource Btn}" Padding="14,6" Margin="10,0,0,0" Content="よく使う項目を開く"
+                            CommandParameter="{x:Static vm:TabKind.Frequent}" Command="{Binding OpenQuickTabCommand}" />
+                </StackPanel>
+            </StackPanel>
 
         </Grid>
       </Grid>

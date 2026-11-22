@@ -13,14 +13,17 @@ public enum ExistState
     Timeout,
 }
 
-/// <summary>Result of <see cref="Existence.ProbeAsync"/>: what the path is and, when known, its last write time (UTC).</summary>
-public readonly record struct ExistProbe(ExistState State, DateTime? LastWriteTimeUtc);
+/// <summary>
+/// Result of <see cref="Existence.ProbeAsync"/>: what the path is and, when known, its last write
+/// time (UTC) and, for a file, its size in bytes (null for a folder and whenever it is not known).
+/// </summary>
+public readonly record struct ExistProbe(ExistState State, DateTime? LastWriteTimeUtc, long? Length = null);
 
 public static class Existence
 {
     /// <summary>
     /// Like <see cref="CheckAsync"/> (same single worker call, same timeout) but also returns the
-    /// last write time, used by the "更新日" sort modes.
+    /// last write time and a file's size, used by the 更新日 and サイズ sort modes and the details list.
     /// </summary>
     public static async Task<ExistProbe> ProbeAsync(IFileSystem fs, string path, TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -82,7 +85,9 @@ public static class Existence
     {
         if (fs.GetEntry(path) is { } entry)
         {
-            return new ExistProbe(entry.IsDirectory ? ExistState.Folder : ExistState.File, CardOrdering.KnownTime(entry.LastWriteTimeUtc));
+            return entry.IsDirectory
+                ? new ExistProbe(ExistState.Folder, CardOrdering.KnownTime(entry.LastWriteTimeUtc))
+                : new ExistProbe(ExistState.File, CardOrdering.KnownTime(entry.LastWriteTimeUtc), entry.Length);
         }
 
         // GetEntry can miss what GetKind still sees (no access to the parent): keep CheckAsync's answer.

@@ -31,7 +31,7 @@ public sealed partial class GridMetrics : ObservableObject
     private double _iconSize = 80;
 }
 
-public partial class CardGrid : UserControl
+public partial class CardGrid : UserControl, IItemsView
 {
     public const double Gap = 12;
 
@@ -73,6 +73,16 @@ public partial class CardGrid : UserControl
     {
         InitializeComponent();
         SizeChanged += (_, _) => Rebuild(force: false);
+
+        // While collapsed (details mode) the width reads 0, and the items come back before the
+        // grid is shown again; shown at the size it had before, no SizeChanged follows.
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true)
+            {
+                Rebuild(force: false);
+            }
+        };
         Loaded += (_, _) => AttachScroll();
         PreviewMouseWheel += OnPreviewMouseWheel;
         _autoScrollTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(30) };

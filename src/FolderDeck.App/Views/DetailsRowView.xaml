@@ -1,0 +1,174 @@
+<UserControl x:Class="FolderDeck.Views.DetailsRowView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:FolderDeck.Views"
+             Focusable="False"
+             Height="28"
+             ToolTipService.InitialShowDelay="900"
+             ToolTipService.Placement="Mouse"
+             ToolTip="{Binding ToolTipText}">
+    <!--
+      One row of the details list (DataContext: CardViewModel, the same object a card shows).
+      The row reads only what the list already knows (name, time, size) plus the icon and the type
+      name, which are cached per extension: it never asks for a thumbnail, a cover or child counts,
+      so a folder of thousands of items costs nothing per row.
+      The column widths come from DetailsListView.Metrics, which the header uses too.
+    -->
+    <UserControl.Resources>
+        <views:InverseBoolConverter x:Key="Not" />
+
+        <Style x:Key="Cell" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource Brush.Muted}" />
+            <Setter Property="Margin" Value="8,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+        </Style>
+    </UserControl.Resources>
+
+    <Border x:Name="Root" CornerRadius="5">
+        <Border.Style>
+            <Style TargetType="{x:Type Border}">
+                <!-- transparent, not null: the whole row is one click and drag target -->
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType={x:Type views:DetailsRowView}}}" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource Brush.Surface3}" />
+                    </DataTrigger>
+                    <!-- the list beside the name is open: the row stays marked while the pointer is in the list -->
+                    <DataTrigger Binding="{Binding IsHoverHeld}" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource Brush.AccentSoft}" />
+                    </DataTrigger>
+                    <!-- selected: accent tint (the 2 px frame is SelectionFrame, on top of the cells) -->
+                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource Brush.AccentSoft}" />
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding IsDisabled}" Value="True">
+                        <Setter Property="Opacity" Value="0.6" />
+                        <Setter Property="Cursor" Value="Arrow" />
+                    </DataTrigger>
+                    <!-- a pending cut of this app (dimmed like Explorer's); a drag below still wins -->
+                    <DataTrigger Binding="{Binding IsCut}" Value="True">
+                        <Setter Property="Opacity" Value="0.5" />
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding IsDragged}" Value="True">
+                        <Setter Property="Opacity" Value="0.4" />
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </Border.Style>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="{Binding Metrics.ModifiedWidth, RelativeSource={RelativeSource AncestorType={x:Type views:DetailsListView}}}" />
+                <ColumnDefinition Width="{Binding Metrics.TypeWidth, RelativeSource={RelativeSource AncestorType={x:Type views:DetailsListView}}}" />
+                <ColumnDefinition Width="{Binding Metrics.SizeWidth, RelativeSource={RelativeSource AncestorType={x:Type views:DetailsListView}}}" />
+                <ColumnDefinition Width="{Binding Metrics.EndWidth, RelativeSource={RelativeSource AncestorType={x:Type views:DetailsListView}}}" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 名前: the name cell is as wide as its content, the sub line of a top list takes the rest -->
+            <DockPanel Grid.Column="0">
+                <!--
+                  NameCell is what a folder's list hangs beside (ICardHost.RowMouseEnter): icon, name and 📌
+                  only, so the list opens next to the name and resting on the other columns opens nothing.
+                -->
+                <Border x:Name="NameCell" DockPanel.Dock="Left" Background="Transparent" Padding="6,0,8,0"
+                        MouseEnter="OnNameEnter" MouseLeave="OnNameLeave" MouseMove="OnNameMove">
+                    <DockPanel>
+                        <!-- 16 px icon; while the item is being opened (§6.8) a spinner takes its place -->
+                        <Grid DockPanel.Dock="Left" Width="16" Height="16" Margin="0,0,7,0" VerticalAlignment="Center">
+                            <Image Source="{Binding Icon}" RenderOptions.BitmapScalingMode="HighQuality">
+                                <Image.Style>
+                                    <Style TargetType="{x:Type Image}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsBusy}" Value="True">
+                                                <Setter Property="Visibility" Value="Hidden" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Image.Style>
+                            </Image>
+                            <ContentControl Style="{StaticResource Spinner}" Width="14" Height="14"
+                                            Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
+                        </Grid>
+                        <!-- 📌 after the name, so that the names of pinned and other rows line up; a click unpins -->
+                        <Button x:Name="PinButton" DockPanel.Dock="Right" Style="{StaticResource Btn.CardPin}" Margin="8,0,0,0"
+                                VerticalAlignment="Center"
+                                IsEnabled="{Binding IsDisabled, Converter={StaticResource Not}}"
+                                Visibility="{Binding IsPinned, Converter={StaticResource BoolToVis}}" Click="OnPinClick" />
+                        <TextBlock x:Name="NameText" Text="{Binding Name}" FontSize="12.5" Foreground="{DynamicResource Brush.Text}"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center">
+                            <TextBlock.Style>
+                                <Style TargetType="{x:Type TextBlock}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsDisabled}" Value="True">
+                                            <Setter Property="TextDecorations" Value="Strikethrough" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </DockPanel>
+                </Border>
+                <!-- 最近の履歴 / よく使う項目: when it was used and where it is (null inside folders) -->
+                <TextBlock Text="{Binding SubText}" FontSize="11.5" Foreground="{DynamicResource Brush.Muted}"
+                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,8,0" />
+            </DockPanel>
+
+            <TextBlock Grid.Column="1" Style="{StaticResource Cell}" Text="{Binding ModifiedText}" />
+            <TextBlock Grid.Column="2" Style="{StaticResource Cell}" Text="{Binding TypeText}" />
+            <TextBlock Grid.Column="3" Style="{StaticResource Cell}" Text="{Binding SizeColumnText}" TextAlignment="Right" />
+
+            <!-- × (§6.7): on the rows of a top list, while the pointer is on the row -->
+            <Button Grid.Column="4" Content="&#xE711;" ToolTip="{Binding RemoveToolTip}" Click="OnCloseClick"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Button.Style>
+                    <Style TargetType="{x:Type Button}" BasedOn="{StaticResource Btn.TabClose}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding CanRemove}" Value="True" />
+                                    <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType={x:Type views:DetailsRowView}}}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="Visibility" Value="Visible" />
+                            </MultiDataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding CanRemove}" Value="True" />
+                                    <Condition Binding="{Binding IsHoverHeld}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="Visibility" Value="Visible" />
+                            </MultiDataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding CanRemove}" Value="True" />
+                                    <Condition Binding="{Binding IsDisabled}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="Visibility" Value="Visible" />
+                            </MultiDataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+            </Button>
+
+            <!-- Selection frame over the whole row: drawn on top, so that the columns stay aligned with the header -->
+            <Border Grid.Column="0" Grid.ColumnSpan="5" CornerRadius="5" BorderThickness="2" IsHitTestVisible="False">
+                <Border.Style>
+                    <Style TargetType="{x:Type Border}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Setter Property="BorderBrush" Value="{DynamicResource Brush.Accent}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+            </Border>
+        </Grid>
+    </Border>
+</UserControl>
