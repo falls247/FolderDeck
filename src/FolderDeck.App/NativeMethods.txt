@@ -124,3 +124,5 @@ HANDLE
 GetLongPathName
 SetThreadErrorMode
 GetDoubleClickTime
+SetWindowLongPtr
+GetWindow
