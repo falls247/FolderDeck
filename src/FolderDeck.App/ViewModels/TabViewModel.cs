@@ -39,6 +39,9 @@ public sealed partial class TabViewModel : ObservableObject
 
     /// <summary>The order before sorting: the manual order at the top level, the default order inside folders.</summary>
     private IReadOnlyList<CardViewModel> _baseCards = [];
+
+    /// <summary>The listing the folder's cards were made from (null: no folder listed), compared by the auto refresh.</summary>
+    private FolderListing? _shownListing;
     private bool _baseIsTop = true;
 
     /// <summary>The base order with the sort mode applied, before the filter (<see cref="Cards"/> is what the filter leaves).</summary>
@@ -181,6 +184,19 @@ public sealed partial class TabViewModel : ObservableObject
     public string? TransferTargetPath =>
         _loadedLocation is { } loaded && loaded == Location && !IsLoading ? FolderTargetPath : null;
 
+    /// <summary>Counts the loads (<see cref="LoadAsync"/>): an auto refresh that started before one drops its result.</summary>
+    public int LoadGeneration { get; private set; }
+
+    /// <summary>When the shown folder was last listed (<c>Environment.TickCount64</c>): a load or an auto refresh.</summary>
+    public long LastListedAt { get; private set; }
+
+    /// <summary>
+    /// The folder the auto refresh checks: the shown folder while it is really on screen
+    /// (<see cref="TransferTargetPath"/>: not a top list, not loading, not an error banner) and was
+    /// listed. Null otherwise.
+    /// </summary>
+    public string? AutoRefreshPath => TransferTargetPath is null ? null : _shownListing?.Path;
+
     /// <summary>Mirrors the selection and the cut onto the shown cards (<c>IsSelected</c> / <c>IsCut</c>).</summary>
     private void ApplyItemFlags()
     {
@@ -305,6 +321,8 @@ public sealed partial class TabViewModel : ObservableObject
         var cts = new CancellationTokenSource();
         _loadCts = cts;
         var ct = cts.Token;
+        LoadGeneration++;
+        _shownListing = null;
 
         IsLoading = true;
         IsSlow = false;
@@ -379,25 +397,94 @@ public sealed partial class TabViewModel : ObservableObject
         var cards = new List<CardViewModel>(listing.Entries.Count);
         foreach (var e in listing.Entries)
         {
-            var target = Location with { Rel = PathTools.JoinRel(Location.Rel, e.Name) };
-            var card = new CardViewModel(_services, e.FullPath, e.IsDirectory ? CardKind.Folder : CardKind.File, e.IsDirectory ? target : null, ItemContext.InnerCard)
-            {
-                OwnerTab = Kind,
-                IsPinned = pins.Contains(e.FullPath),
-            };
-            card.ModifiedUtc = e.LastWriteTimeUtc;
-            if (!e.IsDirectory)
-            {
-                card.Length = e.Length;
-            }
-
-            cards.Add(card);
+            cards.Add(NewEntryCard(e, pins));
         }
 
         ShowCards(cards, isTop: false);
-        CountText = $"フォルダ {listing.FolderCount:N0} / ファイル {listing.FileCount:N0}";
-        EmptyText = cards.Count == 0 ? "このフォルダは空です。" : null;
+        ApplyFolderSummary(listing, cards.Count);
+        _shownListing = listing;
+        LastListedAt = Environment.TickCount64;
         return LoadOutcome.Ok;
+    }
+
+    /// <summary>The card of one entry of the shown folder.</summary>
+    private CardViewModel NewEntryCard(in FsEntry e, PathSet pins)
+    {
+        var target = Location with { Rel = PathTools.JoinRel(Location.Rel, e.Name) };
+        var card = new CardViewModel(_services, e.FullPath, e.IsDirectory ? CardKind.Folder : CardKind.File, e.IsDirectory ? target : null, ItemContext.InnerCard)
+        {
+            OwnerTab = Kind,
+            IsPinned = pins.Contains(e.FullPath),
+        };
+        card.ModifiedUtc = e.LastWriteTimeUtc;
+        if (!e.IsDirectory)
+        {
+            card.Length = e.Length;
+        }
+
+        return card;
+    }
+
+    private void ApplyFolderSummary(FolderListing listing, int cardCount)
+    {
+        CountText = $"フォルダ {listing.FolderCount:N0} / ファイル {listing.FileCount:N0}";
+        EmptyText = cardCount == 0 ? "このフォルダは空です。" : null;
+    }
+
+    /// <summary>
+    /// The auto refresh listed the shown folder again (UI thread). Unchanged entries keep their
+    /// cards (thumbnails, counts and covers stay), new and changed ones get new cards, and the
+    /// list goes through the tab's sort mode and filter as a load does; the selection keeps what
+    /// is still there. Nothing else changes: no loading state, no banner, no breadcrumb. A
+    /// subfolder whose own write time changed is listed again for its counts and cover. Returns
+    /// true when <see cref="Cards"/> was replaced (the caller restores the scroll position).
+    /// </summary>
+    public bool ApplyPolledListing(FolderListing fresh, long listedAt)
+    {
+        ArgumentNullException.ThrowIfNull(fresh);
+        if (IsLoading || _shownListing is not { } shown || !fresh.IsOk || !PathTools.Comparer.Equals(fresh.Path, shown.Path))
+        {
+            return false;
+        }
+
+        var delta = ListingChanges.Compare(shown.Entries, fresh.Entries);
+        _shownListing = fresh;
+        LastListedAt = listedAt;
+        if (delta.IsEmpty)
+        {
+            return false;
+        }
+
+        foreach (string folder in delta.ChangedFolders)
+        {
+            _services.Listings.Invalidate(folder);
+            _services.Covers.Remove(folder);
+        }
+
+        var old = new Dictionary<string, CardViewModel>(_baseCards.Count, StringComparer.Ordinal);
+        foreach (var card in _baseCards)
+        {
+            old.TryAdd(card.Path, card);
+        }
+
+        var pins = PinSet();
+        var cards = new List<CardViewModel>(fresh.Entries.Count);
+        foreach (var e in fresh.Entries)
+        {
+            if (delta.Reusable.Contains(e.FullPath) && old.TryGetValue(e.FullPath, out var kept))
+            {
+                kept.IsPinned = pins.Contains(kept.Path);
+                cards.Add(kept);
+            }
+            else
+            {
+                cards.Add(NewEntryCard(e, pins));
+            }
+        }
+
+        ShowCards(cards, isTop: false);
+        ApplyFolderSummary(fresh, cards.Count);
+        return true;
     }
 
     // ---- top level --------------------------------------------------------------------------
@@ -634,6 +721,7 @@ public sealed partial class TabViewModel : ObservableObject
 
     private void ClearCards()
     {
+        _shownListing = null;
         _baseCards = [];
         _orderedCards = [];
         Cards = [];

@@ -162,6 +162,12 @@ public sealed class CascadeController
     /// </summary>
     public bool IsOpen => _levels.Count > 0 || _preview is not null;
 
+    /// <summary>A menu of the app or Explorer's menu is open (the cascade is frozen meanwhile).</summary>
+    public bool IsMenuOpen => _menuOpen || _nativeMenu;
+
+    /// <summary>A hover is about to open something (an overlay, a flyout, a preview): a replaced list would leave it on a discarded element.</summary>
+    public bool IsHoverPending => _overlayTimer.IsEnabled || _openTimer.IsEnabled || _previewTimer.IsEnabled;
+
     /// <summary>
     /// A drag started (a card, a row or a preview): the whole cascade disappears at once and nothing
     /// opens on hover until <see cref="EndDrag"/>, which then really closes it. Taking it away at the

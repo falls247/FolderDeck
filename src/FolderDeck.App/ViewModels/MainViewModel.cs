@@ -46,6 +46,9 @@ public interface IMainView
 
     /// <summary>The edit box of a name is open, or a new folder / a typed name is being processed: no reload meanwhile.</summary>
     bool IsNameBusy { get; }
+
+    /// <summary>Something on screen that a replaced item list would break is under way (see MainWindow): the auto refresh waits.</summary>
+    bool IsAutoRefreshBlocked { get; }
 }
 
 public enum NavMode
@@ -270,6 +273,7 @@ public sealed partial class MainViewModel : ObservableObject
         _ = DriveList.RefreshAsync(recheck: false); // not awaited: a drive that does not answer must not delay the first tab
         SelectedTab = Tabs.Count == 0 ? NoTab : Tabs[Math.Clamp(selected, 0, Tabs.Count - 1)];
         _tabsRestored = true; // before the first await: what the user does while the first tab loads is saved too
+        ApplyAutoRefreshSetting(settings);
         if (HasTab)
         {
             await LoadTabAsync(SelectedTab);
@@ -2696,6 +2700,218 @@ public sealed partial class MainViewModel : ObservableObject
         Message.Success("最近の履歴をクリアしました。");
     }
 
+    // ---- auto refresh ---------------------------------------------------------------------------
+
+    /// <summary>How often the auto refresh looks whether a check is due (the interval itself is the setting).</summary>
+    private static readonly TimeSpan AutoRefreshBeat = TimeSpan.FromSeconds(1);
+
+    /// <summary>A check that takes longer is given up (the listing goes on in the cache, and is waited for before the next check).</summary>
+    private static readonly TimeSpan AutoRefreshWait = TimeSpan.FromSeconds(15);
+
+    /// <summary>A folder that fails is checked less and less often, at most this far apart (or the interval, if longer).</summary>
+    private const long AutoRefreshMaxHoldMs = 300_000;
+
+    private DispatcherTimer? _autoRefreshTimer;
+
+    /// <summary>The interval in milliseconds; 0 while the auto refresh is off.</summary>
+    private long _autoRefreshMs;
+
+    /// <summary>The wait of the last check: one check at a time (it gives up after <see cref="AutoRefreshWait"/>, which also cancels the listing).</summary>
+    private Task<FolderListing>? _autoRefreshFlight;
+
+    private string? _autoRefreshFailPath;
+    private int _autoRefreshFailures;
+    private long _autoRefreshHoldUntil;
+    private int _autoRefreshMissing;
+    private string? _autoRefreshMissingPath;
+
+    /// <summary>
+    /// フォルダの自動更新 (settings <c>auto_refresh</c> / <c>auto_refresh_seconds</c>): a heartbeat
+    /// on the UI thread checks once a second whether the shown folder is due (listed longer ago
+    /// than the interval); a load, F5 or a file operation count as a listing too.
+    /// </summary>
+    private void ApplyAutoRefreshSetting(AppSettings settings)
+    {
+        _autoRefreshMs = settings.AutoRefresh ? settings.AutoRefreshSeconds * 1000L : 0;
+        if (_autoRefreshTimer is null)
+        {
+            _autoRefreshTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher) { Interval = AutoRefreshBeat };
+            _autoRefreshTimer.Tick += (_, _) => _ = AutoRefreshTickAsync();
+        }
+
+        if (_autoRefreshMs > 0)
+        {
+            _autoRefreshTimer.Start();
+        }
+        else
+        {
+            _autoRefreshTimer.Stop();
+        }
+    }
+
+    /// <summary>The window closes: no more checks.</summary>
+    public void StopAutoRefresh()
+    {
+        _autoRefreshMs = 0;
+        _autoRefreshTimer?.Stop();
+    }
+
+    /// <summary>
+    /// A check may run, and its result may replace the list, now: no file operation, no check of
+    /// a cut, no drag of the app, and nothing on screen that a replaced list would break
+    /// (<see cref="IMainView.IsAutoRefreshBlocked"/>: a name's edit box, a marquee, the cascade or a
+    /// menu, a dialog, a button held, input just now, the window minimized).
+    /// </summary>
+    private bool CanAutoRefresh() =>
+        _autoRefreshMs > 0 && !_fileOpBusy && !_cutCheckBusy && !FileDragOut.IsDragging && View is { IsAutoRefreshBlocked: false };
+
+    private async Task AutoRefreshTickAsync()
+    {
+        try
+        {
+            if (_autoRefreshFlight is { IsCompleted: false })
+            {
+                return; // the previous check still waits for its folder
+            }
+
+            var tab = SelectedTab;
+            if (!HasTab || tab.AutoRefreshPath is not { } path)
+            {
+                return;
+            }
+
+            long now = Environment.TickCount64;
+            if (now - tab.LastListedAt < _autoRefreshMs
+                || (PathTools.Comparer.Equals(path, _autoRefreshFailPath) && now < _autoRefreshHoldUntil)
+                || !CanAutoRefresh())
+            {
+                return; // not due, held back after failures, or busy: the next beat decides again
+            }
+
+            int generation = tab.LoadGeneration;
+            bool hidden = _services.Listings.IncludeHidden;
+            _services.Listings.Invalidate(path); // else the 60 s cache answers
+
+            // The only waiter: giving up cancels the listing (a hung share does not keep a check, or
+            // a slot of its volume, forever; the hold below keeps the next checks apart).
+            using var wait = new CancellationTokenSource(AutoRefreshWait);
+            var flight = _services.Listings.GetAsync(path, wait.Token);
+            _autoRefreshFlight = flight;
+            FolderListing fresh;
+            try
+            {
+                fresh = await flight;
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or IOException or UnauthorizedAccessException)
+            {
+                _autoRefreshMissing = 0;
+                HoldAutoRefresh(path, ex is OperationCanceledException ? "timeout" : ex.GetType().Name);
+                return;
+            }
+
+            if (!fresh.IsOk)
+            {
+                // A failed check is not left in the cache for 60 s: the next load would show its error banner.
+                _services.Listings.Invalidate(path);
+            }
+
+            // Checked again after the await: the user may have moved, reloaded or started something.
+            if (!CanAutoRefresh() || !ReferenceEquals(SelectedTab, tab) || tab.LoadGeneration != generation
+                || !PathTools.Comparer.Equals(tab.AutoRefreshPath, path) || _services.Listings.IncludeHidden != hidden)
+            {
+                return;
+            }
+
+            switch (fresh.Status)
+            {
+                case ListingStatus.Ok:
+                    if (_autoRefreshFailures > 0 && PathTools.Comparer.Equals(path, _autoRefreshFailPath))
+                    {
+                        AppLog.Info("Auto refresh: the folder answers again");
+                    }
+
+                    _autoRefreshFailures = 0;
+                    _autoRefreshFailPath = null;
+                    _autoRefreshMissing = 0;
+                    _autoRefreshMissingPath = null;
+                    double offset = View?.GetScrollOffset() ?? 0;
+                    if (tab.ApplyPolledListing(fresh, now))
+                    {
+                        View?.ScrollTo(offset); // the items view rebuilt its rows: stay where the user was
+                    }
+
+                    break;
+                case ListingStatus.NotFound:
+                    if (!PathTools.Comparer.Equals(path, _autoRefreshMissingPath))
+                    {
+                        _autoRefreshMissingPath = path;
+                        _autoRefreshMissing = 0;
+                    }
+
+                    // Gone twice in a row (this folder, nothing else in between): an ordinary load
+                    // shows the "not found" banner (F5 or a move brings it back). A network folder
+                    // only waits: an unreachable share also answers "not found".
+                    if (++_autoRefreshMissing >= 2 && !IsOnNetwork(path))
+                    {
+                        _autoRefreshMissing = 0;
+                        _autoRefreshMissingPath = null;
+                        await tab.LoadAsync();
+                    }
+                    else
+                    {
+                        HoldAutoRefresh(path, fresh.Status.ToString());
+                    }
+
+                    break;
+                default:
+                    _autoRefreshMissing = 0;
+                    HoldAutoRefresh(path, fresh.Status.ToString()); // the cards stay; no banner for a hiccup
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn("Auto refresh failed", ex);
+        }
+    }
+
+    /// <summary>A UNC path or a path on a network drive (the drive type is read from the root only: no network I/O).</summary>
+    private static bool IsOnNetwork(string path)
+    {
+        if (TransferRules.IsNetworkPath(path))
+        {
+            return true;
+        }
+
+        try
+        {
+            return Path.GetPathRoot(path) is { Length: > 0 } root && new DriveInfo(root).DriveType == DriveType.Network;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A check of <paramref name="path"/> failed: the next one waits longer (doubling, see <see cref="AutoRefreshMaxHoldMs"/>).</summary>
+    private void HoldAutoRefresh(string path, string reason)
+    {
+        if (!PathTools.Comparer.Equals(path, _autoRefreshFailPath))
+        {
+            _autoRefreshFailPath = path;
+            _autoRefreshFailures = 0;
+        }
+
+        if (++_autoRefreshFailures == 1)
+        {
+            AppLog.Info($"Auto refresh: the folder did not answer ({reason}); checking less often"); // no path in the log
+        }
+
+        long interval = Math.Max(_autoRefreshMs, 1000);
+        long hold = Math.Min(interval << Math.Min(_autoRefreshFailures, 10), Math.Max(interval, AutoRefreshMaxHoldMs));
+        _autoRefreshHoldUntil = Environment.TickCount64 + hold;
+    }
+
     // ---- settings (§14) ---------------------------------------------------------------------
 
     [RelayCommand]
@@ -2742,6 +2958,11 @@ public sealed partial class MainViewModel : ObservableObject
         if (before.FrequentLimit != after.FrequentLimit)
         {
             FrequentTab.IsStale = true;
+        }
+
+        if (before.AutoRefresh != after.AutoRefresh || before.AutoRefreshSeconds != after.AutoRefreshSeconds)
+        {
+            ApplyAutoRefreshSetting(after); // turned on: the shown folder is checked about a second after OK
         }
 
         Message.Success("設定を保存しました。");

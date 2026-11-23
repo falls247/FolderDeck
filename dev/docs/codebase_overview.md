@@ -16,7 +16,7 @@
 | §2.2 | App | Services / Shell / ViewModels / Views / Themes |
 | §2.3 | その他 | tools と BAT（文字コードの注意） |
 | §3 | 主要な処理の流れ | 呼び出しの順序をメンバー名でたどる |
-| §3.1 | タブの読み込み | `TabViewModel.LoadAsync`、`NavLocation`、`_baseCards` / `_orderedCards` / `Cards`（フィルター） |
+| §3.1 | タブの読み込み | `TabViewModel.LoadAsync`、`NavLocation`、`_baseCards` / `_orderedCards` / `Cards`（フィルター）、自動更新（`AutoRefreshTickAsync` → `ApplyPolledListing`、`ListingChanges`） |
 | §3.2 | カードの段階読み込み | `Realize` / `Unrealize`、`DetailGate`、`ThumbnailService`（画像は `ImageDecoder` + `ThumbDiskCache`、ほかはシェル、「オンラインのみ」の画像はダウンロード）、詳細表示の行は読み込まない |
 | §3.3 | カスケード | `CascadeController`：オーバーレイ・フライアウト・タイマー・開閉の判断、カード起点とアンカー起点（`ICascadeAnchor`：サイドバーの行、詳細表示の行の名前の列）、詳細表示のファイルの行のプレビュー（`ICascadeAnchor.File`、階層なしのプレビュー `ParentIndex` -1、`IsOpen`）、Ctrl / Shift を押したときに閉じる一覧、エクスプローラーのメニューを出している間の凍結（`SetNativeMenuOpen`）、メニュー エイム（子へ向かう間は開閉・切り替えを待つ。`MenuAim`、`IsHeadingForChildOf`、`_pendingCard`） |
 | §3.4 | プレビュー | 起点 2 つ（カスケードの行・詳細表示の行の名前の列 → `OpenPreviewAt`）、`PreviewTextCache` → Office / テキスト抜粋 → サムネイル |
@@ -143,11 +143,12 @@ App
 | | `AppTheme.cs` | テーマ（`System` / `Light` / `Dark`）、`settings.json` の値（`system` / `light` / `dark`）との変換、`IsDark`（「システム」のときだけ Windows のモードを使う） |
 | | `ItemMenuStyle.cs` | 項目の右クリックのメニュー（`App` = アプリの WPF のメニュー / `Windows` = エクスプローラーのメニューの上にアプリの項目）、`settings.json` の値（`app` / `windows`）との変換（`ItemMenuStyles`。大文字小文字・前後の空白は無視、不明・なしは `app`） |
 | Listing | `FolderListing.cs` | `FolderLister.List`：直下の列挙と並び（フォルダ→ファイル、自然順）、`ListingStatus` |
-| | `FolderListingCache.cs` | パス単位の TTL キャッシュ。同じパスの同時要求は 1 回の列挙を共有し、待つ側が全員キャンセルすると列挙も止める。`Clear` / `Invalidate` |
+| | `FolderListingCache.cs` | パス単位の TTL キャッシュ。同じパスの同時要求は 1 回の列挙を共有し、待つ側が全員キャンセルすると列挙も止める。`Clear` / `Invalidate`（実行中の列挙も切り離す：新しい要求は相乗りしない、古い結果はキャッシュに入れない） |
 | | `VolumeThrottle.cs` | ボリュームごとに同時 I/O を制限（ハングした共有がローカルドライブを巻き込まない） |
 | | `Existence.cs` | `ProbeAsync` / `CheckAsync` / `FilterProbedAsync`：タイムアウト付きの存在確認と更新日時・ファイルのサイズ（`ExistProbe.Length`。ファイルだけ） |
 | | `CoverFinder.cs` | フォルダカードのカバー画像の探索（§6.4） |
-| | `TtlCache.cs` | 汎用の TTL キャッシュ（件数上限つき） |
+| | `TtlCache.cs` | 汎用の TTL キャッシュ（件数上限つき。`Remove` で 1 件だけ消す） |
+| | `ListingChanges.cs` | 自動更新の差分：同じフォルダの 2 つの列挙を比べる `Compare`（`ListingDelta`：使い回せるパス `Reusable`、更新日時の変わったサブフォルダ `ChangedFolders`、追加・削除・変更の数）。同じ項目かは `SameEntry`（パスと名前は Ordinal、種類、更新日時、ファイルのサイズ。**属性とリパースの印は比べない**） |
 | | `PreviewKinds.cs` | 拡張子 → `PreviewKind`（None / Image / Presentation / WordDocument / Spreadsheet / Text）。**対象拡張子の一覧はここ** |
 | | `FileContent.cs` | `IsCloudOnly`：OneDrive の「オンラインのみ」を属性だけで判定（開かない）。`IsDownloadable`：読むと同期アプリがダウンロードするプレースホルダー（RECALL_ON_DATA_ACCESS）か。`DownloadAsync`：最後まで非同期に読んでダウンロードさせる（画像のサムネイル専用） |
 | | `TextPreview.cs` | テキストの先頭 60 行 / 64 KB。BOM → UTF-8 → Shift_JIS の順に判定、バイナリは null |
@@ -269,6 +270,7 @@ App
   - **よく使う項目** `LoadFrequentAsync`：`FrequentRanker.Rank` → ピン留め・ランキングをそれぞれ存在確認 → `ManualOrder.Apply`（`CardOrderList.Frequent`）
 - フォルダの中は `LoadFolderAsync`：`Listings.GetAsync` → `ItemContext.InnerCard` のカードを作る。フォルダのタブ（`TabKind.Folder`）は常にこれ（最上位がない）
 - 最上位のカードは、存在確認の結果（`ExistProbe`）から更新日時とファイルのサイズをもらう（`MakeTopCard`）。詳細表示の行はディスクを見に行かないので（[§3.2](#32-カードの段階読み込み741)）、ここで入れないとサイズの列が空のままになり、サイズ順も効かない。フォルダの中のカードは列挙の結果から同じものをもらう
+- 自動更新（設定 `auto_refresh` / `auto_refresh_seconds`）：`MainViewModel.ApplyAutoRefreshSetting`（起動時の `InitializeAsync` と設定の OK）が 1 秒ごとのタイマーを動かす → `AutoRefreshTickAsync`：表示中のタブの `AutoRefreshPath`（`TransferTargetPath` があり、フォルダを列挙して表示しているとき）が、`LastListedAt` から間隔を過ぎていて、失敗による保留中でなく、`CanAutoRefresh`（ファイル操作・切り取りの確認・アプリのドラッグがなく、`IMainView.IsAutoRefreshBlocked` が false）なら → `Listings.Invalidate` → `Listings.GetAsync`（`_autoRefreshFlight`。終わるまで次を始めない。15 秒でキャンセル。失敗の結果はキャッシュから消す）→ await の後に判定し直す（タブ、`LoadGeneration`、パス、隠しファイルの設定、`CanAutoRefresh`）→ `TabViewModel.ApplyPolledListing`（`ListingChanges.Compare`。差がなければ `LastListedAt` を更新するだけ。差があれば変わっていないカードを使い回して `ShowCards`、件数の文言）→ 差し替えたらスクロール位置を戻す。同じフォルダで NotFound が 2 回続いたら `LoadAsync`（バナー。ネットワーク上のフォルダは `IsOnNetwork` で待つだけ）、ほかの失敗は `HoldAutoRefresh`（倍々で 5 分まで）。`LoadAsync` は `LoadGeneration` を進め、`_shownListing` を消す。読み込み・F5・ファイル操作の後の読み直しも `LastListedAt` を進めるので、自動更新と二重に読まない
 - `ShowCards(baseOrder, isTop)` → `Ordered`：`CardOrdering.ComparerFor(SortMode)`（サイズはフォルダを「なし」、種類は拡張子で渡す）→（フォルダの中は `FoldersFirst`）→ `SortKeepingPinned` → `Show`：フィルター（`ItemFilters.Apply`、固定タブの最上位だけ `FilterApplies`）→ `UpdateTopSummary`（件数と空のときの文言）
 - **`_baseCards`（並べ替え前の基準順）、`_orderedCards`（並べ替え後・フィルター前の全カード、`OrderedCards`）、`Cards`（表示するカード）の 3 本立て**。表示順を直接いじらず、`SetBaseOrder` / `ApplyOrder` / `PlaceInBase` / `RemoveCard` / `ApplyPins` を通す。「ピン留めは基準順と同じ位置」という前提が成り立つのは `OrderedCards` に対して（`Cards` はフィルターで詰まる）。
 
@@ -478,6 +480,7 @@ App
 ## 4. スレッドと非同期の規約
 
 - **UI スレッドでブロッキング I/O をしない**。列挙・存在確認・JSON 読み込みは `Task.Run` か `FolderListingCache` の中で行う。
+- 自動更新の確認は UI スレッドのタイマー（`DispatcherTimer`、1 秒）で判定し、列挙は `FolderListingCache` の作業スレッドだけ。確認は一度に 1 本で、15 秒で待つのをやめる（待つ側は自動更新だけなので、やめると列挙もキャンセルされる。固まった共有は `HoldAutoRefresh` で間隔を延ばす）。`FolderListingCache.Clear` / `Invalidate` は実行中の列挙も切り離す（`Detached`：後から来た要求は相乗りせず新しく列挙し、古い結果はキャッシュに入らない。F5・ファイル操作の後の読み込みが、操作前に始まった自動更新の列挙を拾わないため）。await の後は必ず条件を判定し直す（ShowDialog やドラッグのモーダルループの中でもタイマーは発火する）。
 - シェル / COM の呼び出しは `StaWorkerPool` 上でタイムアウトつき（`ThumbnailService` は 4 本・5 秒、`AppServices.Shell` は 1 本、詳細表示の種類の名前 `TypeNameCache` は専用の 1 本・5 秒）。タイムアウトしたワーカーは放棄して作り直す（最大 16 本）。タイムアウトは**呼び出しが始まってから**数える（キューで待つ時間は含めない。画像の多いフォルダで待ち行列が長いだけの要求を打ち切らないため）。60 秒たっても始まらない要求は `TimeoutException`。
   - 画像のデコード（`ImageDecoder`）は COM の STA を必要としないが、同じ `StaWorkerPool` を使う：`ThumbnailService` のデコード用ワーカー（コア数 − 1 本を 2〜8 本に丸める、優先度 BelowNormal、5 秒）。ディスクキャッシュの書き込み・刈り込みは `ThumbDiskCache` の 1 本（優先度 Lowest、タイムアウトなし）。
   - 例外：ごみ箱への移動（`RecycleBin`）とコピー・移動（`FileTransfer`、`StaThread.Run`）、名前の変更・新しいフォルダー（`ShellFileOps`、`StaThread.Run`）は操作ごとに専用の STA スレッドを作り、タイムアウトをつけない（シェルの進行状況・名前の衝突・「使用中」などのダイアログが利用者の操作を待つため）。UI スレッドは `await` で待つだけで止まらない。このスレッドはバックグラウンド スレッドなので、実行中にウィンドウを閉じると途中で切れる（`MainWindow.OnClosing` が確認する）。
@@ -519,6 +522,7 @@ App
 | データファイルを追加 | `StoreBase` を継承（`Load` / `Serialize`、変更後に `RequestSave`）→ `DataStores` のコンストラクタ・プロパティ・`All` に追加 | `All` に入れると `LoadAll` / `FlushAll` / 保存失敗の通知 / 読み込み問題の報告に自動で乗る。`docs/specification.md` の「データの置き場所」と「ほかのデータファイル」も更新。`StoreTests` |
 | タブの中身・件数・空のときの文言 | `TabViewModel` の `LoadRecentAsync` / `LoadFrequentAsync` / `LoadFolderAsync`、最上位の件数と空のときの文言は `UpdateTopSummary`（フィルターで変わるため 1 か所） | UI 文言は日本語でコードに直書き（リソース化していない） |
 | 最近の履歴・よく使う項目の規則 | `Core/Ranking/`（`RecentMerger`、`FrequentRanker`） | `RankingTests` |
+| 自動更新の対象・待つ条件を変える | 待つ条件：`MainWindow` の `IMainView.IsAutoRefreshBlocked`（画面の状態）→ `MainViewModel.CanAutoRefresh`（ファイル操作・ドラッグ）→ 対象：`TabViewModel.AutoRefreshPath` → 反映：`TabViewModel.ApplyPolledListing` / 差分の規則：`Core/Listing/ListingChanges.cs` | 一覧の差し替えで壊れる UI を新しく足したら `IsAutoRefreshBlocked` にも足す。`ListingChangesTests` / `SettingsStoreTests`。手動確認：F2 の入力中・カスケード・メニュー・ダイアログの表示中は待つ、選択とスクロール位置が残る |
 | フォルダ列挙の規則（並び・隠し・フィルタ） | `Core/Listing/FolderListing.cs`（`FolderLister`） | `ListingTests`（`FolderListerTests`） |
 | カバー画像の選び方 | `Core/Listing/CoverFinder.cs` | `ListingTests`（`CoverFinderTests`） |
 | 画像サムネイルの作り方・速さ | アプリがデコードする形式：`Shell/ImageDecoder.cs` の `Extensions` → 大きさの規則：`Core/Listing/ThumbSizing.cs` → ディスクキャッシュ：`Shell/ThumbDiskCache.cs`（規則は `Core/Infrastructure/DiskCacheRules.cs`）→ 振り分けとワーカー数：`ThumbnailService.GetAsync` / `DecodePicture` | `ThumbCacheTests`。保存する画像が変わる変更は `ThumbDiskCache.Version` を上げる。App 層は自動テストなし → 画像の多いフォルダで手動確認（向きつきの JPEG、透過 PNG、壊れた画像、シェルに回る HEIC など）。刈り込みが消すのは `DiskCacheRules.IsCacheFileName` に合うファイルだけ、という条件を外さない |
@@ -545,10 +549,10 @@ App
 
 | テストファイル | テストクラス | 主な対象 |
 |---|---|---|
-| `ListingTests.cs` | `NaturalComparerTests` `FolderListerTests` `CoverFinderTests` `FolderListingCacheTests` `ExistenceTests` | 自然順、列挙（隠し・システム属性、循環ジャンクション）、カバー探索（深さ・フォルダ数の上限、リパースポイント）、列挙キャッシュ、存在確認 |
+| `ListingTests.cs` | `NaturalComparerTests` `FolderListerTests` `CoverFinderTests` `FolderListingCacheTests` `ExistenceTests` `ListingChangesTests` | 自然順、列挙（隠し・システム属性、循環ジャンクション）、カバー探索（深さ・フォルダ数の上限、リパースポイント）、列挙キャッシュ、存在確認、`Clear` / `Invalidate` の後に実行中の列挙へ相乗りしない、自動更新の差分（属性だけの違いは同じ、追加・削除・変更・大文字小文字だけの名前変更、更新日時の変わったサブフォルダ） |
 | `OrderingTests.cs` | `CardOrderingTests` `ManualOrderTests` `PathSetTests` `ExistenceProbeTests` | ピン固定の並べ替え、サイズ順（サイズなしは最後）・種類順（拡張子、大文字小文字を区別しない）と同順のときの名前順（向きに合わせる。フォルダだけの一覧でもサイズ・種類の向きが変わる）、並び方の設定値（9 つ）と見出しのクリックで次に行く並び方（`Next`）、ドラッグ順の適用、パス集合、存在確認と更新日時・ファイルのサイズ |
 | `OrderStoreTests.cs` | `CardOrderStoreTests` `RegisteredFoldersReorderTests` `SortModeSettingsTests` | `card_order.json`、登録順の並べ替え、`sort_modes` |
-| `StoreTests.cs` | `JsonFileTests` `RegisteredFoldersStoreTests` `HistoryStoreTests` `PinAndExcludedStoreTests` `SettingsStoreTests` | 原子的書き込み・退避、各ストア、設定の既定値と正規化（タブ列 `open_tabs` / `selected_tab`・サイドバーの幅と折りたたみ・詳細表示の列の幅 `details_columns`（4 つのキー。`name` のない古いファイルは既定値）・右クリックのメニュー `item_menu`（既定 `app`、不明・なしは `app`、大文字小文字と空白の正規化、保存と `Clone`）・ダブルクリックで開く `open_on_double_click`（既定オフ、キーなしもオフ、保存）・文字の大きさ `text_scale`（`ClampTextScale` の範囲と刻み、刻みから外れた値の読み込み、保存と `Clone`）・旧 `registered` キーの片づけを含む）、version 1 からの移行と、旧版が書き戻したファイルの再移行 |
+| `StoreTests.cs` | `JsonFileTests` `RegisteredFoldersStoreTests` `HistoryStoreTests` `PinAndExcludedStoreTests` `SettingsStoreTests` | 原子的書き込み・退避、各ストア、設定の既定値と正規化（タブ列 `open_tabs` / `selected_tab`・サイドバーの幅と折りたたみ・詳細表示の列の幅 `details_columns`（4 つのキー。`name` のない古いファイルは既定値）・右クリックのメニュー `item_menu`（既定 `app`、不明・なしは `app`、大文字小文字と空白の正規化、保存と `Clone`）・ダブルクリックで開く `open_on_double_click`（既定オフ、キーなしもオフ、保存）・フォルダの自動更新 `auto_refresh` / `auto_refresh_seconds`（既定オフ・5 秒、範囲外は 2〜3600 に収める、オフの間も間隔を覚える）・文字の大きさ `text_scale`（`ClampTextScale` の範囲と刻み、刻みから外れた値の読み込み、保存と `Clone`）・旧 `registered` キーの片づけを含む）、version 1 からの移行と、旧版が書き戻したファイルの再移行 |
 | `ItemFilterTests.cs` | `ItemFilterTests` | フィルターの設定値の変換、絞り込み、絞り込み中のドラッグ順を全体へ戻す `MergeShownOrder`、`filter_modes` の正規化と保存 |
 | `RankingTests.cs` | `RecentMergerTests` `FrequentRankerTests` `FormattingTests` | 最近の履歴の統合、スコア、表示用の書式 |
 | `PathToolsTests.cs` | `PathToolsTests` | 入力の整形、正規化、相対パス、比較 |
@@ -584,6 +588,7 @@ App
   - 名前は先に `ItemNames.Clean` / `Check` に通す。シェルは予約名（`CON`、`NUL.txt`、`COM¹`…）を普通のファイルとして作り、`: \ /` を含む名前では「フォルダーを作成しますか」と聞いてくる（Windows 11 26200 で確認）。末尾のピリオド・空白はディスクでは消えるのに、シェルは渡した名前のまま報告する。
   - 同じ名前は `ShellFileOps.Rename` が先に確かめて `NameTaken` にする。シェルに任せると、ファイルの衝突は「予期しないエラー 0x80070057」の画面になり、フォルダ同士は統合を勧められる。`FOF_NOCONFIRMATION` は既存のファイルを黙って上書きするので使わない。
   - 名前の入力欄（`RenameEditor`）を終わらせる経路を足すときは `End` を通す（1 回だけ・先に session を外す）。名前を変える処理は `Committed` から `Dispatcher.BeginInvoke` で後に回す（確認ダイアログをマウス・フォーカスのイベントの中で開くと、押下と離しの組がずれる）。入力欄は項目のビューの子ではないので、項目の祖先で押下に反応する処理は `TextBoxBase` も項目と同じに扱う（`IsOnItemOrControl`）。入力中に効くキーを足さない（`OnPreviewKeyDown` の先頭で返す）。入力中に一覧を読み直す処理を足さない（項目のビューが作り直されると入力途中の名前で確定される。ウィンドウのアクティブ化の読み直しは `_activationPending` で後に回している）。`ConfirmDialog` は押しっぱなしのキーの繰り返しを受けない（名前を確定した Enter の繰り返しが、拡張子の確認の既定のボタンを押さないため）。
+- **自動更新**：タイマーから `Refresh` / `ReloadAfterFileChangeAsync` / `LoadAsync` を呼ばない（一覧が暗くなる、キャッシュ全体が消える、カスケードが閉じる。NotFound が 2 回続いたときの `LoadAsync` だけは例外）。読む前に `Listings.Invalidate` する（しないと TTL 60 秒のキャッシュが返る）。`Attributes` を比べない（オンライン専用のファイルはサムネイルを作るとクラウドの属性が変わり、自分で再読み込みを繰り返す）。名前の入力欄は一覧の差し替えで確定してしまうので、`IsNameBusy` の間は待つ。
 - **UI スレッドで待たない**（[§4](#4-スレッドと非同期の規約)）。シェル呼び出しは必ず STA ワーカー経由でタイムアウトをつける。
 - パスの比較は `PathTools.PathEquals` / `PathSet`（大文字小文字を区別せず正規化）。`==` で比べない。長いパスをシェルに渡すときは `PathTools.ForShell`。
 - `SettingsStore.Current` を書き換えても保存されない（コピーのため）。`Update` を使う。

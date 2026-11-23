@@ -156,7 +156,24 @@ public partial class MainWindow : Window, IMainView, ICardHost
             _ = vm.OnActivatedAsync();
         };
         PreviewTextInput += OnPreviewTextInput;
-        Closed += (_, _) => _hook?.Dispose();
+        Closed += (_, _) =>
+        {
+            _vm.StopAutoRefresh();
+            _hook?.Dispose();
+        };
+        PreviewMouseWheel += (_, _) => NoteInput();
+
+        // A pointer on its way to a click counts as input (the list must not move under it). Only a
+        // real move: WPF raises a MouseMove of its own when the layout under a still pointer changes.
+        PreviewMouseMove += (_, e) =>
+        {
+            var at = e.GetPosition(this);
+            if (at != _lastPointer)
+            {
+                _lastPointer = at;
+                NoteInput();
+            }
+        };
         theme.ThemeChanged += () => _theme.ApplyTitleBar(this);
         PreviewKeyDown += OnPreviewKeyDown;
         PreviewMouseDown += OnPreviewMouseDown;
@@ -270,6 +287,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        NoteInput();
         if (ActiveList.IsMarqueeRunning)
         {
             // Esc puts the selection back; no other key may reload or change the list under the
@@ -365,6 +383,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
+        NoteInput();
         // A press anywhere else commits the name being edited (first: the branches below may handle
         // the press). The items have no focus to take, so a lost focus alone would not end it.
         _rename.CommitIfOutside(e.OriginalSource);
@@ -760,6 +779,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private void OnDragOver(object sender, DragEventArgs e)
     {
+        NoteInput(); // OLE calls it over and over during a drag over the window
         if (FolderDropOf(e) is { } drop)
         {
             e.Effects = ToWpf(drop.Effect);
@@ -1370,8 +1390,42 @@ public partial class MainWindow : Window, IMainView, ICardHost
     {
         _cascade.CloseAll();
         var dialog = new ConfirmDialog(title, body, path, primaryText, danger) { Owner = this };
-        return dialog.ShowDialog() == true;
+        _modalDepth++;
+        try
+        {
+            return dialog.ShowDialog() == true;
+        }
+        finally
+        {
+            _modalDepth--;
+        }
     }
+
+    // ---- auto refresh: what a replaced item list would break ------------------------------------
+
+    /// <summary>Dialogs of the window are open (ShowDialog runs a nested loop in which the auto refresh's timer still ticks).</summary>
+    private int _modalDepth;
+
+    /// <summary>The last keyboard, mouse, wheel or drag input over the window (<c>Environment.TickCount64</c>).</summary>
+    private long _lastInputAt;
+
+    /// <summary>The auto refresh leaves the list alone this long after input (a click about to land, a hover about to open).</summary>
+    private const long AutoRefreshQuietMs = 800;
+
+    private Point _lastPointer = new(double.NaN, double.NaN);
+
+    private void NoteInput() => _lastInputAt = Environment.TickCount64;
+
+    bool IMainView.IsAutoRefreshBlocked =>
+        WindowState == WindowState.Minimized
+        || IsNameBusy
+        || ActiveList.IsMarqueeRunning
+        || _cascade.IsOpen || _cascade.IsMenuOpen || _cascade.IsHoverPending
+        || _modalDepth > 0
+        || Mouse.LeftButton == MouseButtonState.Pressed
+        || Mouse.RightButton == MouseButtonState.Pressed
+        || Mouse.MiddleButton == MouseButtonState.Pressed
+        || Environment.TickCount64 - _lastInputAt < AutoRefreshQuietMs;
 
     public IReadOnlyList<string>? PickFolders()
     {
@@ -1381,7 +1435,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
             Multiselect = true,
             Title = "登録するフォルダを選択",
         };
-        return dialog.ShowDialog(this) == true ? dialog.FolderNames : null;
+        _modalDepth++;
+        try
+        {
+            return dialog.ShowDialog(this) == true ? dialog.FolderNames : null;
+        }
+        finally
+        {
+            _modalDepth--;
+        }
     }
 
     public bool ShowSettings(SettingsViewModel settings)
@@ -1395,7 +1457,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
             window.MaxHeight = ActualHeight;
         }
 
-        return window.ShowDialog() == true;
+        _modalDepth++;
+        try
+        {
+            return window.ShowDialog() == true;
+        }
+        finally
+        {
+            _modalDepth--;
+        }
     }
 
     public void ApplyTheme(AppTheme theme)
