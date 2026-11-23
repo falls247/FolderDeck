@@ -58,6 +58,10 @@
                     <DataTrigger Binding="{Binding IsDragged}" Value="True">
                         <Setter Property="Opacity" Value="0.4" />
                     </DataTrigger>
+                    <!-- a drag would drop into this folder (IsMouseOver does not follow a drag) -->
+                    <DataTrigger Binding="{Binding IsDropTarget}" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource Brush.AccentSoft}" />
+                    </DataTrigger>
                 </Style.Triggers>
             </Style>
         </Border.Style>

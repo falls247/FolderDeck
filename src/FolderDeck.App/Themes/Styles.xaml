@@ -77,6 +77,20 @@
     </Style>
 
     <!-- Buttons -->
+    <!-- Keyboard focus of the text buttons (Tab, arrow keys, the button a dialog starts on): a ring around the
+         button in the text colour, so that it shows on filled buttons too (OK, 削除 in the confirmation) and in
+         both themes. A FocusVisualStyle shows only after keyboard input, not after a mouse click. -->
+    <Style x:Key="FocusRing.Btn">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border Margin="-3" CornerRadius="10" BorderThickness="2" BorderBrush="{DynamicResource Brush.Text}"
+                            SnapsToDevicePixels="True" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <Style x:Key="Btn" TargetType="{x:Type Button}">
         <Setter Property="Background" Value="{DynamicResource Brush.Surface}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.Text}" />
@@ -86,7 +100,7 @@
         <Setter Property="FontFamily" Value="{StaticResource Font.UI}" />
         <Setter Property="FontSize" Value="13" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing.Btn}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="{x:Type Button}">

@@ -62,6 +62,15 @@ public sealed class TtlCache<TKey, TValue>
         }
     }
 
+    /// <summary>Forgets <paramref name="key"/> (true when it was cached).</summary>
+    public bool Remove(TKey key)
+    {
+        lock (_gate)
+        {
+            return _items.Remove(key);
+        }
+    }
+
     public void Clear()
     {
         lock (_gate)

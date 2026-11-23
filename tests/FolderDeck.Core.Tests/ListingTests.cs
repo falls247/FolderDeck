@@ -345,6 +345,33 @@ public class FolderListingCacheTests
     }
 
     [Fact]
+    public async Task ClearOrInvalidate_DuringAListing_StartsANewOne_AndTheOldOneIsNotCached()
+    {
+        using var gate = new ManualResetEventSlim(false);
+        var fs = new FakeFileSystem().AddFile(@"C:.txt");
+        fs.Gate = gate;
+        var cache = new FolderListingCache(fs, () => false);
+
+        var before = cache.GetAsync(@"C:", CancellationToken.None); // e.g. an auto refresh, still running
+        while (Volatile.Read(ref fs.EnumerateCalls) == 0)
+        {
+            await Task.Delay(5);
+        }
+
+        cache.Clear(); // a file operation changed the folder: what runs now is from before it
+        var after = cache.GetAsync(@"C:", CancellationToken.None);
+        cache.Invalidate(@"C:");
+        var again = cache.GetAsync(@"C:", CancellationToken.None);
+        gate.Set();
+        await Task.WhenAll(before, after, again);
+
+        Assert.Equal(3, fs.EnumerateCalls); // none joined an older listing
+        Assert.NotSame(await before, await after);
+        Assert.True(cache.TryGetFresh(@"C:", out var cached));
+        Assert.Same(await again, cached); // only the latest listing is cached
+    }
+
+    [Fact]
     public async Task Clear_ForcesReload()
     {
         var fs = new FakeFileSystem().AddFile(@"C:\r\a.txt");
@@ -535,5 +562,66 @@ public class ExistenceTests
         }
 
         public FsEntry? GetEntry(string path) => null;
+    }
+}
+
+public class ListingChangesTests
+{
+    private static readonly DateTime T0 = new(2026, 11, 1, 9, 0, 0, DateTimeKind.Utc);
+
+    private static FsEntry Dir(string name, DateTime? at = null) =>
+        new(name, @"E:\f\" + name, true, false, 0, at ?? T0, FileAttributes.Directory);
+
+    private static FsEntry File(string name, long length = 10, DateTime? at = null, FileAttributes attrs = FileAttributes.Archive, bool reparse = false) =>
+        new(name, @"E:\f\" + name, false, reparse, length, at ?? T0, attrs);
+
+    [Fact]
+    public void Compare_IdenticalOrOnlyAttributesAndReparseDiffer_IsEmpty()
+    {
+        FsEntry[] shown = [Dir("sub"), File("a.png"), File("b.txt")];
+        var same = ListingChanges.Compare(shown, [Dir("sub"), File("a.png"), File("b.txt")]);
+        Assert.True(same.IsEmpty);
+        Assert.Equal(3, same.Reusable.Count);
+
+        // An online-only file downloaded for its thumbnail: only the cloud-state bits change.
+        var hydrated = ListingChanges.Compare(
+            shown,
+            [Dir("sub"), File("a.png", attrs: FileAttributes.Offline | (FileAttributes)0x80000 | (FileAttributes)0x400000, reparse: true), File("b.txt")]);
+        Assert.True(hydrated.IsEmpty);
+        Assert.Contains(@"E:\f\a.png", hydrated.Reusable);
+    }
+
+    [Fact]
+    public void Compare_AddRemoveModifyAndCaseRename_ReusesOnlyUnchanged()
+    {
+        FsEntry[] shown = [File("keep.txt"), File("gone.txt"), File("grow.txt"), File("touch.txt"), File("name.txt")];
+        FsEntry[] fresh =
+        [
+            File("keep.txt"),
+            File("grow.txt", length: 99),
+            File("touch.txt", at: T0.AddMinutes(1)),
+            File("Name.txt"),
+            File("new.txt"),
+        ];
+
+        var delta = ListingChanges.Compare(shown, fresh);
+        Assert.False(delta.IsEmpty);
+        Assert.Equal(2, delta.Added);   // new.txt, Name.txt (a case-only rename shows the new name)
+        Assert.Equal(2, delta.Removed); // gone.txt, name.txt
+        Assert.Equal(2, delta.Changed); // grow.txt, touch.txt
+        Assert.Equal([@"E:\f\keep.txt"], delta.Reusable);
+        Assert.Empty(delta.ChangedFolders);
+    }
+
+    [Fact]
+    public void Compare_FolderWithNewWriteTime_IsChangedFolder()
+    {
+        FsEntry[] shown = [Dir("busy"), Dir("quiet"), File("doc.txt")];
+        FsEntry[] fresh = [Dir("busy", T0.AddSeconds(5)), Dir("quiet"), File("doc.txt", at: T0.AddSeconds(5))];
+
+        var delta = ListingChanges.Compare(shown, fresh);
+        Assert.Equal([@"E:\f\busy"], delta.ChangedFolders);
+        Assert.Equal(2, delta.Changed);
+        Assert.Equal([@"E:\f\quiet"], delta.Reusable);
     }
 }

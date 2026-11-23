@@ -52,10 +52,13 @@
           <Grid>
               <views:SidebarView x:Name="Sidebar" />
 
-              <!-- drop hint while dragging folders from Explorer over the window -->
+              <!-- drop hint while dragging over the window: what a release does there (registration, or a move / copy
+                   into the folder under the pointer). A band at the top, over クイック アクセス, so that the 登録フォルダ
+                   and drive rows (drop targets) stay visible. -->
               <Border x:Name="DropHint" Margin="6" CornerRadius="10" BorderThickness="2" BorderBrush="{DynamicResource Brush.Folder}"
-                      Background="{DynamicResource Brush.FolderSoft}" Opacity="0.94" Visibility="Collapsed" IsHitTestVisible="False">
-                  <TextBlock Text="ドロップして登録" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Folder}"
+                      Background="{DynamicResource Brush.FolderSoft}" Opacity="0.94" Visibility="Collapsed" IsHitTestVisible="False"
+                      VerticalAlignment="Top">
+                  <TextBlock x:Name="DropHintText" Text="ドロップして登録" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Folder}"
                              HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" Margin="8" />
               </Border>
           </Grid>

@@ -60,6 +60,12 @@ public sealed partial class SidebarItemViewModel : ObservableObject, ICascadeAnc
     [ObservableProperty]
     private bool _isDragged;
 
+    /// <summary>
+    /// A drag would drop into this folder or drive (set by MainWindow: IsMouseOver does not follow a drag).
+    /// </summary>
+    [ObservableProperty]
+    private bool _isDropTarget;
+
     public SidebarItemViewModel(string id, string path, IconCache icons)
         : this(id, path, PathTools.DisplayName(path), null, icons)
     {

@@ -41,6 +41,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsItemMenuApp), nameof(IsItemMenuWindows))]
     private ItemMenuStyle _itemMenu;
 
+    /// <summary>フォルダの自動更新: on (every <see cref="AutoRefreshSecondsText"/> seconds) or off. The two switches below show and set it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsAutoRefreshOff), nameof(IsAutoRefreshInterval))]
+    private bool _autoRefresh;
+
+    [ObservableProperty]
+    private string _autoRefreshSecondsText;
+
     [ObservableProperty]
     private string _recentLimitText;
 
@@ -70,6 +78,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         _openExplorerInNewTab = settings.OpenExplorerInNewTab;
         _openOnDoubleClick = settings.OpenOnDoubleClick;
         _itemMenu = ItemMenuStyles.FromSetting(settings.ItemMenu);
+        _autoRefresh = settings.AutoRefresh;
+        _autoRefreshSecondsText = settings.AutoRefreshSeconds.ToString(CultureInfo.InvariantCulture);
+        AutoRefreshSeconds = settings.AutoRefreshSeconds; // kept when the field is left invalid while off
         _recentLimitText = settings.RecentLimit.ToString(CultureInfo.InvariantCulture);
         _frequentLimitText = settings.FrequentLimit.ToString(CultureInfo.InvariantCulture);
         _thumbCacheMbText = settings.ThumbCacheMb.ToString(CultureInfo.InvariantCulture);
@@ -108,6 +119,31 @@ public sealed partial class SettingsViewModel : ObservableObject
         set => SelectItemMenu(value, ItemMenuStyle.Windows);
     }
 
+    // Same as the theme: only "checked" counts.
+    public bool IsAutoRefreshOff
+    {
+        get => !AutoRefresh;
+        set
+        {
+            if (value)
+            {
+                AutoRefresh = false;
+            }
+        }
+    }
+
+    public bool IsAutoRefreshInterval
+    {
+        get => AutoRefresh;
+        set
+        {
+            if (value)
+            {
+                AutoRefresh = true;
+            }
+        }
+    }
+
     /// <summary>The 文字の大きさ switches, smallest first (100 % is 標準).</summary>
     public IReadOnlyList<TextScaleChoice> TextScaleChoices { get; }
 
@@ -121,9 +157,20 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public int ThumbCacheMb { get; private set; }
 
+    public int AutoRefreshSeconds { get; private set; }
+
     /// <summary>Checks the numeric fields; sets <see cref="Error"/> when they are out of range.</summary>
     public bool Validate()
     {
+        // The interval counts only while 一定の間隔で更新 is chosen; off, an invalid field keeps the old value.
+        bool secondsOk = int.TryParse(AutoRefreshSecondsText.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int seconds)
+            && seconds is >= AppSettings.AutoRefreshSecondsMin and <= AppSettings.AutoRefreshSecondsMax;
+        if (AutoRefresh && !secondsOk)
+        {
+            Error = $"自動更新の間隔は {AppSettings.AutoRefreshSecondsMin}〜{AppSettings.AutoRefreshSecondsMax} の整数（秒）で入力してください。";
+            return false;
+        }
+
         if (!int.TryParse(RecentLimitText.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int recent) || recent is < 10 or > 500)
         {
             Error = "最近の履歴の表示件数は 10〜500 の整数で入力してください。";
@@ -145,6 +192,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         RecentLimit = recent;
         FrequentLimit = frequent;
         ThumbCacheMb = cacheMb;
+        if (secondsOk)
+        {
+            AutoRefreshSeconds = seconds;
+        }
+
         Error = null;
         return true;
     }
@@ -187,6 +239,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.RecentLimit = RecentLimit;
         settings.FrequentLimit = FrequentLimit;
         settings.ThumbCacheMb = ThumbCacheMb;
+        settings.AutoRefresh = AutoRefresh;
+        settings.AutoRefreshSeconds = AutoRefreshSeconds;
     }
 
     [RelayCommand]

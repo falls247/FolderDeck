@@ -68,6 +68,20 @@ public class TransferRulesTests
     }
 
     [Fact]
+    public void Decide_Drop_RefusesASameFolderCopy_ButStillCopiesWhatCannotMove()
+    {
+        var copy = TransferRules.Decide([Local(@"E:\a\x.txt")], @"E:\a", TransferOptions.Drop(TransferKind.Copy));
+        Assert.Empty(copy.Items);
+        Assert.Equal(TransferRefusal.SameFolder, copy.Refusal);
+
+        var move = TransferRules.Decide(
+            [new(@"D:\disc\ro.txt", SourceMedia.ReadOnly, CanDelete: true), Local(@"E:\src\b.txt")],
+            @"E:\dst",
+            TransferOptions.Drop(TransferKind.Move));
+        Assert.Equal(new[] { (TransferKind.Copy, CopyReason.ReadOnlyMedia), (TransferKind.Move, CopyReason.None) }, Kinds(move));
+    }
+
+    [Fact]
     public void Decide_KindPerItem_FollowsMediaAndDeletability()
     {
         TransferSource[] sources =

@@ -24,6 +24,9 @@ public sealed class FakeFileSystem : IFileSystem
 
     public int EnumerateCalls;
 
+    /// <summary>When set, every enumeration waits for it (a listing kept running).</summary>
+    public ManualResetEventSlim? Gate { get; set; }
+
     public List<string> Enumerated { get; } = [];
 
     public FakeFileSystem AddFolder(string path, bool reparse = false, FileAttributes extra = 0)
@@ -64,6 +67,7 @@ public sealed class FakeFileSystem : IFileSystem
     public IReadOnlyList<FsEntry> EnumerateDirectory(string path, bool includeHidden, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref EnumerateCalls);
+        Gate?.Wait(cancellationToken);
         lock (Enumerated)
         {
             Enumerated.Add(path);

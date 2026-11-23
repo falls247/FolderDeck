@@ -87,21 +87,36 @@ public sealed class FolderListingCache
         return WaitAsync(flight, cancellationToken);
     }
 
-    /// <summary>Drops every cached listing (F5, or the hidden-files setting changed).</summary>
+    /// <summary>
+    /// Drops every cached listing (F5, a file operation, or the hidden-files setting changed). A
+    /// listing still running was started before: it finishes for those already waiting, but a
+    /// later <see cref="GetAsync"/> starts a new one instead of joining it, and it is not cached.
+    /// </summary>
     public void Clear()
     {
         lock (_gate)
         {
             _cache.Clear();
             _generation++;
+            foreach (var flight in _inFlight.Values)
+            {
+                flight.Detached = true;
+            }
+
+            _inFlight.Clear();
         }
     }
 
+    /// <summary>Drops the listing of <paramref name="path"/>, cached or still running (as <see cref="Clear"/> does for every path).</summary>
     public void Invalidate(string path)
     {
         lock (_gate)
         {
             _cache.Remove(path);
+            if (_inFlight.Remove(path, out var flight))
+            {
+                flight.Detached = true;
+            }
         }
     }
 
@@ -148,6 +163,7 @@ public sealed class FolderListingCache
             }
 
             if (task.Status == TaskStatus.RanToCompletion
+                && !flight.Detached
                 && flight.Generation == _generation
                 && flight.IncludeHidden == _includeHidden())
             {
@@ -208,5 +224,8 @@ public sealed class FolderListingCache
         public Task<FolderListing>? Task { get; set; }
 
         public int Waiters { get; set; }
+
+        /// <summary>Dropped by <see cref="Clear"/> / <see cref="Invalidate"/>: no new waiter joins it and its result is not cached.</summary>
+        public bool Detached { get; set; }
     }
 }

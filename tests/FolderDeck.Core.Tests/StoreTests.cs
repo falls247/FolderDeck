@@ -526,6 +526,8 @@ public class SettingsStoreTests
         Assert.Equal(512, s.ThumbCacheMb);
         Assert.Null(s.RecentClearedAt);
         Assert.Equal(AppSettings.SidebarWidthDefault, s.SidebarWidth);
+        Assert.False(s.AutoRefresh);
+        Assert.Equal(5, s.AutoRefreshSeconds);
     }
 
     private static string Describe(OpenTabSetting tab) => $"{tab.Kind}|{tab.Root}|{tab.Path}";
@@ -666,7 +668,7 @@ public class SettingsStoreTests
     {
         using var tmp = new TempDir();
         string file = tmp.Combine("settings.json");
-        File.WriteAllText(file, """{"version":1,"card_size":205,"recent_limit":5000,"frequent_limit":1,"thumb_cache_mb":999999,"last_tab":"bogus","recent_cleared_at":"garbage","details_columns":{" Type ":9999,"bogus":1}}""");
+        File.WriteAllText(file, """{"version":1,"card_size":205,"recent_limit":5000,"frequent_limit":1,"thumb_cache_mb":999999,"auto_refresh_seconds":0,"last_tab":"bogus","recent_cleared_at":"garbage","details_columns":{" Type ":9999,"bogus":1}}""");
         var store = new SettingsStore(file, FakeClock.Fixed());
         store.Load();
         var s = store.Current;
@@ -675,6 +677,7 @@ public class SettingsStoreTests
         Assert.Equal(500, s.RecentLimit);
         Assert.Equal(10, s.FrequentLimit);
         Assert.Equal(AppSettings.ThumbCacheMbMax, s.ThumbCacheMb);
+        Assert.Equal(AppSettings.AutoRefreshSecondsMin, s.AutoRefreshSeconds);
         Assert.Equal(0, s.SelectedTab); // an unknown last_tab: 最近の履歴
         Assert.Null(s.RecentClearedAt);
         Assert.True(s.ConfirmExecutables);
@@ -841,6 +844,32 @@ public class SettingsStoreTests
         reloaded.Load();
         Assert.True(reloaded.Current.OpenOnDoubleClick);
         Assert.True(reloaded.Current.Clone().OpenOnDoubleClick);
+    }
+
+    [Fact]
+    public void AutoRefresh_RoundTrips_AndKeepsTheIntervalWhileOff()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+
+        store.Update(s =>
+        {
+            s.AutoRefresh = true;
+            s.AutoRefreshSeconds = 30;
+        });
+        store.Flush();
+        string text = File.ReadAllText(file);
+        Assert.Contains("\"auto_refresh\": true", text);
+        Assert.Contains("\"auto_refresh_seconds\": 30", text);
+
+        store.Update(s => s.AutoRefresh = false);
+        store.Flush();
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        Assert.False(reloaded.Current.AutoRefresh);
+        Assert.Equal(30, reloaded.Current.Clone().AutoRefreshSeconds);
     }
 
     [Fact]

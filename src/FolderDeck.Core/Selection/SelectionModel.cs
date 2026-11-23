@@ -134,6 +134,60 @@ public sealed class SelectionModel
         return SetKeys(next);
     }
 
+    /// <summary>A copy of the selection and its anchor (the start of a marquee drag), independent of later changes.</summary>
+    public SelectionSnapshot Snapshot() => new(new HashSet<string>(_keys, PathTools.Comparer), Anchor);
+
+    /// <summary>
+    /// A marquee drag: the selection becomes <paramref name="baseline"/> combined with the keys in
+    /// the box (<paramref name="box"/>, in display order): added to it, or with
+    /// <paramref name="toggle"/> (Ctrl) flipped against it. The result depends on the baseline and
+    /// the box only, so the box may grow and shrink freely. The anchor stays the baseline's when it
+    /// is still selected, else it is the first selected key of the box (null when none is).
+    /// </summary>
+    public bool SelectBox(SelectionSnapshot baseline, IEnumerable<string> box, bool toggle)
+    {
+        ArgumentNullException.ThrowIfNull(baseline);
+        var next = new HashSet<string>(baseline.Keys, PathTools.Comparer);
+        var inBox = new List<string>();
+        var seen = new HashSet<string>(PathTools.Comparer);
+        foreach (string key in box)
+        {
+            if (string.IsNullOrEmpty(key) || !seen.Add(key))
+            {
+                continue;
+            }
+
+            inBox.Add(key);
+            if (!toggle)
+            {
+                next.Add(key);
+            }
+            else if (!next.Remove(key))
+            {
+                next.Add(key);
+            }
+        }
+
+        if (baseline.Anchor is { } anchor && next.Contains(anchor))
+        {
+            Anchor = anchor;
+        }
+        else
+        {
+            Anchor = inBox.FirstOrDefault(next.Contains);
+        }
+
+        return SetKeys(next);
+    }
+
+    /// <summary>Goes back to <paramref name="baseline"/> (a marquee drag cancelled with Esc), its anchor included.</summary>
+    public bool Restore(SelectionSnapshot baseline)
+    {
+        ArgumentNullException.ThrowIfNull(baseline);
+        Anchor = baseline.Anchor;
+        return SetKeys(new HashSet<string>(baseline.Keys, PathTools.Comparer));
+    }
+
     /// <summary>Deselects everything and forgets the anchor.</summary>
     public bool Clear()
     {
@@ -235,3 +289,6 @@ public sealed class SelectionModel
         return -1;
     }
 }
+
+/// <summary>A selection at one moment (see <see cref="SelectionModel.Snapshot"/>).</summary>
+public sealed record SelectionSnapshot(IReadOnlySet<string> Keys, string? Anchor);

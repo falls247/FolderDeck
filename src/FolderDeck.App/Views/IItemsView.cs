@@ -44,6 +44,19 @@ public interface IItemsView
     /// <see cref="Scrolled"/> is raised before it returns.
     /// </summary>
     FrameworkElement? BringItemIntoView(CardViewModel item);
+
+    /// <summary>A marquee (rubber-band selection) is pressed or being dragged in this view.</summary>
+    bool IsMarqueeRunning { get; }
+
+    /// <summary>
+    /// Starts a marquee for a left press on the blank part of the view's viewport (see
+    /// <see cref="MarqueeSelector"/>). False when the press is not there, the view is hidden or
+    /// busy with a reorder drag, or a marquee is already running.
+    /// </summary>
+    bool BeginMarquee(MouseButtonEventArgs e, MarqueeHandlers handlers);
+
+    /// <summary>Cancels a running marquee (Esc): the window restores the selection of the press.</summary>
+    void CancelMarquee();
 }
 
 /// <summary>The common part of <see cref="IItemsView.BringItemIntoView"/>.</summary>
@@ -106,17 +119,24 @@ internal static class ItemsViewReveal
 /// <summary>The geometric search behind <see cref="IItemsView.RealizedItemAt"/>.</summary>
 internal static class ItemsViewHitTest
 {
-    public static FrameworkElement? Find(ScrollViewer? scroll, Visual root, MouseEventArgs e)
+    /// <summary>
+    /// The pointer lies inside the visible scroll viewer: not on the details header above it, nor
+    /// on items the virtualizing panel keeps realized just outside it.
+    /// </summary>
+    public static bool InViewport(ScrollViewer? scroll, MouseEventArgs e)
     {
         if (scroll is not { IsVisible: true })
         {
-            return null;
+            return false;
         }
 
-        // Only the viewport counts: not the details header above it, nor items the virtualizing
-        // panel keeps realized just outside it.
         var inScroll = e.GetPosition(scroll);
-        if (inScroll.X < 0 || inScroll.Y < 0 || inScroll.X >= scroll.ActualWidth || inScroll.Y >= scroll.ActualHeight)
+        return inScroll.X >= 0 && inScroll.Y >= 0 && inScroll.X < scroll.ActualWidth && inScroll.Y < scroll.ActualHeight;
+    }
+
+    public static FrameworkElement? Find(ScrollViewer? scroll, Visual root, MouseEventArgs e)
+    {
+        if (!InViewport(scroll, e))
         {
             return null;
         }

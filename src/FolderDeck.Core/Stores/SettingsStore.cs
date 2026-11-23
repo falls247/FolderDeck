@@ -72,6 +72,11 @@ public sealed class AppSettings
     public const int ThumbCacheMbDefault = 512;
     public const int ThumbCacheMbMax = 8192;
 
+    /// <summary>Range of <see cref="AutoRefreshSeconds"/>: below 2 s a share would not answer faster (redirector cache) and big folders would be listed all the time.</summary>
+    public const int AutoRefreshSecondsMin = 2;
+    public const int AutoRefreshSecondsMax = 3600;
+    public const int AutoRefreshSecondsDefault = 5;
+
     public const double SidebarWidthMin = 140;
     public const double SidebarWidthMax = 480;
     public const double SidebarWidthDefault = 220;
@@ -214,6 +219,16 @@ public sealed class AppSettings
     /// 0 turns the disk cache off. Read at startup.
     /// </summary>
     public int ThumbCacheMb { get; set; } = ThumbCacheMbDefault;
+
+    /// <summary>
+    /// The folder shown is listed again every <see cref="AutoRefreshSeconds"/> and its list is
+    /// updated when something changed (off: only F5 and the app's own operations reload it).
+    /// Applied on OK in the settings, without a restart.
+    /// </summary>
+    public bool AutoRefresh { get; set; }
+
+    /// <summary>The interval of <see cref="AutoRefresh"/>, in seconds (kept while it is off).</summary>
+    public int AutoRefreshSeconds { get; set; } = AutoRefreshSecondsDefault;
 
     public static int ClampCardSize(int value) => Snap(value, CardSizeMin, CardSizeMax, CardSizeStep);
 
@@ -426,6 +441,7 @@ public sealed class AppSettings
         RecentLimit = Math.Clamp(RecentLimit, 10, 500);
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
         ThumbCacheMb = Math.Clamp(ThumbCacheMb, 0, ThumbCacheMbMax);
+        AutoRefreshSeconds = Math.Clamp(AutoRefreshSeconds, AutoRefreshSecondsMin, AutoRefreshSecondsMax);
     }
 
     public AppSettings Clone()

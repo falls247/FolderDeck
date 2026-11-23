@@ -93,6 +93,12 @@ public sealed partial class CardViewModel : ObservableObject
     [ObservableProperty]
     private bool _isHoverHeld;
 
+    /// <summary>
+    /// A drag would drop into this folder (set by MainWindow: IsMouseOver does not follow a drag).
+    /// </summary>
+    [ObservableProperty]
+    private bool _isDropTarget;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(BadgeMode), nameof(ShowFolderCount), nameof(ShowFileCount), nameof(FolderCountText), nameof(FileCountText))]
     private bool _countsLoaded;

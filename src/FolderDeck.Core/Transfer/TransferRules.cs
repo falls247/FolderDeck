@@ -63,7 +63,7 @@ public readonly record struct TransferSource(string Path, SourceMedia Media, boo
 /// </param>
 public readonly record struct TransferItem(string Path, TransferKind Kind, CopyReason Reason, bool RenameOnCollision);
 
-/// <summary>What the user asked for, and the rules of the gesture (a paste is the only one).</summary>
+/// <summary>What the user asked for, and the rules of the gesture (a paste or a drop on a folder).</summary>
 /// <param name="Requested">Move or copy, before the per-item rules.</param>
 /// <param name="AllowSameFolderCopy">A copy into the source's own folder is allowed (it is renamed).</param>
 public sealed record TransferOptions(TransferKind Requested, bool AllowSameFolderCopy)
@@ -73,6 +73,13 @@ public sealed record TransferOptions(TransferKind Requested, bool AllowSameFolde
     /// really moved, as in Explorer.
     /// </summary>
     public static TransferOptions Paste(TransferKind clip) => new(clip, AllowSameFolderCopy: true);
+
+    /// <summary>
+    /// A drop on a folder: the kind <see cref="FileDrag.DropEffectFor"/> chose (modifier keys,
+    /// volume). Nothing is copied into the folder it is already in (no renamed copy, unlike a
+    /// paste). Read-only media and undeletable sources are still copied when a move is asked for.
+    /// </summary>
+    public static TransferOptions Drop(TransferKind kind) => new(kind, AllowSameFolderCopy: false);
 }
 
 /// <summary>The outcome of <see cref="TransferRules.Decide"/>: what to run and what was left out.</summary>
@@ -116,8 +123,8 @@ public sealed record TransferPlan(
 
 /// <summary>
 /// Decides, from strings and probed facts only (no file system access), whether sources may be
-/// transferred into a folder and whether each one is moved or copied. A paste goes through
-/// <see cref="Decide"/> (the app has no other way to copy or move files). Paths are normalized with <see cref="PathTools"/> and
+/// transferred into a folder and whether each one is moved or copied. A paste and a drop on a
+/// folder go through <see cref="Decide"/> (the app has no other way to copy or move files). Paths are normalized with <see cref="PathTools"/> and
 /// compared case-insensitively. Links, junctions and 8.3 short names are not resolved: two
 /// different spellings of one folder are different paths here. The same-folder and into-itself
 /// checks therefore hold only when sources and target use the same spelling: a caller whose paths
@@ -160,6 +167,24 @@ public static class TransferRules
     }
 
     /// <summary>
+    /// Both paths lie on one volume as far as the spelling tells: the same drive letter or
+    /// <c>\\server\share</c>, case-insensitively, <c>\\?\</c> prefixes ignored. No I/O: SUBST
+    /// drives, folder mount points and a mapped letter against the UNC spelling of the same share
+    /// count as different volumes. False for anything that is not a fully qualified path.
+    /// </summary>
+    public static bool SameVolume(string? a, string? b)
+    {
+        if (!TryKey(a, out _, out string keyA) || !TryKey(b, out _, out string keyB))
+        {
+            return false;
+        }
+
+        string rootA = TrimEnd(Path.GetPathRoot(keyA) ?? string.Empty);
+        string rootB = TrimEnd(Path.GetPathRoot(keyB) ?? string.Empty);
+        return rootA.Length > 0 && string.Equals(rootA, rootB, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// True when the path may be a transfer source at all: a fully qualified path that is not a
     /// drive or share root.
     /// </summary>
@@ -191,7 +216,8 @@ public static class TransferRules
     /// <item>A source that is not a fully qualified path is skipped as NotAPath, a root as Root.</item>
     /// <item>A target that is the item or lies inside it: IntoItself (moves and copies).</item>
     /// <item>An item already in the target: SameFolder for a requested move; for a requested copy
-    /// too, unless <see cref="TransferOptions.AllowSameFolderCopy"/>, which gives a renamed copy.</item>
+    /// too, unless <see cref="TransferOptions.AllowSameFolderCopy"/>, which gives a renamed copy
+    /// (a paste allows it, a drop does not).</item>
     /// <item>Kind per item: a requested copy stays a copy; read-only media and undeletable sources
     /// are copied; the rest is moved (network sources too).</item>
     /// </list>
