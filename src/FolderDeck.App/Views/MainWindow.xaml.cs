@@ -3,8 +3,10 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using FolderDeck.Core.Layout;
 using FolderDeck.Core.Ordering;
+using FolderDeck.Core.Paths;
 using FolderDeck.Core.Stores;
 using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
@@ -158,9 +160,13 @@ public partial class MainWindow : Window, IMainView, ICardHost
         theme.ThemeChanged += () => _theme.ApplyTitleBar(this);
         PreviewKeyDown += OnPreviewKeyDown;
         PreviewMouseDown += OnPreviewMouseDown;
-        DragEnter += OnDragOver;
+        DragEnter += OnDragEnter;
         DragOver += OnDragOver;
-        DragLeave += (_, _) => DropHint.Visibility = Visibility.Collapsed;
+        DragLeave += (_, _) =>
+        {
+            HideDropHint();
+            SetDropMark(null);
+        };
         Drop += OnDrop;
         Closing += OnClosing;
 
@@ -264,6 +270,19 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (ActiveList.IsMarqueeRunning)
+        {
+            // Esc puts the selection back; no other key may reload or change the list under the
+            // box (F5, Ctrl+W, Delete, Ctrl+A, Backspace…). Alt+F4 still closes the window.
+            if (e.Key == Key.Escape)
+            {
+                ActiveList.CancelMarquee();
+            }
+
+            e.Handled = !(e.Key == Key.System && e.SystemKey == Key.F4);
+            return;
+        }
+
         if (_rename.IsOpen)
         {
             // Every key belongs to the name's edit box (Enter, Esc and the text): no F5, Ctrl+W,
@@ -467,15 +486,49 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// <summary>
     /// A left press in the item area clears the selection, unless it is on an item (its click
     /// decides on release), on a scroll bar, a button or a grip, or a Ctrl / Shift click is meant.
+    /// On the blank part of the list it also arms a marquee (rubber-band selection, as in Explorer):
+    /// dragged past the system drag distance, the items the box touches are selected (Ctrl: flipped
+    /// against the selection of the press, Shift: added to it). Not while the tab loads or a name
+    /// is being edited.
     /// </summary>
     private void OnContentLeftDown(object sender, MouseButtonEventArgs e)
     {
-        if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0 || IsOnItemOrControl(e.OriginalSource))
+        if (IsOnItemOrControl(e.OriginalSource))
         {
             return;
         }
 
-        _vm.ClearSelection();
+        var modifiers = Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift);
+        if (modifiers == 0)
+        {
+            _vm.ClearSelection();
+        }
+
+        var list = ActiveList;
+        // Any press (a quick second one too: nothing on the blank part reacts to a double click).
+        if (e.RightButton == MouseButtonState.Pressed || !_vm.HasTab
+            || _vm.SelectedTab.IsLoading || IsNameBusy || list.IsMarqueeRunning
+            || list.RealizedItemAt(e) is not null
+            || _vm.BeginMarquee(modifiers) is not { } marquee)
+        {
+            return;
+        }
+
+        list.BeginMarquee(e, new MarqueeHandlers(
+            Started: () => _cascade.BeginDrag(), // hidden and no hover while the box is dragged
+            BoxChanged: box => _vm.UpdateMarquee(marquee, box),
+            Ended: (cancelled, started) =>
+            {
+                if (cancelled)
+                {
+                    _vm.CancelMarquee(marquee);
+                }
+
+                if (started)
+                {
+                    _cascade.EndDrag();
+                }
+            }));
     }
 
     /// <summary>
@@ -487,6 +540,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// </summary>
     private void OnContentRightUp(object sender, MouseButtonEventArgs e)
     {
+        if (ActiveList.IsMarqueeRunning)
+        {
+            e.Handled = true; // the captured list sees the release: no menu, it would take the capture
+            return;
+        }
+
         if (e.Handled || !_vm.HasTab || IsOnItemOrControl(e.OriginalSource))
         {
             return;
@@ -515,7 +574,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// </summary>
     private static bool IsOnItemOrControl(object source)
     {
-        for (var node = source as DependencyObject; node is not null; node = Parent(node))
+        for (var node = source as DependencyObject; node is not null; node = ParentOf(node))
         {
             if (node is CardView or DetailsRowView or ScrollBar or ButtonBase or Thumb or TextBoxBase)
             {
@@ -524,13 +583,13 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         return false;
-
-        // Text runs are not visuals: walk them up through the logical tree.
-        static DependencyObject? Parent(DependencyObject node) =>
-            node is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D
-                ? System.Windows.Media.VisualTreeHelper.GetParent(node)
-                : LogicalTreeHelper.GetParent(node);
     }
+
+    /// <summary>The parent of an element; text runs are not visuals: they are walked up through the logical tree.</summary>
+    private static DependencyObject? ParentOf(DependencyObject node) =>
+        node is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D
+            ? System.Windows.Media.VisualTreeHelper.GetParent(node)
+            : LogicalTreeHelper.GetParent(node);
 
     private void OnHideMessage(object sender, RoutedEventArgs e) => _vm.Message.Hide();
 
@@ -558,7 +617,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             SidebarColumn.MinWidth = 0;
             SidebarColumn.Width = new GridLength(0);
-            DropHint.Visibility = Visibility.Collapsed;
+            HideDropHint();
         }
         else
         {
@@ -660,35 +719,255 @@ public partial class MainWindow : Window, IMainView, ICardHost
         menu.IsOpen = true;
     }
 
-    // ---- drag & drop registration (§10.1, P1) -----------------------------------------------
+    // ---- drag & drop: registration and drops on folders (§10.1, P1) ----------------------------
 
-    // Folders dropped from Explorer anywhere on the window are registered (the hint shows over the
-    // sidebar, where they land; no hint while the sidebar is hidden). Drags the app started itself (cards, rows, previews, sidebar rows)
-    // carry a file drop too, for other apps: released over the window they are never a registration.
+    // Folders dropped from Explorer on the window are registered (the hint shows at the top of the
+    // sidebar; no hint while the sidebar is hidden). Over a folder (a folder card or row, a
+    // 登録フォルダ or drive row) a drop is a move or copy into it instead, also for the app's own
+    // drags (FolderDropOf); refused there, it is no registration either. Drags the app started itself
+    // (cards, rows, previews, sidebar rows) carry a file drop too, for other apps: released elsewhere
+    // over the window they are never a registration.
     private static bool CanDrop(DragEventArgs e) =>
         e.Data.GetDataPresent(DataFormats.FileDrop) && !IsOwnDrag(e.Data);
 
     private static bool IsOwnDrag(IDataObject data) => FileDragOut.IsDragging || FileDrag.IsFromThisApp(data.GetDataPresent);
 
+    /// <summary>The folder under the pointer during a drag, and what to highlight (a <see cref="CardViewModel"/> or <see cref="SidebarItemViewModel"/>).</summary>
+    private readonly record struct FolderTarget(string Folder, object Mark);
+
+    /// <summary>A drag over a folder: the folder, the dragged paths, and the effect a release would have there.</summary>
+    private readonly record struct FolderDrop(FolderTarget Target, IReadOnlyList<string> Sources, DropEffects Effect);
+
+    /// <summary>The folder highlighted as the drop target (null: none).</summary>
+    private object? _dropMark;
+
+    /// <summary>The file drop of another app's drag, read once per drag (DragOver comes many times a second).</summary>
+    private (IDataObject Data, string[]? Paths)? _externalDrop;
+
+    /// <summary>
+    /// A drag from another app comes in: the cascade closes (its popups would cover the folders and
+    /// are not drop targets). The app's own drags have hidden it already (<see cref="CascadeController.BeginDrag"/>).
+    /// </summary>
+    private void OnDragEnter(object sender, DragEventArgs e)
+    {
+        if (!FileDragOut.IsDragging)
+        {
+            _cascade.CloseAll();
+        }
+
+        OnDragOver(sender, e);
+    }
+
     private void OnDragOver(object sender, DragEventArgs e)
     {
+        if (FolderDropOf(e) is { } drop)
+        {
+            e.Effects = ToWpf(drop.Effect);
+            SetDropMark(drop.Effect == DropEffects.None ? null : drop.Target.Mark);
+            string name = PathTools.DisplayName(drop.Target.Folder);
+            ShowDropHint(drop.Effect switch
+            {
+                DropEffects.Move => $"「{name}」へ移動",
+                DropEffects.Copy => $"「{name}」へコピー",
+                _ => null,
+            });
+            e.Handled = true;
+            return;
+        }
+
+        SetDropMark(null);
         bool ok = CanDrop(e);
         e.Effects = ok ? DragDropEffects.Copy : DragDropEffects.None;
-        DropHint.Visibility = ok && !_vm.IsSidebarCollapsed ? Visibility.Visible : Visibility.Collapsed;
+        ShowDropHint(ok ? "ドロップして登録" : null);
         e.Handled = true;
     }
 
     private async void OnDrop(object sender, DragEventArgs e)
     {
-        DropHint.Visibility = Visibility.Collapsed;
-        if (!CanDrop(e) || e.Data.GetData(DataFormats.FileDrop) is not string[] paths)
+        var drop = FolderDropOf(e); // the position and the keys at the release decide again
+        SetDropMark(null);
+        HideDropHint();
+        _externalDrop = null;
+        if (drop is { } d)
+        {
+            e.Handled = true;
+            if (d.Effect is not (DropEffects.Move or DropEffects.Copy))
+            {
+                e.Effects = DragDropEffects.None;
+                return;
+            }
+
+            var kind = d.Effect == DropEffects.Move ? TransferKind.Move : TransferKind.Copy;
+
+            // Copy, never Move: the app moves the items itself, after the drop. Move would let the
+            // source delete the originals, also those then skipped in the shell's dialogs.
+            e.Effects = ToWpf(FileDrag.DropResult(d.Effect));
+            if (FileDragOut.Current is { } own)
+            {
+                own.Dropped = new InAppDrop(d.Target.Folder, kind); // run by FinishDrag once DoDragDrop returned
+                return;
+            }
+
+            // Another app's drag: let its DoDragDrop return first (Explorer waits for this Drop).
+            string[] paths = [.. d.Sources];
+            string folder = d.Target.Folder;
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, () => _ = _vm.DropAsync(paths, folder, kind, fromOtherApp: true));
+            return;
+        }
+
+        if (!CanDrop(e) || e.Data.GetData(DataFormats.FileDrop) is not string[] dropped)
         {
             return;
         }
 
         e.Handled = true;
-        await _vm.RegisterDroppedAsync(paths);
+        await _vm.RegisterDroppedAsync(dropped);
     }
+
+    /// <summary>
+    /// The folder a drag is over and the effect a release would have, or null when it is not over a
+    /// folder (then the drop is a registration, or nothing for the app's own drags). A 登録フォルダ
+    /// row dragged for reordering never drops into a folder. Strings only: DragOver runs it often.
+    /// </summary>
+    private FolderDrop? FolderDropOf(DragEventArgs e)
+    {
+        var own = FileDragOut.Current;
+        if (own is { IntoFolders: false } || FolderTargetAt(e.OriginalSource) is not { } target)
+        {
+            return null;
+        }
+
+        IReadOnlyList<string>? sources = own is not null ? own.Paths : ExternalPaths(e.Data);
+        if (sources is not { Count: > 0 })
+        {
+            return null;
+        }
+
+        var effect = _vm.IsFileOperationRunning || IsNameBusy
+            ? DropEffects.None
+            : FileDrag.DropEffectFor(sources, target.Folder, KeysOf(e.KeyStates), FromWpf(e.AllowedEffects));
+        return new FolderDrop(target, sources, effect);
+    }
+
+    /// <summary>
+    /// The usable folder item the element under the pointer belongs to: a folder card or details
+    /// row (not busy), a 登録フォルダ or drive row. Null for files, missing folders, headers, クイック
+    /// アクセス and everything else. While a tab loads its items do not hit test, so they are not found.
+    /// </summary>
+    private FolderTarget? FolderTargetAt(object? originalSource)
+    {
+        for (var node = originalSource as DependencyObject; node is not null; node = ParentOf(node))
+        {
+            switch (node)
+            {
+                case CardView { ViewModel: { } card }:
+                    return FolderCard(card);
+                case DetailsRowView { ViewModel: { } row }:
+                    return FolderCard(row);
+                case FrameworkElement { DataContext: SidebarItemViewModel item }:
+                    return _vm.PasteFolderOf(item.ToItemRef()) is { } folder ? new FolderTarget(folder, item) : null;
+            }
+        }
+
+        return null;
+
+        FolderTarget? FolderCard(CardViewModel card) =>
+            !card.IsBusy && _vm.PasteFolderOf(card.ToItemRef()) is { } folder ? new FolderTarget(folder, card) : null;
+    }
+
+    /// <summary>The paths of another app's file drop (null when it carries none or cannot be read).</summary>
+    private string[]? ExternalPaths(IDataObject data)
+    {
+        if (_externalDrop is { } known && ReferenceEquals(known.Data, data))
+        {
+            return known.Paths;
+        }
+
+        string[]? paths;
+        try
+        {
+            paths = data.GetDataPresent(DataFormats.FileDrop) ? data.GetData(DataFormats.FileDrop) as string[] : null;
+        }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.ExternalException or InvalidOperationException)
+        {
+            paths = null;
+        }
+
+        _externalDrop = (data, paths);
+        return paths;
+    }
+
+    /// <summary>Highlights the folder a release would drop into (IsMouseOver does not follow a drag).</summary>
+    private void SetDropMark(object? mark)
+    {
+        if (ReferenceEquals(mark, _dropMark))
+        {
+            return;
+        }
+
+        Mark(_dropMark, false);
+        _dropMark = mark;
+        Mark(mark, true);
+
+        static void Mark(object? target, bool on)
+        {
+            switch (target)
+            {
+                case CardViewModel card:
+                    card.IsDropTarget = on;
+                    break;
+                case SidebarItemViewModel item:
+                    item.IsDropTarget = on;
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Shows what a release does at the top of the sidebar (null hides it; never while the sidebar is hidden).</summary>
+    private void ShowDropHint(string? text)
+    {
+        if (text is null || _vm.IsSidebarCollapsed)
+        {
+            DropHint.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        DropHintText.Text = text;
+        DropHint.Visibility = Visibility.Visible;
+    }
+
+    private void HideDropHint() => ShowDropHint(null);
+
+    private static DropKeys KeysOf(DragDropKeyStates keys)
+    {
+        var result = DropKeys.None;
+        if ((keys & DragDropKeyStates.ShiftKey) != 0)
+        {
+            result |= DropKeys.Shift;
+        }
+
+        if ((keys & DragDropKeyStates.ControlKey) != 0)
+        {
+            result |= DropKeys.Control;
+        }
+
+        if ((keys & DragDropKeyStates.AltKey) != 0)
+        {
+            result |= DropKeys.Alt;
+        }
+
+        if ((keys & DragDropKeyStates.RightMouseButton) != 0)
+        {
+            result |= DropKeys.RightButton;
+        }
+
+        return result;
+    }
+
+    private static DragDropEffects ToWpf(DropEffects effects) => (DragDropEffects)(int)effects;
+
+    private static DropEffects FromWpf(DragDropEffects effects) =>
+        (DropEffects)(int)(effects & (DragDropEffects.Copy | DragDropEffects.Move | DragDropEffects.Link));
 
     // ---- ICardHost ----------------------------------------------------------------------------
 
@@ -863,6 +1142,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// <summary>A name is edited, or a folder made for its edit box, or a committed name handled: an activation's reload waits.</summary>
     private bool IsNameBusy => _rename.IsOpen || _creatingFolder || _committingRename;
 
+    bool IMainView.IsNameBusy => IsNameBusy;
+
     /// <summary>The activation's checks held back while a name was edited (<see cref="_activationPending"/>) run now, if nothing is edited any more.</summary>
     private void RunPendingActivation()
     {
@@ -954,15 +1235,20 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         data.SetData(FileDrag.SidebarReorderFormat, FileDrag.SidebarReorderFormat);
+
+        // Only reorders inside the app (never dropped into a folder), and never offers Move.
+        var drag = new OutgoingDrag(data, item.IsDisabled ? [] : [item.Path], moveAllowed: false, intoFolders: false);
         int? index;
         _cascade.BeginDrag();
         try
         {
-            index = Sidebar.RunReorderDrag(item, source => FileDragOut.Run(source, data, "sidebar row"));
+            index = Sidebar.RunReorderDrag(item, source => FileDragOut.Run(source, drag, "sidebar row"));
         }
         finally
         {
             _cascade.EndDrag();
+            SetDropMark(null);
+            HideDropHint();
         }
 
         if (index is { } i)
@@ -971,13 +1257,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
     }
 
-    public bool CanDragItem(CardViewModel vm) => !vm.IsDisabled && FileDragOut.CanDrag(vm.Path);
+    public bool CanDragItem(CardViewModel vm) => !vm.IsDisabled && !vm.IsBusy && FileDragOut.CanDrag(vm.Path);
 
     /// <summary>
     /// A drag of an item that is part of the selection carries the whole selection (in display
-    /// order) to other apps, else the item alone. At the top level of a tab a drag of one card also
-    /// carries the reorder format: released over the list it moves the card, released over another
-    /// app that app gets the file or folder. Files are never moved inside the app by a drag.
+    /// order), else the item alone. At the top level of a tab a drag of one card also carries the
+    /// reorder format: released over the list it moves the card. Released over a folder of the app
+    /// (a folder card or row, a 登録フォルダ or drive row) the items are moved or copied into it once
+    /// the drag has ended (<see cref="MainViewModel.FinishDrag"/>); released over another app, that
+    /// app gets the files. Move is offered only when every item can be cut (items of a folder).
     /// </summary>
     public void ItemDrag(CardViewModel vm)
     {
@@ -987,12 +1275,18 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         var targets = _vm.SelectionTargets(vm.ToItemRef());
-        var paths = targets.Select(t => t.Path).Where(FileDragOut.CanDrag).ToList();
+        var usable = targets
+            .Where(t => !t.IsDisabled && t.Card is not ({ IsDisabled: true } or { IsBusy: true }) && FileDragOut.CanDrag(t.Path))
+            .ToList();
+        var paths = usable.Select(t => t.Path).ToList();
         bool reorder = targets.Count == 1 && _vm.CanReorder(vm);
+        bool move = usable.Count > 0 && !_vm.IsFileOperationRunning && usable.All(MainViewModel.CanCut);
         if (FileDragOut.CreateData(paths, reorder) is not { } data)
         {
             return;
         }
+
+        var drag = new OutgoingDrag(data, paths, move, intoFolders: true);
 
         var list = ActiveList; // the view the drag started in, also once it has ended
         int? index = null;
@@ -1001,24 +1295,29 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             if (reorder)
             {
-                index = list.RunReorderDrag(vm, source => FileDragOut.Run(source, data, "top card"));
+                index = list.RunReorderDrag(vm, source => FileDragOut.Run(source, drag, "top card"));
             }
             else
             {
-                FileDragOut.Run(this, data, targets.Count > 1 ? "selection" : "card"); // the window outlives any item container
+                FileDragOut.Run(this, drag, targets.Count > 1 ? "selection" : "card"); // the window outlives any item container
             }
         }
         finally
         {
             _cascade.EndDrag();
+            SetDropMark(null);
+            HideDropHint();
         }
 
+        // A drop on the list itself reorders; the grid handles it, so the window records no folder drop.
         if (index is { } i)
         {
             double offset = list.VerticalOffset;
             _vm.MoveCard(vm, i);
             list.ScrollTo(offset); // the list rebuilds its rows: stay where the item was dropped
         }
+
+        _vm.FinishDrag(drag);
     }
 
     // ---- drives of the PC section --------------------------------------------------------------

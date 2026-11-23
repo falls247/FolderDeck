@@ -117,4 +117,58 @@ public class SelectionModelTests
         Assert.Equal([C], SelectionModel.TargetsOf(selected, C));
         Assert.Equal([C], SelectionModel.TargetsOf([], C));
     }
+
+    [Fact]
+    public void SelectBox_UnionAndToggle_CombineWithTheSnapshot_AndRestoreReturnsToIt()
+    {
+        var selection = new SelectionModel();
+        selection.Toggle(A);
+        selection.Toggle(C);
+        var baseline = selection.Snapshot();
+        int raised = 0;
+        selection.Changed += () => raised++;
+
+        Assert.True(selection.SelectBox(baseline, [C, D], toggle: false));
+        Assert.Equal([A, C, D], selection.InOrder(Displayed));
+        Assert.False(selection.SelectBox(baseline, [C, D], toggle: false)); // the same box again: no change
+        Assert.Equal(1, raised);
+
+        // Ctrl: flipped against the snapshot, not against what the previous box left.
+        Assert.True(selection.SelectBox(baseline, [C, D], toggle: true));
+        Assert.Equal([A, D], selection.InOrder(Displayed));
+        Assert.True(selection.SelectBox(baseline, [D], toggle: true));
+        Assert.Equal([A, C, D], selection.InOrder(Displayed));
+
+        Assert.True(selection.Restore(baseline));
+        Assert.Equal([A, C], selection.InOrder(Displayed));
+        Assert.Equal(C, selection.Anchor);
+
+        // An anchor that is not selected (Ctrl+click took it off) comes back too.
+        selection.Toggle(C);
+        var unselectedAnchor = selection.Snapshot();
+        selection.SelectBox(unselectedAnchor, [B], toggle: false);
+        Assert.Equal(B, selection.Anchor);
+        selection.Restore(unselectedAnchor);
+        Assert.Equal([A], selection.InOrder(Displayed));
+        Assert.Equal(C, selection.Anchor);
+    }
+
+    [Fact]
+    public void SelectBox_Anchor_KeepsBaseAnchor_ElseFirstSelectedBoxKey_ElseNull()
+    {
+        var selection = new SelectionModel();
+        selection.SelectBox(selection.Snapshot(), [B, D], toggle: false);
+        Assert.Equal(B, selection.Anchor);
+
+        var onlyB = new SelectionModel();
+        onlyB.Toggle(B);
+        var baseline = onlyB.Snapshot();
+        onlyB.SelectBox(baseline, [B, D], toggle: true); // B goes off: the first selected key of the box
+        Assert.Equal(D, onlyB.Anchor);
+        onlyB.SelectBox(baseline, [B], toggle: true);
+        Assert.Equal(0, onlyB.Count);
+        Assert.Null(onlyB.Anchor);
+        onlyB.SelectBox(baseline, [D, E], toggle: false); // the baseline's anchor is still selected
+        Assert.Equal(B, onlyB.Anchor);
+    }
 }

@@ -117,7 +117,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-fixture.ps1 -Outp
 ## 6. 構成
 
 ```
-src/FolderDeck.Core/   UI に依存しないロジック（パス、列挙、キャッシュ、カバー探索、JSON 保存、順位付け、並べ替え、プレビュー用の読み取り、ドラッグで渡すときの判定）
+src/FolderDeck.Core/   UI に依存しないロジック（パス、列挙、キャッシュ、カバー探索、JSON 保存、順位付け、並べ替え、プレビュー用の読み取り、ドラッグで渡す・落とすときの判定、範囲選択の幾何）
 src/FolderDeck.App/    WPF（View / ViewModel、カスケード制御、シェル連携、テーマ）
 tests/FolderDeck.Core.Tests/  xUnit（Core のみ）
 tools/dev.ps1                 build / test / run / all / publish の中身（各 BAT から呼ばれる）

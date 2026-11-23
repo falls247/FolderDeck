@@ -25,7 +25,7 @@ public sealed record TransferResult(
 
 /// <summary>
 /// Copies or moves files and folders into a folder with <c>IFileOperation</c>, like Explorer's paste
-/// (the app's paste is its only caller). This is the only code in the app that copies or moves the user's files.
+/// (its callers are the app's paste and drops on a folder). This is the only code in the app that copies or moves the user's files.
 /// <para>
 /// Nothing is decided silently: the shell's own dialogs (name collision, folder merge, "file in
 /// use", elevation, errors) and its progress window all show, owned by <c>owner</c>, and the

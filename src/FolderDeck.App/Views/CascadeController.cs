@@ -828,7 +828,7 @@ public sealed class CascadeController
         level.List.RowClicked += (_, row) => OnRowClicked(row);
         level.List.RowContextMenu += (_, row, element) => ShowMenu(ItemOf(row), element);
         level.List.RowExplorerRequested += (_, row) => OnRowExplorer(row);
-        level.List.RowDragRequested += (_, row) => DragOut(row, "row");
+        level.List.RowDragRequested += (_, row) => DragOut(row, ItemOf(row), "row");
 
         // Anything opened from this list is anchored to a row that just moved.
         level.List.Scrolled += _ =>
@@ -1089,24 +1089,29 @@ public sealed class CascadeController
 
     /// <summary>
     /// A row (or its preview) is dragged out: the cascade disappears (see <see cref="BeginDrag"/>),
-    /// then the file or folder is handed to whatever it is dropped on. Blocks until the drag ends.
+    /// then the file or folder is handed to whatever it is dropped on (a folder of the app: moved or
+    /// copied into it once the drag has ended). Move is offered when <paramref name="item"/> (the
+    /// row, or the item the preview shows) can be cut. Blocks until the drag ends.
     /// </summary>
-    private void DragOut(EntryRowViewModel row, string origin)
+    private void DragOut(EntryRowViewModel row, ItemRef item, string origin)
     {
         if (_dragging || !FileDragOut.CanDrag(row.Path) || FileDragOut.CreateData([row.Path], reorder: false) is not { } data)
         {
             return;
         }
 
+        var drag = new OutgoingDrag(data, [row.Path], moveAllowed: !_vm.IsFileOperationRunning && MainViewModel.CanCut(item), intoFolders: true);
         BeginDrag();
         try
         {
-            FileDragOut.Run(_window, data, origin);
+            FileDragOut.Run(_window, drag, origin);
         }
         finally
         {
             EndDrag();
         }
+
+        _vm.FinishDrag(drag);
     }
 
     // ---- flyouts (levels 1…, §9.3) ------------------------------------------------------------
@@ -1610,7 +1615,7 @@ public sealed class CascadeController
         TrackPointer(view);
         view.Clicked += _ => OnPreviewClicked(preview);
         view.ContextMenuRequested += _ => ShowMenu(preview.Item, view.CardElement);
-        view.DragRequested += _ => DragOut(row, "preview");
+        view.DragRequested += _ => DragOut(row, preview.Item, "preview");
         view.CardElement.SizeChanged += (_, _) => PositionPreview(preview, reveal: false);
 
         // Rough position first, exact position once the popup has a size (as in OpenFlyout).

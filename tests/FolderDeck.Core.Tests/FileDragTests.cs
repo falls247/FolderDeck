@@ -155,4 +155,67 @@ public class FileDragTests
         var set = new HashSet<string>(formats, StringComparer.Ordinal);
         return set.Contains;
     }
+
+    // ---- FileDrag.DropEffectFor / DropResult ------------------------------------------------------
+
+    private const DropEffects All = DropEffects.Copy | DropEffects.Move | DropEffects.Link;
+
+    [Theory]
+    [InlineData(@"E:\a\x.txt", @"E:\b", DropEffects.Move)]
+    [InlineData(@"e:\A\x.txt", @"E:\b", DropEffects.Move)]
+    [InlineData(@"\\?\E:\a\x.txt", @"E:\b", DropEffects.Move)]
+    [InlineData(@"E:\a\x.txt", @"F:\b", DropEffects.Copy)]
+    [InlineData(@"\\srv\s\a\x", @"\\srv\s\b", DropEffects.Move)]
+    [InlineData(@"\\srv\s\a\x", @"\\srv\t\b", DropEffects.Copy)]
+    [InlineData(@"E:\a\x", @"\\srv\s\b", DropEffects.Copy)]
+    [InlineData(@"E:\a\x|F:\y", @"E:\b", DropEffects.Copy)]
+    public void DropEffectFor_NoKeys_MovesWithinAVolume_CopiesAcrossVolumesAndShares(string sources, string target, DropEffects expected)
+    {
+        Assert.Equal(expected, FileDrag.DropEffectFor(sources.Split('|'), target, DropKeys.None, All));
+    }
+
+    [Theory]
+    [InlineData(@"E:\b", DropKeys.Control, All, DropEffects.Copy)]
+    [InlineData(@"F:\b", DropKeys.Shift, All, DropEffects.Move)]
+    [InlineData(@"E:\b", DropKeys.None, DropEffects.Copy | DropEffects.Link, DropEffects.Copy)]  // move not offered: copy
+    [InlineData(@"E:\b", DropKeys.Shift, DropEffects.Copy | DropEffects.Link, DropEffects.None)] // a forced move stays refused
+    [InlineData(@"E:\b", DropKeys.Control, DropEffects.Copy | DropEffects.Link, DropEffects.Copy)]
+    [InlineData(@"F:\b", DropKeys.None, DropEffects.Move, DropEffects.None)]                     // a copy that is not offered
+    [InlineData(@"E:\b", DropKeys.Alt, All, DropEffects.None)]
+    [InlineData(@"E:\b", DropKeys.Control | DropKeys.Shift, All, DropEffects.None)]
+    [InlineData(@"E:\b", DropKeys.RightButton, All, DropEffects.None)]
+    public void DropEffectFor_Keys_OverrideTheDefault_WithinTheAllowedEffects(string target, DropKeys keys, DropEffects allowed, DropEffects expected)
+    {
+        Assert.Equal(expected, FileDrag.DropEffectFor([@"E:\a\x.txt"], target, keys, allowed));
+    }
+
+    [Fact]
+    public void DropEffectFor_OntoASource_IntoItsOwnFolder_OrFromTheRecycleBin_IsNone()
+    {
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"E:\a\dir"], @"E:\a\dir", DropKeys.None, All));
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"E:\a\dir"], @"E:\a\dir\sub", DropKeys.None, All));
+
+        // The folder under the pointer is part of the dragged selection.
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"E:\a\x.txt", @"E:\a\sub"], @"E:\a\sub", DropKeys.None, All));
+
+        // Already there: no renamed copy either, unlike a paste.
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"E:\a\x.txt"], @"E:\a", DropKeys.None, All));
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"E:\a\x.txt"], @"E:\a", DropKeys.Control, All));
+
+        // Some of the items are already there: the others still go.
+        Assert.Equal(DropEffects.Move, FileDrag.DropEffectFor([@"E:\b\x", @"E:\a\y"], @"E:\b", DropKeys.None, All));
+
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"C:\$Recycle.Bin\S-1-5-21\$R1.txt"], @"C:\b", DropKeys.None, All));
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([], @"E:\b", DropKeys.None, All));
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"E:\a\x.txt"], null, DropKeys.None, All));
+    }
+
+    [Theory]
+    [InlineData(DropEffects.None, DropEffects.None)]
+    [InlineData(DropEffects.Copy, DropEffects.Copy)]
+    [InlineData(DropEffects.Move, DropEffects.Copy)]
+    public void DropResult_IsNeverMove(DropEffects chosen, DropEffects expected)
+    {
+        Assert.Equal(expected, FileDrag.DropResult(chosen));
+    }
 }

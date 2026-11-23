@@ -8,6 +8,7 @@ using FolderDeck.Core.Layout;
 using FolderDeck.Core.Listing;
 using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
+using FolderDeck.Core.Selection;
 using FolderDeck.Core.Stores;
 using FolderDeck.Core.Transfer;
 using FolderDeck.Services;
@@ -42,6 +43,9 @@ public interface IMainView
 
     /// <summary>Resizes the text of the content areas to 文字の大きさ (<see cref="AppSettings.TextScale"/>, percent).</summary>
     void ApplyTextScale(int percent);
+
+    /// <summary>The edit box of a name is open, or a new folder / a typed name is being processed: no reload meanwhile.</summary>
+    bool IsNameBusy { get; }
 }
 
 public enum NavMode
@@ -1618,7 +1622,7 @@ public sealed partial class MainViewModel : ObservableObject
     private static readonly TimeSpan CutCheckTimeout = TimeSpan.FromSeconds(2);
 
     /// <summary>
-    /// A paste, a delete to the Recycle Bin, a rename or a new folder is running (one at a time: the
+    /// A paste, a drop on a folder, a delete to the Recycle Bin, a rename or a new folder is running (one at a time: the
     /// window asks before it closes meanwhile).
     /// </summary>
     private bool _fileOpBusy;
@@ -1636,7 +1640,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>The check of <see cref="OnActivatedAsync"/> is running.</summary>
     private bool _cutCheckBusy;
 
-    /// <summary>A copy / move started by a paste or a move to the Recycle Bin is running (the window must not close silently).</summary>
+    /// <summary>A copy / move started by a paste or a drop, or a move to the Recycle Bin, is running (the window must not close silently).</summary>
     public bool IsFileOperationRunning => _fileOpBusy;
 
     /// <summary>
@@ -1695,6 +1699,41 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>Esc, a plain click, a press on the blank area. Returns true when something was selected.</summary>
     public bool ClearSelection() => SelectedTab.Selection.Clear();
+
+    /// <summary>
+    /// A marquee drag over the shown list: the tab and the cards it was started on, the selection
+    /// at the press, and whether the box flips it (Ctrl) or adds to it (Shift; no key: the press
+    /// cleared the selection, so the box alone is selected).
+    /// </summary>
+    public sealed record SelectionMarquee(TabViewModel Tab, IReadOnlyList<CardViewModel> Cards, SelectionSnapshot Base, bool Toggle);
+
+    /// <summary>Starts a marquee on the shown list with the modifier keys held at the press (null without a tab).</summary>
+    public SelectionMarquee? BeginMarquee(ModifierKeys modifiers) =>
+        HasTab
+            ? new SelectionMarquee(SelectedTab, SelectedTab.Cards, SelectedTab.Selection.Snapshot(), (modifiers & ModifierKeys.Control) != 0)
+            : null;
+
+    /// <summary>The cards in the marquee's box changed: the selection is the press's selection combined with them (missing and unanswering items are never selected).</summary>
+    public void UpdateMarquee(SelectionMarquee marquee, IReadOnlyList<CardViewModel> box)
+    {
+        if (IsCurrent(marquee))
+        {
+            marquee.Tab.Selection.SelectBox(marquee.Base, box.Where(c => !c.IsDisabled).Select(c => c.Path), marquee.Toggle);
+        }
+    }
+
+    /// <summary>Esc during a marquee: the selection of the press comes back.</summary>
+    public void CancelMarquee(SelectionMarquee marquee)
+    {
+        if (IsCurrent(marquee))
+        {
+            marquee.Tab.Selection.Restore(marquee.Base);
+        }
+    }
+
+    /// <summary>The marquee's tab is still shown with the same cards (a reload or another tab ends what it may change).</summary>
+    private bool IsCurrent(SelectionMarquee marquee) =>
+        ReferenceEquals(SelectedTab, marquee.Tab) && ReferenceEquals(marquee.Tab.Cards, marquee.Cards);
 
     /// <summary>
     /// What an action on <paramref name="clicked"/> applies to: the whole selection in display order
@@ -1824,24 +1863,13 @@ public sealed partial class MainViewModel : ObservableObject
                 return;
             }
 
-            string folderName = PathTools.DisplayName(folder);
-            if (!await SourceProbe.FolderExistsAsync(folder, TargetCheckTimeout))
-            {
-                Message.Error($"貼り付け先のフォルダが見つかりません：{folder}");
-                return;
-            }
-
             var kind = read.Files.Kind;
-            var sources = await SourceProbe.DescribeAsync(read.Files.Paths, SourceProbeTimeout);
-            var plan = TransferRules.Decide(sources, folder, TransferOptions.Paste(kind));
-            if (plan.Items.Count == 0)
+            if (await TransferIntoAsync(read.Files.Paths, folder, TransferOptions.Paste(kind), TransferGesture.Paste, owner) is not { } done)
             {
-                Message.Info(RefusalText(plan.Refusal, kind));
                 return;
             }
 
-            var result = await FileTransfer.RunAsync(plan.Items, folder, owner);
-            Message.Show(PasteMessageKind(result), PasteResultText(result, plan, folderName));
+            var result = done.Result;
 
             // A cut is over only when every move really happened; otherwise it stays on the
             // clipboard (and dimmed) so that what was left behind can be pasted again.
@@ -1854,18 +1882,253 @@ public sealed partial class MainViewModel : ObservableObject
                 }
             }
 
-            await ReloadAfterFileChangeAsync();
-            if (result.NewPaths.Count > 0 && PathTools.PathEquals(SelectedTab.TransferTargetPath, folder))
-            {
-                // What arrived is selected, as in Explorer (only what the reloaded list shows).
-                var tab = SelectedTab;
-                tab.Selection.Replace(result.NewPaths);
-                tab.Selection.Prune(tab.SelectableKeys());
-            }
+            await ReloadAndSelectArrivedAsync(folder, result);
         }
         finally
         {
             _fileOpBusy = false;
+        }
+    }
+
+    private enum TransferGesture
+    {
+        Paste,
+        Drop,
+    }
+
+    /// <summary>
+    /// Probes, plans, runs and reports one transfer of <paramref name="paths"/> into
+    /// <paramref name="folder"/> (a paste or a drop: <see cref="FileTransfer"/> is the only way the
+    /// app copies or moves files). The caller holds <see cref="_fileOpBusy"/>. Null when nothing
+    /// ran (the reason is on the message line).
+    /// </summary>
+    private async Task<(TransferPlan Plan, TransferResult Result)?> TransferIntoAsync(
+        IReadOnlyList<string> paths, string folder, TransferOptions options, TransferGesture gesture, nint owner)
+    {
+        string folderName = PathTools.DisplayName(folder);
+        if (!await SourceProbe.FolderExistsAsync(folder, TargetCheckTimeout))
+        {
+            Message.Error(gesture == TransferGesture.Paste
+                ? $"貼り付け先のフォルダが見つかりません：{folder}"
+                : $"移動・コピー先のフォルダが見つかりません：{folder}");
+            return null;
+        }
+
+        var sources = await SourceProbe.DescribeAsync(paths, SourceProbeTimeout);
+        var plan = TransferRules.Decide(sources, folder, options);
+        if (plan.Items.Count == 0)
+        {
+            Message.Info(RefusalText(plan.Refusal, options.Requested, gesture));
+            return null;
+        }
+
+        var result = await FileTransfer.RunAsync(plan.Items, folder, owner);
+        Message.Show(PasteMessageKind(result), PasteResultText(result, plan, folderName, gesture));
+        return (plan, result);
+    }
+
+    /// <summary>
+    /// Reads the lists again after a transfer and, when <paramref name="folder"/> is the folder
+    /// shown, selects what arrived there (as Explorer does; only what the reloaded list shows).
+    /// </summary>
+    private async Task ReloadAndSelectArrivedAsync(string folder, TransferResult result)
+    {
+        await ReloadAfterFileChangeAsync();
+        if (result.NewPaths.Count > 0 && PathTools.PathEquals(SelectedTab.TransferTargetPath, folder))
+        {
+            var tab = SelectedTab;
+            tab.Selection.Replace(result.NewPaths);
+            tab.Selection.Prune(tab.SelectableKeys());
+        }
+    }
+
+    // ---- drag and drop into folders ---------------------------------------------------------------
+
+    /// <summary>
+    /// A drag the app started has ended (DoDragDrop returned): a drop on a folder of the app starts
+    /// its transfer now, outside the drag's modal loop; a drag that offered Move to another app is
+    /// watched for the items going away (Explorer moves them itself). Deletes nothing.
+    /// </summary>
+    public void FinishDrag(OutgoingDrag drag)
+    {
+        if (!drag.Ran)
+        {
+            return;
+        }
+
+        if (drag.Dropped is { } dropped)
+        {
+            _ = DropAsync(drag.Paths, dropped.Folder, dropped.Kind, fromOtherApp: false);
+            return;
+        }
+
+        if (drag.MoveAllowed)
+        {
+            WatchDraggedOut(drag.Paths);
+        }
+        else
+        {
+            _ = CheckDraggedOutAsync(); // an earlier drag-out whose checks this drag held back
+        }
+    }
+
+    /// <summary>
+    /// Items dropped on a folder of the app (a folder card or row, a 登録フォルダ or drive row) are
+    /// moved or copied into it through <see cref="FileTransfer"/>, as a paste is: the shell shows
+    /// its dialogs (name conflicts, progress), nothing already in the folder is copied again, and
+    /// what cannot be moved from its place is copied. One file operation at a time. A drop from
+    /// another app may carry 8.3 short names: they are expanded first (the same-folder and
+    /// into-itself checks compare spellings).
+    /// </summary>
+    public async Task DropAsync(IReadOnlyList<string> paths, string folder, TransferKind kind, bool fromOtherApp)
+    {
+        if (_fileOpBusy)
+        {
+            Message.Info("前の操作が終わってから実行してください。");
+            return;
+        }
+
+        _fileOpBusy = true;
+        try
+        {
+            View?.CloseCascade();
+            Message.ClearPersistent();
+            nint owner = View?.WindowHandle ?? 0;
+            IReadOnlyList<string> sources = paths;
+            if (fromOtherApp)
+            {
+                string[] copy = [.. paths];
+                try
+                {
+                    sources = await Task.Run(() => copy.Select(ShellClipboard.ToLongPath).ToArray()).WaitAsync(SourceProbeTimeout);
+                }
+                catch (TimeoutException)
+                {
+                    Message.Error("ドロップした項目を確認できませんでした。");
+                    return;
+                }
+            }
+
+            AppLog.Info($"drop: {(fromOtherApp ? "other app" : "app")}, {kind}, {sources.Count} items");
+            if (await TransferIntoAsync(sources, folder, TransferOptions.Drop(kind), TransferGesture.Drop, owner) is not { } done)
+            {
+                return;
+            }
+
+            // A cut of this app among the moved items is cleared by the next activation's check.
+            await ReloadAndSelectArrivedAsync(folder, done.Result);
+        }
+        finally
+        {
+            _fileOpBusy = false;
+        }
+    }
+
+    /// <summary>Items handed to another app with Move offered, checked on the next activation once the timed checks gave up.</summary>
+    private string[]? _draggedOutPaths;
+
+    /// <summary>Generation of the drag-out watch: a newer drag-out ends the older watch.</summary>
+    private int _dragOutWatch;
+
+    /// <summary>Waits between the checks of a drag-out (0.5, 2 and 5 seconds after the drag in all).</summary>
+    private static readonly int[] DragOutCheckDelaysMs = [500, 1500, 3000];
+
+    /// <summary>
+    /// Items were dragged to another app with Move offered: Explorer (on the same drive, or with
+    /// Shift) moves them itself and the source is not told reliably (an optimized move answers None
+    /// or Copy). The lists are read again once some of them are gone: checked after 0.5, 2 and 5
+    /// seconds, then once more on the next activation.
+    /// </summary>
+    public void WatchDraggedOut(IReadOnlyList<string> paths)
+    {
+        if (paths.Count == 0)
+        {
+            return;
+        }
+
+        // An earlier drag-out still waiting for its last check is watched along with this one.
+        string[] watched = _draggedOutPaths is { } earlier ? [.. paths, .. earlier] : [.. paths];
+        _draggedOutPaths = null;
+        _ = WatchDraggedOutAsync(watched, ++_dragOutWatch);
+    }
+
+    private async Task WatchDraggedOutAsync(string[] paths, int generation)
+    {
+        foreach (int delay in DragOutCheckDelaysMs)
+        {
+            await Task.Delay(delay);
+            if (generation != _dragOutWatch)
+            {
+                return;
+            }
+
+            if (!CanReloadForDragOut() || await RemainingAsync(paths) is not { } remaining)
+            {
+                continue;
+            }
+
+            if (generation != _dragOutWatch)
+            {
+                return;
+            }
+
+            // Checked again after the await: a paste, a name's edit box or another drag may have
+            // started meanwhile, and none may have the list reloaded under it.
+            if (remaining.Length < paths.Length && CanReloadForDragOut())
+            {
+                _draggedOutPaths = remaining.Length > 0 ? remaining : null;
+                await ReloadAfterFileChangeAsync(cardCascadeOnly: true);
+                return;
+            }
+        }
+
+        if (generation == _dragOutWatch)
+        {
+            _draggedOutPaths = paths;
+        }
+    }
+
+    /// <summary>
+    /// A drag-out check may reload the lists now: no file operation, no name being edited, and no
+    /// drag running (DoDragDrop pumps the dispatcher; a reload would replace the cards a reorder
+    /// drag holds, and its drop would be lost).
+    /// </summary>
+    private bool CanReloadForDragOut() => !_fileOpBusy && View?.IsNameBusy != true && !FileDragOut.IsDragging;
+
+    /// <summary>
+    /// The items of a drag-out that the timed checks did not see go (or skipped) are checked once
+    /// more: on the next activation, and right after a later drag of the app ended.
+    /// </summary>
+    private async Task CheckDraggedOutAsync()
+    {
+        if (_draggedOutPaths is not { } draggedOut || !CanReloadForDragOut())
+        {
+            return;
+        }
+
+        _draggedOutPaths = null;
+        if (await RemainingAsync(draggedOut) is { } left && left.Length < draggedOut.Length)
+        {
+            if (!CanReloadForDragOut())
+            {
+                _draggedOutPaths = left.Length > 0 ? draggedOut : null; // busy again: next time
+                return;
+            }
+
+            await ReloadAfterFileChangeAsync(cardCascadeOnly: true);
+        }
+    }
+
+    /// <summary>The paths that still exist, checked off the UI thread (a network path may hang); null on a timeout.</summary>
+    private static async Task<string[]?> RemainingAsync(string[] paths)
+    {
+        try
+        {
+            return await Task.Run(() => paths.Where(p => File.Exists(p) || Directory.Exists(p)).ToArray()).WaitAsync(CutCheckTimeout);
+        }
+        catch (TimeoutException)
+        {
+            return null;
         }
     }
 
@@ -1900,6 +2163,9 @@ public sealed partial class MainViewModel : ObservableObject
             await Task.Yield();
             await ReloadAfterFileChangeAsync(cardCascadeOnly: true);
         }
+
+        // Dragged to another app: Explorer may have moved them after the timed checks gave up.
+        await CheckDraggedOutAsync();
 
         if ((_cutPaths ?? _endedCutPaths) is not { } paths || _cutCheckBusy || _fileOpBusy)
         {
@@ -1977,7 +2243,16 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    private static string RefusalText(TransferRefusal refusal, TransferKind kind) => refusal switch
+    private static string RefusalText(TransferRefusal refusal, TransferKind kind, TransferGesture gesture) => gesture == TransferGesture.Drop
+        ? refusal switch
+        {
+            TransferRefusal.SameFolder => "すでにそのフォルダにあります。",
+            TransferRefusal.IntoItself => "フォルダを、そのフォルダ自身の中には移動・コピーできません。",
+            TransferRefusal.Root => "ドライブそのものは移動・コピーできません。",
+            TransferRefusal.NoTarget => "そこには移動・コピーできません。",
+            _ => "ドロップした項目は移動・コピーできません。",
+        }
+        : refusal switch
     {
         TransferRefusal.SameFolder => kind == TransferKind.Move
             ? "切り取った項目は、すでにこのフォルダにあります。"
@@ -1996,8 +2271,8 @@ public sealed partial class MainViewModel : ObservableObject
         _ => MessageKind.Error,
     };
 
-    /// <summary>The message after a paste: it always names the destination, and says how many items were copied instead of moved.</summary>
-    private static string PasteResultText(TransferResult result, TransferPlan plan, string folderName)
+    /// <summary>The message after a paste or a drop: it always names the destination, and says how many items were copied instead of moved.</summary>
+    private static string PasteResultText(TransferResult result, TransferPlan plan, string folderName, TransferGesture gesture)
     {
         int copies = result.Requested - result.MovesRequested;
         string verb = result.MovesRequested == 0 ? "コピー" : copies == 0 ? "移動" : "移動・コピー";
@@ -2006,8 +2281,12 @@ public sealed partial class MainViewModel : ObservableObject
         {
             TransferOutcome.Completed => $"{count}を「{folderName}」に{verb}しました。",
             TransferOutcome.Partial => $"{result.Requested:N0} 個のうち {result.Done:N0} 個を「{folderName}」に{verb}しました。",
-            TransferOutcome.Canceled => $"「{folderName}」への貼り付けを中止しました。",
-            _ => $"「{folderName}」に貼り付けできませんでした。",
+            TransferOutcome.Canceled => gesture == TransferGesture.Paste
+                ? $"「{folderName}」への貼り付けを中止しました。"
+                : $"「{folderName}」への{verb}を中止しました。",
+            _ => gesture == TransferGesture.Paste
+                ? $"「{folderName}」に貼り付けできませんでした。"
+                : $"「{folderName}」に{verb}できませんでした。",
         };
 
         if (result.Outcome is TransferOutcome.Completed or TransferOutcome.Partial && result.MovesRequested > 0 && copies > 0)
@@ -2017,7 +2296,9 @@ public sealed partial class MainViewModel : ObservableObject
 
         if (plan.Skipped.Count > 0)
         {
-            text += $"（貼り付けできない {plan.Skipped.Count:N0} 個は除きました）";
+            text += gesture == TransferGesture.Paste
+                ? $"（貼り付けできない {plan.Skipped.Count:N0} 個は除きました）"
+                : $"（{verb}できない {plan.Skipped.Count:N0} 個は除きました）";
         }
 
         if (result.Error is { Length: > 0 } error && result.Outcome != TransferOutcome.Completed)

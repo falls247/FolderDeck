@@ -254,6 +254,7 @@ public partial class CardView : UserControl
                 UpdateBadges();
                 break;
             case nameof(CardViewModel.IsHoverHeld):
+            case nameof(CardViewModel.IsDropTarget):
                 UpdateHot();
                 break;
             case nameof(CardViewModel.IsDragged):
@@ -317,7 +318,7 @@ public partial class CardView : UserControl
 
     private void UpdateHot()
     {
-        bool hot = _vm is not null && !_vm.IsDisabled && (IsMouseOver || _vm.IsHoverHeld);
+        bool hot = _vm is not null && !_vm.IsDisabled && (IsMouseOver || _vm.IsHoverHeld || _vm.IsDropTarget);
         UpdateCloseButton();
         if (hot == _hot)
         {

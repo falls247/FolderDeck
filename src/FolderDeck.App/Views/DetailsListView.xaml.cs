@@ -101,6 +101,10 @@ public partial class DetailsListView : UserControl, IItemsView
             {
                 UpdateColumns();
             }
+            else
+            {
+                _marquee?.End(); // switched to a card view
+            }
         };
         Loaded += (_, _) => AttachScroll();
         _autoScrollTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(30) };
@@ -240,8 +244,71 @@ public partial class DetailsListView : UserControl, IItemsView
 
     private void OnItemsChanged()
     {
+        _marquee?.End(); // another list: the box's rows mean nothing any more
         RowsHost.ItemsSource = Items;
         UpdateColumns(); // the × column is there only for removable rows
+    }
+
+    // ---- marquee (rubber-band) selection -------------------------------------------------------
+
+    private MarqueeSelector? _marquee;
+
+    public bool IsMarqueeRunning => _marquee is not null;
+
+    public bool BeginMarquee(MouseButtonEventArgs e, MarqueeHandlers handlers)
+    {
+        AttachScroll();
+        if (_marquee is not null || _drag is not null || _scroll is null || !IsVisible || Items is not { } items)
+        {
+            return false;
+        }
+
+        var marquee = MarqueeSelector.TryStart(_scroll, RowsHost, items, MeasureMarquee, e, handlers);
+        if (marquee is null)
+        {
+            return false;
+        }
+
+        _marquee = marquee;
+        marquee.Finished += () =>
+        {
+            if (ReferenceEquals(_marquee, marquee))
+            {
+                _marquee = null;
+            }
+        };
+        return true;
+    }
+
+    public void CancelMarquee() => _marquee?.Cancel();
+
+    /// <summary>
+    /// The rows now, from a realized row: one column whose cell is the whole row, the pitch is the
+    /// row's laid-out height (not <see cref="RowHeight"/>: see <see cref="HitTestInsertion"/>).
+    /// </summary>
+    private MarqueeLayout? MeasureMarquee()
+    {
+        _rowsPanel ??= FindDescendant<VirtualizingStackPanel>(RowsHost);
+        if (Items is not { Count: > 0 } items || _rowsPanel is not { } panel)
+        {
+            return null;
+        }
+
+        int count = VisualTreeHelper.GetChildrenCount(panel);
+        for (int i = 0; i < count; i++)
+        {
+            if (VisualTreeHelper.GetChild(panel, i) is FrameworkElement { IsVisible: true, ActualHeight: > 0, ActualWidth: > 0 } row
+                && RowsHost.ItemContainerGenerator.IndexFromContainer(row) is int at and >= 0)
+            {
+                double pitch = row.ActualHeight;
+                Point o = row.TranslatePoint(default, RowsHost);
+                return new MarqueeLayout(
+                    new Point(o.X, o.Y - (at * pitch)),
+                    new CellGrid(1, items.Count, row.ActualWidth, pitch, row.ActualWidth, pitch));
+            }
+        }
+
+        return null;
     }
 
     // ---- columns: widths, sort marks, resizing ------------------------------------------------

@@ -37,8 +37,9 @@ public partial class CardGrid : UserControl, IItemsView
 
     /// <summary>
     /// Effect the grid reports for a reorder drop. The drag also carries the file drop for other
-    /// apps and offers only Copy | Link (<see cref="FileDragOut.AllowedEffects"/>, never Move), so
-    /// the grid answers Copy and shows a plain arrow instead of the copy cursor (GiveFeedback).
+    /// apps and offers Copy | Link (a top-level card cannot be cut, so never Move: see
+    /// <see cref="FileDragOut.EffectsFor"/>), so the grid answers Copy and shows a plain arrow
+    /// instead of the copy cursor (GiveFeedback). The source reads the drop index, not the effect.
     /// </summary>
     private const DragDropEffects ReorderEffect = DragDropEffects.Copy;
 
@@ -81,6 +82,10 @@ public partial class CardGrid : UserControl, IItemsView
             if (e.NewValue is true)
             {
                 Rebuild(force: false);
+            }
+            else
+            {
+                _marquee?.End(); // switched to the details view
             }
         };
         Loaded += (_, _) => AttachScroll();
@@ -230,6 +235,12 @@ public partial class CardGrid : UserControl, IItemsView
             return;
         }
 
+        if (_marquee is not null)
+        {
+            e.Handled = true; // the card size does not change under a marquee (the wheel alone still scrolls)
+            return;
+        }
+
         e.Handled = true;
         CardSizeStepRequested?.Invoke(e.Delta > 0 ? 1 : -1);
     }
@@ -260,6 +271,7 @@ public partial class CardGrid : UserControl, IItemsView
             return;
         }
 
+        _marquee?.End(); // the rows are laid out anew: the box's content coordinates mean nothing any more
         _columns = columns;
         var items = Items;
         if (items is null || items.Count == 0)
@@ -283,6 +295,76 @@ public partial class CardGrid : UserControl, IItemsView
         }
 
         RowsHost.ItemsSource = rows;
+    }
+
+    // ---- marquee (rubber-band) selection -------------------------------------------------------
+
+    private MarqueeSelector? _marquee;
+
+    public bool IsMarqueeRunning => _marquee is not null;
+
+    public bool BeginMarquee(MouseButtonEventArgs e, MarqueeHandlers handlers)
+    {
+        AttachScroll();
+        if (_marquee is not null || _drag is not null || _scroll is null || !IsVisible || Items is not { } items)
+        {
+            return false;
+        }
+
+        var marquee = MarqueeSelector.TryStart(_scroll, RowsHost, items, MeasureMarquee, e, handlers);
+        if (marquee is null)
+        {
+            return false;
+        }
+
+        _marquee = marquee;
+        marquee.Finished += () =>
+        {
+            if (ReferenceEquals(_marquee, marquee))
+            {
+                _marquee = null;
+            }
+        };
+        return true;
+    }
+
+    public void CancelMarquee() => _marquee?.Cancel();
+
+    /// <summary>
+    /// The cells now, from a realized row: its laid-out height is the row pitch (the 12 px gap
+    /// included) and its first card's width the cell width, so layout rounding at 125 % and more
+    /// does not add up over the rows and columns. The rows host's padding does not scroll: the
+    /// origin comes from the row's position, never from a constant.
+    /// </summary>
+    private MarqueeLayout? MeasureMarquee()
+    {
+        _rowsPanel ??= FindDescendant<VirtualizingStackPanel>(RowsHost);
+        if (Items is not { Count: > 0 } items || _columns < 1 || _rowsPanel is not { } panel)
+        {
+            return null;
+        }
+
+        int count = VisualTreeHelper.GetChildrenCount(panel);
+        for (int i = 0; i < count; i++)
+        {
+            if (VisualTreeHelper.GetChild(panel, i) is FrameworkElement { IsVisible: true, DataContext: CardRow, ActualHeight: > Gap } row
+                && RowsHost.ItemContainerGenerator.IndexFromContainer(row) is int r and >= 0)
+            {
+                double pitchY = row.ActualHeight;
+                double cellWidth = FindDescendant<CardView>(row)?.ActualWidth ?? 0;
+                if (cellWidth <= 0)
+                {
+                    cellWidth = Metrics.CardWidth;
+                }
+
+                Point at = row.TranslatePoint(default, RowsHost);
+                return new MarqueeLayout(
+                    new Point(at.X, at.Y - (r * pitchY)),
+                    new CellGrid(_columns, items.Count, cellWidth, pitchY - Gap, cellWidth + Gap, pitchY));
+            }
+        }
+
+        return null;
     }
 
     // ---- drag & drop reordering (top level) ---------------------------------------------------
