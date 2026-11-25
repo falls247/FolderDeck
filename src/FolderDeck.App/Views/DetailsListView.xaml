@@ -144,7 +144,8 @@
             </Grid>
         </Border>
 
-        <ItemsControl x:Name="RowsHost" Grid.Row="1"
+        <!-- DetailsRowItems: a plain automation list of the rows (no item peer per row, see ItemViewAutomationPeer.cs) -->
+        <views:DetailsRowItems x:Name="RowsHost" Grid.Row="1"
                       Focusable="False"
                       VirtualizingPanel.IsVirtualizing="True"
                       VirtualizingPanel.VirtualizationMode="Recycling"
@@ -176,6 +177,6 @@
                     <views:DetailsRowView />
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
-        </ItemsControl>
+        </views:DetailsRowItems>
     </Grid>
 </UserControl>

@@ -711,8 +711,10 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task<LoadOutcome> LoadTabAsync(TabViewModel tab)
     {
         var location = tab.Location;
+        UiWatchdog.Note($"loading {tab.CurrentFolderPath ?? tab.Title}");
         var outcome = await tab.LoadAsync();
         int generation = tab.LoadGeneration;
+        UiWatchdog.Note($"showing {tab.CurrentFolderPath ?? tab.Title}: {tab.Cards.Count:N0} items ({outcome})");
 
         // Not found: the folder may have been renamed or moved. The tab follows it when its identity
         // finds it, and lists it there. A check of the 登録フォルダ may move the tab first (before this
@@ -772,9 +774,10 @@ public sealed partial class MainViewModel : ObservableObject
     /// command with the shown folder as its current directory (<c>cmd</c>, <c>wsl</c>, <c>code .</c>;
     /// at a top list or a missing folder in the user's folder), as in Explorer. Returns false when the
     /// edit box should stay open with the text (nothing at that path, the program did not start:
-    /// said on the message line).
+    /// said on the message line). <paramref name="leaving"/> runs just before a folder loads or a file
+    /// opens (the view closes the edit box then, not after the load).
     /// </summary>
-    public async Task<bool> GoToAddressAsync(string typed, Func<bool>? stillWanted = null)
+    public async Task<bool> GoToAddressAsync(string typed, Func<bool>? stillWanted = null, Action? leaving = null)
     {
         if (!HasTab)
         {
@@ -813,9 +816,11 @@ public sealed partial class MainViewModel : ObservableObject
                 Message.Info($"見つかりません：{target.Path}");
                 return false;
             case AddressAction.OpenFolder:
+                leaving?.Invoke(); // the edit box goes before the folder loads
                 await NavigateAsync(AddressLocation(tab, target.Path!), NavMode.New, recordPath: target.Path);
                 return true;
             case AddressAction.OpenFile:
+                leaving?.Invoke();
                 await OpenFileAsync(target.Path!, null);
                 return true;
             default:

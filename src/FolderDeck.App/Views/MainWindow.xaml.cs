@@ -354,6 +354,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             case Key.F5:
                 e.Handled = true;
+                EndAddressEdit(); // not open over a reload of the whole list (see MainWindow.xaml)
                 _vm.RefreshCommand.Execute(null);
                 break;
             case Key.Back when !inTextBox && Keyboard.Modifiers == ModifierKeys.None:
@@ -1436,6 +1437,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
             _addressTab = _vm.SelectedTab;
             _addressTab.PropertyChanged += OnAddressTabChanged;
             AddressEdit.Text = _addressTab.CurrentFolderPath ?? string.Empty;
+
+            // The count beside the bar keeps its width while the box is open: a load or a selection
+            // that changes the count would otherwise resize the box, and every new layout of the box
+            // is news for the IME (TSF), whose answer lays out the whole window under its lock.
+            CountPanel.Width = CountPanel.ActualWidth;
             AddressEdit.Visibility = Visibility.Visible;
             Crumbs.Visibility = Visibility.Hidden;
             AddressBar.SetResourceReference(Border.BorderBrushProperty, "Brush.Accent");
@@ -1468,8 +1474,9 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 RenameEditor.FocusWindowItself(this); // Backspace, Delete, Ctrl+C act on the list again
             }
 
-            AddressEdit.Visibility = Visibility.Hidden;
+            AddressEdit.Visibility = Visibility.Collapsed; // out of the layout: no layout news for the IME (see MainWindow.xaml)
             Crumbs.Visibility = Visibility.Visible;
+            CountPanel.ClearValue(WidthProperty);
             AddressBar.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
             _cascade.SetEditing(_rename.IsOpen);
         }
@@ -1515,7 +1522,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
         bool done;
         try
         {
-            done = await _vm.GoToAddressAsync(text, () => session == _addressSession);
+            // The box closes before a folder loads (not after): a box with the keyboard while thousands
+            // of cards are laid out is the IME's way into that layout (see MainWindow.xaml).
+            done = await _vm.GoToAddressAsync(text, () => session == _addressSession, leaving: () =>
+            {
+                if (session == _addressSession)
+                {
+                    EndAddressEdit();
+                }
+            });
         }
         finally
         {
@@ -1606,6 +1621,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     bool IMainView.IsAutoRefreshBlocked =>
         WindowState == WindowState.Minimized
         || IsNameBusy
+        || IsAddressEditing // a list swapped under the edit box is the IME's way into a big layout (see MainWindow.xaml)
         || ActiveList.IsMarqueeRunning
         || _cascade.IsOpen || _cascade.IsMenuOpen || _cascade.IsHoverPending
         || _modalDepth > 0

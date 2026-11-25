@@ -16,6 +16,7 @@ public partial class App : Application
     private SingleInstance? _instance;
     private AppServices? _services;
     private SessionMonitor? _session;
+    private UiWatchdog? _watchdog;
     private DateTime _lastErrorDialog = DateTime.MinValue;
 
     public ThemeManager? Theme { get; private set; }
@@ -41,6 +42,8 @@ public partial class App : Application
         HookUnhandledExceptions();
         _session = new SessionMonitor(logDir, version);
         _session.Start(Dispatcher);
+        _watchdog = new UiWatchdog(Dispatcher); // a UI thread that stops answering is logged (a hang logs nothing by itself)
+        _watchdog.Start();
         var startedAt = System.Diagnostics.Process.GetCurrentProcess().StartTime;
         string Since() => $"{(DateTime.Now - startedAt).TotalMilliseconds:F0} ms";
         AppLog.Info($"startup: OnStartup at {Since()}");
@@ -89,6 +92,7 @@ public partial class App : Application
             _services?.Dispose();
             Theme?.Dispose();
             _instance?.Dispose();
+            _watchdog?.Dispose();
             _session?.MarkCleanExit();
         }
 

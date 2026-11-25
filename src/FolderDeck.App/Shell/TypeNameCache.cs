@@ -82,6 +82,12 @@ public sealed class TypeNameCache
                 CallTimeout).ConfigureAwait(false);
             name = string.IsNullOrWhiteSpace(shellName) ? DetailsText.TypeFallback(key, isFolder) : shellName;
         }
+        catch (QueueTimeoutException)
+        {
+            // No worker was free (all stuck): the plain name for now, asked again when shown again.
+            _pending.TryRemove(key, out _);
+            return DetailsText.TypeFallback(key, isFolder);
+        }
         catch (Exception)
         {
             // Timeout (the worker was abandoned), or the pool is already disposed at shutdown.

@@ -9,7 +9,7 @@
 #   -Last    表示するセッションの数（新しい順に数えて。既定 10）
 #   -Events  Windows のイベントログ（Application）から FolderDeck.exe のクラッシュ記録も探す
 #
-# 終わり方の判定に使うのは、アプリが書く "lifecycle:" の行です（Services\SessionMonitor.cs）。
+# 終わり方の判定に使うのは、アプリが書く "lifecycle:" の行です（Services\SessionMonitor.cs。UI の応答なしは Services\UiWatchdog.cs）。
 # このファイルは UTF-8（BOM 付き）で保存してください（Windows PowerShell 5.1 が日本語を正しく読むため）。
 
 param(
@@ -67,6 +67,8 @@ function New-Session($entry) {
         NoCrashLog = $false
         Warnings   = 0
         Errors     = New-Object System.Collections.Generic.List[object]
+        Hangs      = New-Object System.Collections.Generic.List[object]   # UI の応答なし（Services\UiWatchdog.cs）
+        HangOpen   = $null      # まだ戻っていない応答なし
     }
 }
 
@@ -112,6 +114,17 @@ foreach ($e in $entries) {
     }
     elseif ($msg -match '^lifecycle: exit' -or $msg -eq 'FolderDeck exiting') {
         $current.Exit = $e.Time
+    }
+
+    if ($msg -match '^lifecycle: the UI thread has not answered for') {
+        $since = '{0:HH:mm:ss}' -f $e.Time
+        if ($msg -match '\(since (?<t>\d\d:\d\d:\d\d)') { $since = $Matches.t }   # 固まり始めた時刻（記録は 5 秒後）
+        $current.HangOpen = [pscustomobject]@{ Since = $since; Seconds = $null; Activity = ($msg -replace '^.*; last activity: ', '') }
+        $current.Hangs.Add($current.HangOpen)
+    }
+    elseif ($msg -match '^lifecycle: the UI thread answered again after (?<s>[0-9.]+) s' -and $current.HangOpen) {
+        $current.HangOpen.Seconds = [double]::Parse($Matches.s, [Globalization.CultureInfo]::InvariantCulture)
+        $current.HangOpen = $null
     }
 
     if ($e.Level -eq 'WARN' -and $msg -notmatch '^lifecycle:') { $current.Warnings++ }
@@ -161,6 +174,10 @@ for ($i = $first; $i -lt $sessions.Count; $i++) {
         elseif ($s.CloseHow) { $how = "閉じた（$($s.CloseHow.How)）" }
         else { $how = '正常に終了（閉じた理由は記録なし：古い形式のログ）' }
     }
+    elseif ($s.Unclean -and $s.HangOpen) {
+        $how = 'UI が応答しないまま終わった（強制終了されたと推定）'
+        $color = 'Red'
+    }
     elseif ($s.Unclean) {
         $how = '異常終了（終了処理が走っていない：クラッシュ・強制終了・電源断のどれか）'
         $color = 'Red'
@@ -182,6 +199,15 @@ for ($i = $first; $i -lt $sessions.Count; $i++) {
     Write-Host ("    終わり方: {0}" -f $how) -ForegroundColor $color
 
     if ($s.Unclean) { Write-Host ("    次の起動の報告: {0}" -f $s.Unclean) -ForegroundColor DarkYellow }
+    if ($s.Hangs.Count -gt 0) {
+        $back = @($s.Hangs | Where-Object { $null -ne $_.Seconds })
+        $text = "    UI の応答なし: {0} 回" -f $s.Hangs.Count
+        if ($back.Count -gt 0) { $text += "（戻ったものの最長 {0:N1} 秒）" -f ($back | Measure-Object -Property Seconds -Maximum).Maximum }
+        Write-Host $text -ForegroundColor Yellow
+        if ($s.HangOpen) {
+            Write-Host ("    {0} から応答なし（直前の操作: {1}）" -f $s.HangOpen.Since, $s.HangOpen.Activity) -ForegroundColor Red
+        }
+    }
     foreach ($rec in $s.CrashLogs) { Write-Host ("    イベントログ: {0}" -f $rec) -ForegroundColor Red }
     if ($s.NoCrashLog) { Write-Host '    イベントログ: クラッシュの記録なし（ほかのプログラムによる強制終了か電源断の可能性が高い）' -ForegroundColor DarkYellow }
 

@@ -902,53 +902,60 @@ public sealed partial class TabViewModel : ObservableObject
 
     public void UpdateBreadcrumbs()
     {
-        // A fixed tab starts at its list; a folder tab at its root folder; the placeholder has no crumb.
+        // The whole path of the shown folder, its drive or share first, so the crumbs read as the
+        // path (E:\ 仕事 \ 案件); a fixed tab's list comes before it. A crumb above the tab's root makes
+        // that folder the root (as ↑ does in a folder tab; a fixed tab stays where it is instead of
+        // going back to its list, as its ↑ does); the placeholder has no crumb. Nothing is left out here:
+        // when the bar is too narrow, TrailPanel keeps the end of the path in view.
         var items = new List<(string Text, NavLocation Target, string? Tip)>();
         if (IsFixedTab)
         {
             items.Add((TabKinds.Title(Kind), NavLocation.Top(Kind), null));
         }
 
+        string? fullPath = null;
         if (!Location.IsTop)
         {
             string? rootPath = ResolveRootPath(Location.Root);
-            string rootName = rootPath is null ? "（不明）" : PathTools.DisplayName(rootPath);
-            items.Add((rootName, Location with { Rel = string.Empty }, rootPath));
+            if (rootPath is null)
+            {
+                items.Add(("（不明）", Location with { Rel = string.Empty }, null));
+            }
+            else
+            {
+                // A drive keeps its separator ("E:\"), a share is its server and name ("\\nas\share"), a folder is its name.
+                foreach (string folder in PathTools.AncestorsAndSelf(PathTools.ParentOf(rootPath)))
+                {
+                    items.Add((PathTools.DisplayName(folder), new NavLocation(Location.Tab, folder, string.Empty), folder));
+                }
+
+                items.Add((PathTools.DisplayName(rootPath), Location with { Rel = string.Empty }, rootPath));
+                fullPath = rootPath;
+            }
+
             string rel = string.Empty;
             foreach (string part in PathTools.SplitRel(Location.Rel))
             {
                 rel = PathTools.JoinRel(rel, part);
-                items.Add((part, Location with { Rel = rel }, rootPath is null ? null : PathTools.Combine(rootPath, rel)));
+                string? path = rootPath is null ? null : PathTools.Combine(rootPath, rel);
+                items.Add((part, Location with { Rel = rel }, path));
+                fullPath = path ?? fullPath;
             }
         }
 
-        // Long trails: replace middle segments with "…" (first two and the last one always stay).
-        const int MaxChars = 72;
-        var crumbs = items.Select(i => (i.Text, (NavLocation?)i.Target, i.Tip)).ToList();
-        int Total() => crumbs.Sum(c => c.Text.Length + 3);
-        if (Total() > MaxChars && crumbs.Count > 4)
-        {
-            var hidden = new List<string>();
-            int ellipsisAt = 2;
-            crumbs.Insert(ellipsisAt, ("…", null, null));
-            while (Total() > MaxChars && crumbs.Count > 5)
-            {
-                hidden.Add(crumbs[ellipsisAt + 1].Text);
-                crumbs.RemoveAt(ellipsisAt + 1);
-            }
+        Breadcrumbs = items.Select((c, i) => new BreadcrumbItem(c.Text, c.Target, c.Tip, SeparatorAfter(i), i == items.Count - 1)).ToList();
+        AddressText = fullPath;
 
-            if (hidden.Count == 0)
-            {
-                crumbs.RemoveAt(ellipsisAt);
-            }
-            else
-            {
-                crumbs[ellipsisAt] = ("…", null, string.Join(" / ", hidden));
-            }
-        }
-
-        Breadcrumbs = crumbs.Select((c, i) => new BreadcrumbItem(c.Text, c.Item2, c.Tip, i == crumbs.Count - 1)).ToList();
+        string SeparatorAfter(int i) =>
+            i == items.Count - 1 ? string.Empty
+            : i == 0 && IsFixedTab ? "›"
+            : items[i].Text.EndsWith('\\') ? string.Empty
+            : "\\";
     }
+
+    /// <summary>The shown folder's full path (null at a top list or for the placeholder): the tooltip of the address bar's "…".</summary>
+    [ObservableProperty]
+    private string? _addressText;
 
     partial void OnLocationChanged(NavLocation value)
     {

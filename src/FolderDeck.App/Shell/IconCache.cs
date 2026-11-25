@@ -74,6 +74,10 @@ public sealed class IconCache : IDisposable
             _cache[key] = icon;
             return icon;
         }
+        catch (QueueTimeoutException)
+        {
+            return null; // no worker was free (all stuck): not the icon's fault, so asked again when shown again
+        }
         catch (Exception)
         {
             _cache[key] = null;

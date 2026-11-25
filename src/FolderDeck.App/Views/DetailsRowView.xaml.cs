@@ -30,6 +30,9 @@ public partial class DetailsRowView : UserControl
     /// </summary>
     private bool _noRearm;
 
+    /// <summary>One automation element with the item's name, nothing inside (<see cref="ItemViewAutomationPeer"/>).</summary>
+    protected override System.Windows.Automation.Peers.AutomationPeer OnCreateAutomationPeer() => new ItemViewAutomationPeer(this);
+
     public DetailsRowView()
     {
         InitializeComponent();
