@@ -1081,15 +1081,21 @@ public sealed class CascadeController
     }
 
     /// <summary>
-    /// A row as an item. In the cascade of an anchor outside the tab (a sidebar row), folders open
-    /// in a folder tab of their own; in a card's cascade they navigate inside the tab.
+    /// A row as an item. In the cascade of an anchor outside the tab (a sidebar row) or of a
+    /// top-level card (最近の履歴・よく使う項目), folders open in a folder tab of their own; in the cascade
+    /// of a card inside a folder they navigate inside the tab.
     /// </summary>
-    private ItemRef ItemOf(EntryRowViewModel row) => row.ToItemRef() with { NewTab = OpensInNewTab };
+    private ItemRef ItemOf(EntryRowViewModel row) => row.ToItemRef() with { NewTab = FoldersOpenInNewTab };
 
     private ItemRef HeaderOf(Level level) =>
-        new(level.Model.Path, true, level.Model.Location, ItemContext.FlyoutHeader) { NewTab = OpensInNewTab };
+        new(level.Model.Path, true, level.Model.Location, ItemContext.FlyoutHeader) { NewTab = FoldersOpenInNewTab };
 
+    /// <summary>The anchor is outside the tab (a sidebar row): the cascade also outlives the tab's content.</summary>
     private bool OpensInNewTab => _anchorItem is { OpensInNewTab: true };
+
+    /// <summary>Where the cascade's folders open: <see cref="OpensInNewTab"/>, or the cascade hangs on a top-level card or row.</summary>
+    private bool FoldersOpenInNewTab =>
+        OpensInNewTab || _anchorItem is CardAnchor { IsTopLevel: true } || (_anchorItem is null && _card?.ViewModel?.IsTopLevel == true);
 
     // ---- dragging out to other apps -----------------------------------------------------------
 

@@ -276,7 +276,11 @@ public sealed partial class CardViewModel : ObservableObject
 
     public int FileCount => _fileCount;
 
-    public ItemRef ToItemRef() => new(Path, IsFolderLike, Target, Context, this);
+    /// <summary>
+    /// The card as an item. A folder of a top level (最近の履歴・よく使う項目) opens in a folder tab of
+    /// its own, as a sidebar row does; a folder inside a tab navigates in it.
+    /// </summary>
+    public ItemRef ToItemRef() => new(Path, IsFolderLike, Target, Context, this) { NewTab = IsTopLevel };
 
     /// <summary>The card became visible (or its container was recycled onto it).</summary>
     public void Realize(int thumbPx, int iconPx)

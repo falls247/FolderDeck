@@ -62,7 +62,7 @@ public sealed record AnchorFile(EntryRowViewModel Row, CardViewModel Card);
 /// A folder or previewable file of the shown tab as a cascade anchor: what the details list passes
 /// for a row, whose name is the element the list (or the preview) hangs beside. (A card needs none:
 /// its list is an overlay on the card itself.) Folders picked in the cascade navigate inside the
-/// tab, as from a card.
+/// tab, as from a card, except under a top-level card (<see cref="IsTopLevel"/>).
 /// </summary>
 public sealed class CardAnchor : ICascadeAnchor
 {
@@ -94,6 +94,13 @@ public sealed class CardAnchor : ICascadeAnchor
     }
 
     public bool OpensInNewTab => false;
+
+    /// <summary>
+    /// A row of the top level of 最近の履歴・よく使う項目: folders picked in its cascade open in a folder
+    /// tab of their own (<see cref="CardViewModel.ToItemRef"/>). Unlike <see cref="OpensInNewTab"/>, the
+    /// cascade still belongs to the tab's content and closes with it.
+    /// </summary>
+    public bool IsTopLevel => _card.IsTopLevel;
 
     /// <summary>The list covers the columns right of the name, where a Ctrl / Shift click selects.</summary>
     public bool YieldsToModifiers => true;
