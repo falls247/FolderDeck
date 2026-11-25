@@ -32,6 +32,7 @@ public sealed partial class TabViewModel : ObservableObject
 {
     private static readonly TimeSpan RecentCheckTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan SlowAfter = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan IdentityTimeout = TimeSpan.FromSeconds(2);
 
     private readonly AppServices _services;
     private readonly DispatcherTimer _slowTimer = new() { Interval = SlowAfter };
@@ -55,6 +56,13 @@ public sealed partial class TabViewModel : ObservableObject
     /// while nothing was loaded there yet. Paste goes only into a folder that is really on screen.
     /// </summary>
     private NavLocation? _loadedLocation;
+
+    /// <summary>
+    /// The <see cref="FolderIdentity"/> of the folder at <see cref="_identityLocation"/>: taken after
+    /// each load that listed it, kept when the location follows a rename (<see cref="MoveTo"/>).
+    /// </summary>
+    private string? _identity;
+    private NavLocation? _identityLocation;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsTop), nameof(ShowClearHistory), nameof(ShowFilter), nameof(CanGoUp), nameof(Title), nameof(ToolTipText))]
@@ -237,8 +245,13 @@ public sealed partial class TabViewModel : ObservableObject
 
     public string SortModeText => SortModeLabels.Short(SortMode);
 
-    /// <summary>「1つ上へ」: inside a folder of a fixed tab, or below the root of a folder tab.</summary>
-    public bool CanGoUp => IsFolderTab ? Location.Rel.Length > 0 : IsFixedTab && !IsTop;
+    /// <summary>
+    /// 「1つ上へ」: inside a folder of a fixed tab (its root goes back to the list), anywhere in a folder
+    /// tab but at the root of a drive or share (above its root folder, the parent becomes the root).
+    /// </summary>
+    public bool CanGoUp => IsFolderTab
+        ? Location.Rel.Length > 0 || PathTools.ParentOf(Location.Root).Length > 0
+        : IsFixedTab && !IsTop;
 
     /// <summary>Text of the button on the error banner (a folder tab has no list to go back to).</summary>
     public string BackText => IsFolderTab ? "タブを閉じる" : IsFixedTab ? TabKinds.Title(Kind) + "の一覧に戻る" : string.Empty;
@@ -276,6 +289,33 @@ public sealed partial class TabViewModel : ObservableObject
 
     /// <summary>Absolute path of the current location, or null at the top level.</summary>
     public string? CurrentFolderPath => ResolvePath(Location);
+
+    /// <summary>The identity of the folder at <paramref name="location"/> when it is known (see <see cref="FolderIdentity"/>), else null.</summary>
+    public string? IdentityOf(NavLocation location) => _identityLocation == location ? _identity : null;
+
+    /// <summary>The identity of the shown folder, when it is known.</summary>
+    public string? Identity => IdentityOf(Location);
+
+    /// <summary>Gives the folder at <paramref name="location"/> its identity (a restored tab, a 登録フォルダ opened in a new tab).</summary>
+    public void SetIdentity(NavLocation location, string? identity)
+    {
+        _identityLocation = identity is null ? null : location;
+        _identity = identity;
+    }
+
+    /// <summary>
+    /// The shown folder (or one of its ancestors) was renamed or moved: the tab goes to where it is
+    /// now, still the same folder, so it keeps its identity. The caller reloads it or marks it stale.
+    /// </summary>
+    public void MoveTo(NavLocation location)
+    {
+        string? identity = Identity;
+        Location = location;
+        if (identity is not null)
+        {
+            SetIdentity(location, identity);
+        }
+    }
 
     public string? ResolveRootPath(string root) => root.Length == 0 ? null : root;
 
@@ -404,7 +444,31 @@ public sealed partial class TabViewModel : ObservableObject
         ApplyFolderSummary(listing, cards.Count);
         _shownListing = listing;
         LastListedAt = Environment.TickCount64;
+        _ = CaptureIdentityAsync(Location, path);
         return LoadOutcome.Ok;
+    }
+
+    /// <summary>
+    /// Takes the identity of the folder just listed (off the UI thread, 2 s at most), for following it
+    /// if it is renamed or moved later. Kept only while the tab is still there; a failure keeps none.
+    /// </summary>
+    private async Task CaptureIdentityAsync(NavLocation location, string path)
+    {
+        try
+        {
+            string? identity = await Task.Run(() => FolderIdentity.Capture(path)).WaitAsync(IdentityTimeout);
+            if (Location == location)
+            {
+                SetIdentity(location, identity);
+            }
+        }
+        catch (TimeoutException)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"Identity of {path} could not be read", ex);
+        }
     }
 
     /// <summary>The card of one entry of the shown folder.</summary>
@@ -838,53 +902,60 @@ public sealed partial class TabViewModel : ObservableObject
 
     public void UpdateBreadcrumbs()
     {
-        // A fixed tab starts at its list; a folder tab at its root folder; the placeholder has no crumb.
+        // The whole path of the shown folder, its drive or share first, so the crumbs read as the
+        // path (E:\ 仕事 \ 案件); a fixed tab's list comes before it. A crumb above the tab's root makes
+        // that folder the root (as ↑ does in a folder tab; a fixed tab stays where it is instead of
+        // going back to its list, as its ↑ does); the placeholder has no crumb. Nothing is left out here:
+        // when the bar is too narrow, TrailPanel keeps the end of the path in view.
         var items = new List<(string Text, NavLocation Target, string? Tip)>();
         if (IsFixedTab)
         {
             items.Add((TabKinds.Title(Kind), NavLocation.Top(Kind), null));
         }
 
+        string? fullPath = null;
         if (!Location.IsTop)
         {
             string? rootPath = ResolveRootPath(Location.Root);
-            string rootName = rootPath is null ? "（不明）" : PathTools.DisplayName(rootPath);
-            items.Add((rootName, Location with { Rel = string.Empty }, rootPath));
+            if (rootPath is null)
+            {
+                items.Add(("（不明）", Location with { Rel = string.Empty }, null));
+            }
+            else
+            {
+                // A drive keeps its separator ("E:\"), a share is its server and name ("\\nas\share"), a folder is its name.
+                foreach (string folder in PathTools.AncestorsAndSelf(PathTools.ParentOf(rootPath)))
+                {
+                    items.Add((PathTools.DisplayName(folder), new NavLocation(Location.Tab, folder, string.Empty), folder));
+                }
+
+                items.Add((PathTools.DisplayName(rootPath), Location with { Rel = string.Empty }, rootPath));
+                fullPath = rootPath;
+            }
+
             string rel = string.Empty;
             foreach (string part in PathTools.SplitRel(Location.Rel))
             {
                 rel = PathTools.JoinRel(rel, part);
-                items.Add((part, Location with { Rel = rel }, rootPath is null ? null : PathTools.Combine(rootPath, rel)));
+                string? path = rootPath is null ? null : PathTools.Combine(rootPath, rel);
+                items.Add((part, Location with { Rel = rel }, path));
+                fullPath = path ?? fullPath;
             }
         }
 
-        // Long trails: replace middle segments with "…" (first two and the last one always stay).
-        const int MaxChars = 72;
-        var crumbs = items.Select(i => (i.Text, (NavLocation?)i.Target, i.Tip)).ToList();
-        int Total() => crumbs.Sum(c => c.Text.Length + 3);
-        if (Total() > MaxChars && crumbs.Count > 4)
-        {
-            var hidden = new List<string>();
-            int ellipsisAt = 2;
-            crumbs.Insert(ellipsisAt, ("…", null, null));
-            while (Total() > MaxChars && crumbs.Count > 5)
-            {
-                hidden.Add(crumbs[ellipsisAt + 1].Text);
-                crumbs.RemoveAt(ellipsisAt + 1);
-            }
+        Breadcrumbs = items.Select((c, i) => new BreadcrumbItem(c.Text, c.Target, c.Tip, SeparatorAfter(i), i == items.Count - 1)).ToList();
+        AddressText = fullPath;
 
-            if (hidden.Count == 0)
-            {
-                crumbs.RemoveAt(ellipsisAt);
-            }
-            else
-            {
-                crumbs[ellipsisAt] = ("…", null, string.Join(" / ", hidden));
-            }
-        }
-
-        Breadcrumbs = crumbs.Select((c, i) => new BreadcrumbItem(c.Text, c.Item2, c.Tip, i == crumbs.Count - 1)).ToList();
+        string SeparatorAfter(int i) =>
+            i == items.Count - 1 ? string.Empty
+            : i == 0 && IsFixedTab ? "›"
+            : items[i].Text.EndsWith('\\') ? string.Empty
+            : "\\";
     }
+
+    /// <summary>The shown folder's full path (null at a top list or for the placeholder): the tooltip of the address bar's "…".</summary>
+    [ObservableProperty]
+    private string? _addressText;
 
     partial void OnLocationChanged(NavLocation value)
     {

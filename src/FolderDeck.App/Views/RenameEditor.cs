@@ -309,7 +309,7 @@ public sealed class RenameEditor
         Keyboard.Focus(window);
     }
 
-    private static bool IsInContextMenu(DependencyObject node)
+    internal static bool IsInContextMenu(DependencyObject node)
     {
         for (DependencyObject? n = node; n is not null; n = Parent(n))
         {
@@ -322,7 +322,7 @@ public sealed class RenameEditor
         return false;
     }
 
-    private static bool IsWithin(DependencyObject? node, DependencyObject ancestor)
+    internal static bool IsWithin(DependencyObject? node, DependencyObject ancestor)
     {
         for (DependencyObject? n = node; n is not null; n = Parent(n))
         {

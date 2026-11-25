@@ -279,9 +279,20 @@ public sealed class ThumbnailService : IDisposable
                     cancellationToken,
                     CallTimeout).ConfigureAwait(false);
             }
-            catch (TimeoutException)
+            catch (TimeoutException ex) when (ex is not QueueTimeoutException)
             {
-                result = await FallbackIconAsync(path, source == ThumbSource.Folder, iconPx, cancellationToken).ConfigureAwait(false);
+                // The call itself did not return (its worker was replaced): the system image list's
+                // icon. A QueueTimeoutException (every shell worker stuck) goes to the caller instead:
+                // the fallback would wait in the same queue as long again, and nothing was made that
+                // could count as "no picture" (no download, no miss for the extension, no cache).
+                try
+                {
+                    result = await FallbackIconAsync(path, source == ThumbSource.Folder, iconPx, cancellationToken).ConfigureAwait(false);
+                }
+                catch (TimeoutException fallback) when (fallback is not QueueTimeoutException)
+                {
+                    // The shell is stuck for the icon too.
+                }
             }
         }
 

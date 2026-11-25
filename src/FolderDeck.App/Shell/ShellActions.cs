@@ -13,6 +13,9 @@ public sealed record OpenResult(bool Success, string? Error);
 public static class ShellActions
 {
     private const int ErrorNoAssociation = 1155;
+    private const int ErrorFileNotFound = 2;
+    private const int ErrorPathNotFound = 3;
+    private const int ErrorCancelled = 1223;
 
     private static readonly HashSet<string> ExecutableExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -71,6 +74,91 @@ public static class ShellActions
     /// <summary><c>explorer.exe "path"</c>.</summary>
     public static OpenResult OpenInExplorer(string path) =>
         RunExplorer($"\"{ShellPath(path)}\"");
+
+    /// <summary>
+    /// Starts a program typed in the address bar (a terminal, <c>code .</c>, …) through the shell, as
+    /// Explorer's address bar and the Run dialog do, in <see cref="LaunchSpec.WorkingDirectory"/>.
+    /// Blocking: run off the UI thread.
+    /// </summary>
+    public static OpenResult Launch(LaunchSpec spec)
+    {
+        try
+        {
+            var info = new ProcessStartInfo(spec.FileName)
+            {
+                Arguments = spec.Arguments,
+                UseShellExecute = true,
+                WorkingDirectory = spec.WorkingDirectory,
+            };
+            using var process = Process.Start(info);
+            return new OpenResult(true, null);
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode is ErrorFileNotFound or ErrorPathNotFound)
+        {
+            return new OpenResult(false, $"「{spec.FileName}」が見つかりません。名前を確かめてください。");
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled)
+        {
+            return new OpenResult(false, $"「{spec.FileName}」の実行を取り消しました。"); // e.g. the elevation prompt was declined
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            AppLog.Warn($"Could not start {spec.FileName} in {spec.WorkingDirectory}", ex);
+            return new OpenResult(false, $"「{spec.FileName}」を実行できませんでした：{ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The full path of a program the shell would find by name (its App Paths entry, then the folders of
+    /// PATH), never in <paramref name="excludedFolder"/> nor in a relative PATH entry: the shell would
+    /// look in the working directory first, where anyone may have put a program of that name. Null when
+    /// it is not found. Blocking I/O: run off the UI thread.
+    /// </summary>
+    public static string? FindProgram(string fileName, string excludedFolder)
+    {
+        bool Usable(string? candidate) =>
+            candidate is { Length: > 0 }
+            && PathTools.IsFullyQualified(candidate)
+            && !PathTools.PathEquals(PathTools.ParentOf(candidate), PathTools.NormalizeOrSelf(excludedFolder))
+            && File.Exists(candidate);
+
+        foreach (var hive in new[] { Microsoft.Win32.Registry.CurrentUser, Microsoft.Win32.Registry.LocalMachine })
+        {
+            try
+            {
+                using var key = hive.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\" + fileName);
+                string? registered = (key?.GetValue(null) as string)?.Trim('"');
+                if (registered is not null)
+                {
+                    registered = Environment.ExpandEnvironmentVariables(registered);
+                    if (Usable(registered))
+                    {
+                        return registered;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+            {
+            }
+        }
+
+        foreach (string folder in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            try
+            {
+                string candidate = Path.Combine(Environment.ExpandEnvironmentVariables(folder.Trim('"')), fileName);
+                if (Usable(candidate))
+                {
+                    return candidate;
+                }
+            }
+            catch (ArgumentException)
+            {
+            }
+        }
+
+        return null;
+    }
 
     public static bool CopyPath(string path)
     {

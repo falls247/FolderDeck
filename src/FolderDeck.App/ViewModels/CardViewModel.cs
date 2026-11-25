@@ -365,6 +365,11 @@ public sealed partial class CardViewModel : ObservableObject
         catch (OperationCanceledException)
         {
         }
+        catch (QueueTimeoutException)
+        {
+            // Every shell worker is stuck (logged once by the pool): the card keeps what it shows,
+            // without a warning per card on the UI thread.
+        }
         catch (Exception ex)
         {
             AppLog.Warn($"Card details failed for {Path}", ex);

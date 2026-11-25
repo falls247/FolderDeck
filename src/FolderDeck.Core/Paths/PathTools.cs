@@ -161,6 +161,38 @@ public static class PathTools
         return string.IsNullOrEmpty(name) ? path : name;
     }
 
+    /// <summary>
+    /// The plain form of an extended-length path: <c>\\?\C:\x</c> → <c>C:\x</c>,
+    /// <c>\\?\UNC\server\share</c> → <c>\\server\share</c> (also with <c>\\.\</c>). Anything else unchanged.
+    /// </summary>
+    public static string WithoutExtendedPrefix(string path)
+    {
+        if (path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase) || path.StartsWith(@"\\.\UNC\", StringComparison.OrdinalIgnoreCase))
+        {
+            return @"\\" + path[8..];
+        }
+
+        bool extended = path.StartsWith(@"\\?\", StringComparison.Ordinal) || path.StartsWith(@"\\.\", StringComparison.Ordinal);
+        return extended && path.Length >= 6 && char.IsAsciiLetter(path[4]) && path[5] == ':' ? path[4..] : path;
+    }
+
+    /// <summary>
+    /// The folders from the drive or share down to <paramref name="path"/>, in that order, as
+    /// <see cref="ParentOf"/> walks them (<c>E:\a\b</c> → <c>E:\</c>, <c>E:\a</c>, <c>E:\a\b</c>;
+    /// <c>\\server\share\a</c> → <c>\\server\share</c>, <c>\\server\share\a</c>). Empty for an empty path.
+    /// </summary>
+    public static IReadOnlyList<string> AncestorsAndSelf(string path)
+    {
+        var chain = new List<string>();
+        for (string p = path ?? string.Empty; p.Length > 0 && chain.Count < 1024; p = ParentOf(p))
+        {
+            chain.Add(p);
+        }
+
+        chain.Reverse();
+        return chain;
+    }
+
     /// <summary>Parent folder, or an empty string for a root.</summary>
     public static string ParentOf(string path)
     {

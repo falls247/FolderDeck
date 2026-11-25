@@ -96,6 +96,9 @@ public partial class CardView : UserControl
     /// </summary>
     private readonly ItemPointerTracker _pointer;
 
+    /// <summary>One automation element with the item's name, nothing inside (<see cref="ItemViewAutomationPeer"/>).</summary>
+    protected override System.Windows.Automation.Peers.AutomationPeer OnCreateAutomationPeer() => new ItemViewAutomationPeer(this);
+
     public CardView()
     {
         InitializeComponent();

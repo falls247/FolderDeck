@@ -4,6 +4,13 @@ using FolderDeck.Core.Infrastructure;
 namespace FolderDeck.Shell;
 
 /// <summary>
+/// A call of a <see cref="StaWorkerPool"/> that no worker took up within the queue timeout (every
+/// worker is stuck and no more may be created). Unlike the call timeout, nothing ran: trying the same
+/// pool again (a fallback icon) waits as long again.
+/// </summary>
+public sealed class QueueTimeoutException(string message) : TimeoutException(message);
+
+/// <summary>
 /// Dedicated STA worker threads for shell/COM calls (thumbnail extractors may assume STA).
 /// A call that exceeds its timeout is abandoned: the caller gets a <see cref="TimeoutException"/>
 /// and a fresh worker replaces the stuck one (R4). The timeout covers the call itself, not the
@@ -28,6 +35,8 @@ public sealed class StaWorkerPool : IDisposable
     private int _working; // alive and not abandoned
     private int _serial;
     private bool _disposed;
+    private bool _limitLogged;
+    private int _queueTimeoutsLogged;
 
     public StaWorkerPool(int size, string name, ThreadPriority priority = ThreadPriority.Normal)
     {
@@ -73,18 +82,29 @@ public sealed class StaWorkerPool : IDisposable
             }
 
             // Wait for a worker to pick the call up (or for its cancellation), then time the call.
-            await item.Started.Task.WaitAsync(QueueTimeout).ConfigureAwait(false);
+            try
+            {
+                await item.Started.Task.WaitAsync(QueueTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException) when (item.CancelIfNotStarted())
+            {
+                // Still queued (now cancelled, so it does not run for nobody). A worker that took it
+                // just now wins: the call is timed below like any other.
+                if (Interlocked.Increment(ref _queueTimeoutsLogged) == 1)
+                {
+                    AppLog.Warn($"{_name}: calls waited {QueueTimeout.TotalSeconds:F0} s for a worker (all stuck); such calls give up without a warning each.");
+                }
+
+                throw new QueueTimeoutException($"{_name}: no worker took the call within {QueueTimeout}.");
+            }
+
             object? result = await item.Completion.Task.WaitAsync(timeout.Value).ConfigureAwait(false);
             return (T)result!;
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex) when (ex is not QueueTimeoutException)
         {
             var worker = item.Worker;
-            if (worker is null)
-            {
-                item.CancelIfNotStarted(); // still queued: don't run it for nobody
-            }
-            else if (!item.Completion.Task.IsCompleted)
+            if (worker is not null && !item.Completion.Task.IsCompleted)
             {
                 AppLog.Warn($"{_name}: a call did not return within {timeout}; worker abandoned.");
                 Abandon(worker);
@@ -112,24 +132,33 @@ public sealed class StaWorkerPool : IDisposable
 
     private void StartWorker()
     {
+        bool logLimit;
+        int working;
         lock (_gate)
         {
-            if (_disposed || _alive >= MaxThreads)
+            // Once per pool: stuck calls hold every thread, so no replacement until one returns.
+            logLimit = !_disposed && _alive >= MaxThreads && !_limitLogged;
+            _limitLogged |= logLimit;
+            working = _working;
+            if (!_disposed && _alive < MaxThreads)
             {
-                return;
+                _alive++;
+                _working++;
+                var worker = new Worker();
+                var thread = new Thread(() => Loop(worker))
+                {
+                    IsBackground = true,
+                    Name = $"{_name}-{Interlocked.Increment(ref _serial)}",
+                    Priority = _priority,
+                };
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
             }
+        }
 
-            _alive++;
-            _working++;
-            var worker = new Worker();
-            var thread = new Thread(() => Loop(worker))
-            {
-                IsBackground = true,
-                Name = $"{_name}-{Interlocked.Increment(ref _serial)}",
-                Priority = _priority,
-            };
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
+        if (logLimit)
+        {
+            AppLog.Warn($"{_name}: thread limit ({MaxThreads}) reached by stuck calls; {working} of {_size} workers left.");
         }
     }
 
@@ -217,13 +246,17 @@ public sealed class StaWorkerPool : IDisposable
             return true;
         }
 
-        public void CancelIfNotStarted()
+        /// <summary>Cancels the call if no worker has taken it; false when one has (or it was cancelled before).</summary>
+        public bool CancelIfNotStarted()
         {
             if (Interlocked.CompareExchange(ref _state, 2, 0) == 0)
             {
                 Completion.TrySetCanceled(token);
                 Started.TrySetResult();
+                return true;
             }
+
+            return false;
         }
     }
 }

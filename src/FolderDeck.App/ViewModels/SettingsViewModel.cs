@@ -159,7 +159,10 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public int AutoRefreshSeconds { get; private set; }
 
-    /// <summary>Checks the numeric fields; sets <see cref="Error"/> when they are out of range.</summary>
+    /// <summary>The field that <see cref="Error"/> is about (the name of its text property), or null: the window shows its tab and focuses it.</summary>
+    public string? ErrorField { get; private set; }
+
+    /// <summary>Checks the numeric fields; sets <see cref="Error"/> and <see cref="ErrorField"/> when they are out of range.</summary>
     public bool Validate()
     {
         // The interval counts only while 一定の間隔で更新 is chosen; off, an invalid field keeps the old value.
@@ -168,24 +171,28 @@ public sealed partial class SettingsViewModel : ObservableObject
         if (AutoRefresh && !secondsOk)
         {
             Error = $"自動更新の間隔は {AppSettings.AutoRefreshSecondsMin}〜{AppSettings.AutoRefreshSecondsMax} の整数（秒）で入力してください。";
+            ErrorField = nameof(AutoRefreshSecondsText);
             return false;
         }
 
         if (!int.TryParse(RecentLimitText.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int recent) || recent is < 10 or > 500)
         {
             Error = "最近の履歴の表示件数は 10〜500 の整数で入力してください。";
+            ErrorField = nameof(RecentLimitText);
             return false;
         }
 
         if (!int.TryParse(FrequentLimitText.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int frequent) || frequent is < 10 or > 200)
         {
             Error = "よく使う項目の表示件数は 10〜200 の整数で入力してください。";
+            ErrorField = nameof(FrequentLimitText);
             return false;
         }
 
         if (!int.TryParse(ThumbCacheMbText.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int cacheMb) || cacheMb is < 0 or > AppSettings.ThumbCacheMbMax)
         {
             Error = $"画像サムネイルのキャッシュ上限は 0〜{AppSettings.ThumbCacheMbMax} の整数（MB）で入力してください。";
+            ErrorField = nameof(ThumbCacheMbText);
             return false;
         }
 
@@ -198,6 +205,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
 
         Error = null;
+        ErrorField = null;
         return true;
     }
 

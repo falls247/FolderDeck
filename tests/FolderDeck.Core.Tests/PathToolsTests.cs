@@ -21,6 +21,17 @@ public class PathToolsTests
         Assert.Equal(expected, PathTools.CleanInput(input));
     }
 
+    [Theory]
+    [InlineData(@"E:\仕事\案件", new[] { @"E:\", @"E:\仕事", @"E:\仕事\案件" })]
+    [InlineData(@"E:\", new[] { @"E:\" })]
+    [InlineData(@"\\nas\share\a b", new[] { @"\\nas\share", @"\\nas\share\a b" })]
+    [InlineData(@"\\wsl.localhost\Ubuntu\home", new[] { @"\\wsl.localhost\Ubuntu", @"\\wsl.localhost\Ubuntu\home" })]
+    [InlineData("", new string[0])]
+    public void AncestorsAndSelf_RunFromTheDriveOrShareDown(string path, string[] expected)
+    {
+        Assert.Equal(expected, PathTools.AncestorsAndSelf(path));
+    }
+
     [Fact]
     public void CleanInput_ExpandsEnvironmentVariables()
     {

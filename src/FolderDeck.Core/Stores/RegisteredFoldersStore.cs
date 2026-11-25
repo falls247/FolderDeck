@@ -85,7 +85,7 @@ public sealed class RegisteredFoldersStore : StoreBase
                     continue;
                 }
 
-                _folders.Add(new RegisteredFolder(dto.Id, dto.Path, dto.AddedAt ?? string.Empty));
+                _folders.Add(new RegisteredFolder(dto.Id, dto.Path, dto.AddedAt ?? string.Empty, string.IsNullOrWhiteSpace(dto.FileId) ? null : dto.FileId));
             }
         }
     }
@@ -177,6 +177,72 @@ public sealed class RegisteredFoldersStore : StoreBase
     }
 
     /// <summary>
+    /// Remembers the identity of a registered folder (<see cref="FolderIdentity"/>; null forgets it).
+    /// Saves only when it changed. False when the id is not registered.
+    /// </summary>
+    public bool SetFileId(string id, string? fileId)
+    {
+        bool changed = false;
+        lock (Gate)
+        {
+            int i = _folders.FindIndex(f => f.Id == id);
+            if (i >= 0 && !string.Equals(_folders[i].FileId, fileId, StringComparison.Ordinal))
+            {
+                _folders[i] = _folders[i] with { FileId = fileId };
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            RequestSave();
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// A folder was renamed or moved (<paramref name="oldPath"/> → <paramref name="newPath"/>): every
+    /// registered folder at or below it follows (same id, same place in the order, same identity). A
+    /// folder whose new path is registered already stays as it is (no duplicates). Returns how many
+    /// moved; saves when any did.
+    /// </summary>
+    public int Repath(string oldPath, string newPath)
+    {
+        int moved = 0;
+        lock (Gate)
+        {
+            string from = KeyOf(oldPath);
+            string to = KeyOf(newPath);
+            for (int i = 0; i < _folders.Count; i++)
+            {
+                var folder = _folders[i];
+                string? rebased = PathRebase.Rebase(KeyOf(folder.Path), from, to);
+                if (rebased is null || string.Equals(rebased, folder.Path, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                bool taken = _folders.Any(f => !ReferenceEquals(f, folder) && PathTools.PathEquals(KeyOf(f.Path), rebased));
+                if (taken && !PathTools.PathEquals(KeyOf(folder.Path), rebased))
+                {
+                    continue;
+                }
+
+                _folders[i] = folder with { Path = rebased };
+                moved++;
+            }
+        }
+
+        if (moved > 0)
+        {
+            RequestSave();
+        }
+
+        return moved;
+    }
+
+    /// <summary>
     /// Drag &amp; drop order: the listed ids first, in that order; folders not listed keep their
     /// relative order after them. Unknown ids are ignored. Saves only when the order changed.
     /// </summary>
@@ -230,7 +296,7 @@ public sealed class RegisteredFoldersStore : StoreBase
         var doc = new RegisteredFoldersDocument
         {
             Version = 1,
-            Folders = _folders.Select(f => new RegisteredFolderDto { Id = f.Id, Path = f.Path, AddedAt = f.AddedAt }).ToList(),
+            Folders = _folders.Select(f => new RegisteredFolderDto { Id = f.Id, Path = f.Path, AddedAt = f.AddedAt, FileId = f.FileId }).ToList(),
         };
         return JsonFile.Serialize(doc);
     }

@@ -333,6 +333,41 @@ public class RegisteredFoldersStoreTests
     }
 }
 
+public class RegisteredFoldersFollowTests
+{
+    [Fact]
+    public void Repath_MovesTheFolderAndTheOnesBelow_KeepsIdsOrderAndIdentity()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("registered_folders.json");
+        string a = tmp.MakeDir("A");
+        string below = tmp.MakeDir("A", "below");
+        string taken = tmp.MakeDir("A", "taken");
+        string other = tmp.MakeDir("AB");
+        string newTaken = tmp.MakeDir("A2", "taken");
+        var store = new RegisteredFoldersStore(file, FakeClock.Fixed());
+        store.Load();
+        store.RegisterMany([below, a, other, taken, newTaken], RealFileSystem.Instance);
+        var before = store.Folders;
+        Assert.True(store.SetFileId(before[1].Id, "v1:a"));
+        Assert.False(store.SetFileId(before[1].Id, "v1:a")); // unchanged: no save
+
+        Assert.Equal(2, store.Repath(a, tmp.Combine("A2")));
+        store.Flush();
+
+        var reloaded = new RegisteredFoldersStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        var after = reloaded.Folders;
+        Assert.Equal(before.Select(f => f.Id), after.Select(f => f.Id));
+        Assert.Equal(
+            [tmp.Combine("A2", "below"), tmp.Combine("A2"), other, taken, newTaken], // "taken" is registered at its new path already: it stays
+            after.Select(f => f.Path));
+        Assert.Equal("v1:a", after[1].FileId);
+        Assert.Null(after[0].FileId);
+        Assert.Single(Regex.Matches(File.ReadAllText(file), "file_id")); // unknown ids are not written
+    }
+}
+
 public class HistoryStoreTests
 {
     [Fact]
@@ -553,6 +588,27 @@ public class SettingsStoreTests
         reloaded.Load();
         Assert.Empty(reloaded.Current.OpenTabs!);
         Assert.Equal(-1, reloaded.Current.SelectedTab);
+    }
+
+    [Fact]
+    public void OpenTabs_KeepTheFolderIdentity()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        store.Update(s => s.OpenTabs =
+        [
+            new OpenTabSetting { Kind = "folder", Root = @"E:\仕事", Path = "2026", FileId = "v1:x" },
+            new OpenTabSetting { Kind = "recent" },
+        ]);
+        store.Flush();
+
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        Assert.Equal(["v1:x", null], reloaded.Current.OpenTabs!.Select(t => t.FileId));
+        Assert.Equal("v1:x", reloaded.Current.Clone().OpenTabs![0].FileId);
+        Assert.Single(Regex.Matches(File.ReadAllText(file), "file_id"));
     }
 
     [Fact]

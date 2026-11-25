@@ -70,27 +70,32 @@ public sealed record ItemRef(string Path, bool IsFolder, NavLocation? Target, It
     public bool IsDisabled { get; init; }
 }
 
+/// <summary>
+/// One crumb of the address bar: a folder of the shown path (or a fixed tab's list) and what follows
+/// it, so the crumbs read as the path (<c>E:\</c> <c>仕事</c> <c>\</c> <c>案件</c>).
+/// </summary>
 public sealed class BreadcrumbItem
 {
-    public BreadcrumbItem(string text, NavLocation? target, string? toolTip, bool isLast)
+    public BreadcrumbItem(string text, NavLocation target, string? toolTip, string separator, bool isLast)
     {
         Text = text;
         Target = target;
         ToolTip = toolTip;
+        Separator = separator;
         IsLast = isLast;
     }
 
     public string Text { get; }
 
-    public NavLocation? Target { get; }
+    public NavLocation Target { get; }
 
+    /// <summary>The folder's full path (none for a fixed tab's list).</summary>
     public string? ToolTip { get; }
 
+    /// <summary>Shown after the crumb: <c>\</c> between folders, <c>›</c> after a fixed tab's list, nothing after the last one or a root that ends in <c>\</c>.</summary>
+    public string Separator { get; }
+
     public bool IsLast { get; }
-
-    public bool IsEllipsis => Target is null;
-
-    public bool ShowSeparator => !IsLast;
 }
 
 public static class TabKinds
