@@ -882,7 +882,7 @@ public class SettingsStoreTests
     }
 
     [Fact]
-    public void OpenOnDoubleClick_DefaultsOff_MissingKeyIsOff_RoundTrips()
+    public void OpenOnDoubleClick_DefaultsOn_MissingKeyIsOn_SavedOffStaysOff()
     {
         using var tmp = new TempDir();
         string file = tmp.Combine("settings.json");
@@ -890,16 +890,16 @@ public class SettingsStoreTests
         var store = new SettingsStore(file, FakeClock.Fixed());
         store.Load();
         Assert.True(store.Current.ShowHidden);
-        Assert.False(store.Current.OpenOnDoubleClick);
+        Assert.True(store.Current.OpenOnDoubleClick);
 
-        store.Update(s => s.OpenOnDoubleClick = true);
+        store.Update(s => s.OpenOnDoubleClick = false);
         store.Flush();
-        Assert.Contains("\"open_on_double_click\": true", File.ReadAllText(file));
+        Assert.Contains("\"open_on_double_click\": false", File.ReadAllText(file));
 
         var reloaded = new SettingsStore(file, FakeClock.Fixed());
         reloaded.Load();
-        Assert.True(reloaded.Current.OpenOnDoubleClick);
-        Assert.True(reloaded.Current.Clone().OpenOnDoubleClick);
+        Assert.False(reloaded.Current.OpenOnDoubleClick);
+        Assert.False(reloaded.Current.Clone().OpenOnDoubleClick);
     }
 
     [Fact]

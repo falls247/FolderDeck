@@ -165,4 +165,33 @@ public class PathToolsTests
         Assert.Equal(".pdf", PathTools.ExtensionOf("C:\\a\\B.PDF"));
         Assert.Equal(string.Empty, PathTools.ExtensionOf("C:\\a\\noext"));
     }
+
+    [Theory]
+    [InlineData(@"C:\temp", "/mnt/c/temp")]
+    [InlineData("C:temp", "/mnt/c/temp")]
+    [InlineData(@"E:\資料\a b\", "/mnt/e/資料/a b")]
+    [InlineData(@"C:\", "/mnt/c")]
+    [InlineData("\"D:/x/y\"", "/mnt/d/x/y")]
+    [InlineData(@"\\?\C:\long", "/mnt/c/long")]
+    [InlineData(@"\\wsl.localhost\Ubuntu\home\me", "/home/me")]
+    [InlineData(@"\\wsl$\Ubuntu", "/")]
+    [InlineData("//wsl.localhost/Ubuntu/home/me", "/home/me")]
+    [InlineData("/mnt/c/temp", @"C:\temp")]
+    [InlineData("/mnt/e/資料/a b/", @"E:\資料\a b")]
+    [InlineData("/mnt/c", @"C:\")]
+    public void WslPath_Toggle_ConvertsBothWays(string input, string expected)
+    {
+        Assert.Equal(expected, WslPath.Toggle(input));
+    }
+
+    [Theory]
+    [InlineData(@"\\server\share\dir")]
+    [InlineData("/home/me")]
+    [InlineData("/mnt/wsl/x")]
+    [InlineData(@"dir\sub")]
+    [InlineData("")]
+    public void WslPath_Toggle_NullWhenNoOtherForm(string input)
+    {
+        Assert.Null(WslPath.Toggle(input));
+    }
 }
