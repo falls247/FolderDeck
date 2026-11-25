@@ -161,6 +161,21 @@ public static class PathTools
         return string.IsNullOrEmpty(name) ? path : name;
     }
 
+    /// <summary>
+    /// The plain form of an extended-length path: <c>\\?\C:\x</c> → <c>C:\x</c>,
+    /// <c>\\?\UNC\server\share</c> → <c>\\server\share</c> (also with <c>\\.\</c>). Anything else unchanged.
+    /// </summary>
+    public static string WithoutExtendedPrefix(string path)
+    {
+        if (path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase) || path.StartsWith(@"\\.\UNC\", StringComparison.OrdinalIgnoreCase))
+        {
+            return @"\\" + path[8..];
+        }
+
+        bool extended = path.StartsWith(@"\\?\", StringComparison.Ordinal) || path.StartsWith(@"\\.\", StringComparison.Ordinal);
+        return extended && path.Length >= 6 && char.IsAsciiLetter(path[4]) && path[5] == ':' ? path[4..] : path;
+    }
+
     /// <summary>Parent folder, or an empty string for a root.</summary>
     public static string ParentOf(string path)
     {

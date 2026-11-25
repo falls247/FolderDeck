@@ -32,6 +32,7 @@ public sealed partial class TabViewModel : ObservableObject
 {
     private static readonly TimeSpan RecentCheckTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan SlowAfter = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan IdentityTimeout = TimeSpan.FromSeconds(2);
 
     private readonly AppServices _services;
     private readonly DispatcherTimer _slowTimer = new() { Interval = SlowAfter };
@@ -55,6 +56,13 @@ public sealed partial class TabViewModel : ObservableObject
     /// while nothing was loaded there yet. Paste goes only into a folder that is really on screen.
     /// </summary>
     private NavLocation? _loadedLocation;
+
+    /// <summary>
+    /// The <see cref="FolderIdentity"/> of the folder at <see cref="_identityLocation"/>: taken after
+    /// each load that listed it, kept when the location follows a rename (<see cref="MoveTo"/>).
+    /// </summary>
+    private string? _identity;
+    private NavLocation? _identityLocation;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsTop), nameof(ShowClearHistory), nameof(ShowFilter), nameof(CanGoUp), nameof(Title), nameof(ToolTipText))]
@@ -237,8 +245,13 @@ public sealed partial class TabViewModel : ObservableObject
 
     public string SortModeText => SortModeLabels.Short(SortMode);
 
-    /// <summary>「1つ上へ」: inside a folder of a fixed tab, or below the root of a folder tab.</summary>
-    public bool CanGoUp => IsFolderTab ? Location.Rel.Length > 0 : IsFixedTab && !IsTop;
+    /// <summary>
+    /// 「1つ上へ」: inside a folder of a fixed tab (its root goes back to the list), anywhere in a folder
+    /// tab but at the root of a drive or share (above its root folder, the parent becomes the root).
+    /// </summary>
+    public bool CanGoUp => IsFolderTab
+        ? Location.Rel.Length > 0 || PathTools.ParentOf(Location.Root).Length > 0
+        : IsFixedTab && !IsTop;
 
     /// <summary>Text of the button on the error banner (a folder tab has no list to go back to).</summary>
     public string BackText => IsFolderTab ? "タブを閉じる" : IsFixedTab ? TabKinds.Title(Kind) + "の一覧に戻る" : string.Empty;
@@ -276,6 +289,33 @@ public sealed partial class TabViewModel : ObservableObject
 
     /// <summary>Absolute path of the current location, or null at the top level.</summary>
     public string? CurrentFolderPath => ResolvePath(Location);
+
+    /// <summary>The identity of the folder at <paramref name="location"/> when it is known (see <see cref="FolderIdentity"/>), else null.</summary>
+    public string? IdentityOf(NavLocation location) => _identityLocation == location ? _identity : null;
+
+    /// <summary>The identity of the shown folder, when it is known.</summary>
+    public string? Identity => IdentityOf(Location);
+
+    /// <summary>Gives the folder at <paramref name="location"/> its identity (a restored tab, a 登録フォルダ opened in a new tab).</summary>
+    public void SetIdentity(NavLocation location, string? identity)
+    {
+        _identityLocation = identity is null ? null : location;
+        _identity = identity;
+    }
+
+    /// <summary>
+    /// The shown folder (or one of its ancestors) was renamed or moved: the tab goes to where it is
+    /// now, still the same folder, so it keeps its identity. The caller reloads it or marks it stale.
+    /// </summary>
+    public void MoveTo(NavLocation location)
+    {
+        string? identity = Identity;
+        Location = location;
+        if (identity is not null)
+        {
+            SetIdentity(location, identity);
+        }
+    }
 
     public string? ResolveRootPath(string root) => root.Length == 0 ? null : root;
 
@@ -404,7 +444,31 @@ public sealed partial class TabViewModel : ObservableObject
         ApplyFolderSummary(listing, cards.Count);
         _shownListing = listing;
         LastListedAt = Environment.TickCount64;
+        _ = CaptureIdentityAsync(Location, path);
         return LoadOutcome.Ok;
+    }
+
+    /// <summary>
+    /// Takes the identity of the folder just listed (off the UI thread, 2 s at most), for following it
+    /// if it is renamed or moved later. Kept only while the tab is still there; a failure keeps none.
+    /// </summary>
+    private async Task CaptureIdentityAsync(NavLocation location, string path)
+    {
+        try
+        {
+            string? identity = await Task.Run(() => FolderIdentity.Capture(path)).WaitAsync(IdentityTimeout);
+            if (Location == location)
+            {
+                SetIdentity(location, identity);
+            }
+        }
+        catch (TimeoutException)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"Identity of {path} could not be read", ex);
+        }
     }
 
     /// <summary>The card of one entry of the shown folder.</summary>

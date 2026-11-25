@@ -18,7 +18,11 @@ public static class ItemKinds
     };
 }
 
-public sealed record RegisteredFolder(string Id, string Path, string AddedAt);
+/// <summary>
+/// One 登録フォルダ. <paramref name="FileId"/> is the folder's <see cref="Paths.FolderIdentity"/> (null until
+/// it was seen): it finds the folder again after a rename or move outside the app.
+/// </summary>
+public sealed record RegisteredFolder(string Id, string Path, string AddedAt, string? FileId = null);
 
 /// <summary>One usage record (history.json). <see cref="RecentOpens"/> is newest first, at most 10.</summary>
 public sealed record HistoryItem(
@@ -48,6 +52,10 @@ public sealed class RegisteredFolderDto
     public string? Path { get; set; }
 
     public string? AddedAt { get; set; }
+
+    /// <summary>Not written while unknown: the file stays as imgtool writes it.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? FileId { get; set; }
 }
 
 public sealed class HistoryDocument

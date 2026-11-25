@@ -106,39 +106,54 @@
                 <Button Grid.Column="0" Style="{StaticResource Btn.Icon}" Content="&#xE74A;" ToolTip="1つ上へ（Backspace）"
                         Command="{Binding GoUpCommand}" />
 
-                <!-- breadcrumb -->
-                <ItemsControl Grid.Column="1" x:Name="Crumbs" ItemsSource="{Binding SelectedTab.Breadcrumbs}" Margin="4,0,8,0"
-                              VerticalAlignment="Center" ClipToBounds="True" Focusable="False">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate DataType="{x:Type vm:BreadcrumbItem}">
-                            <StackPanel Orientation="Horizontal">
-                                <Button x:Name="Crumb" Style="{StaticResource Btn.Crumb}" ToolTip="{Binding ToolTip}"
-                                        Command="{Binding DataContext.NavigateCrumbCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                        CommandParameter="{Binding}">
-                                    <TextBlock x:Name="CrumbText" Text="{Binding Text}" TextTrimming="CharacterEllipsis" MaxWidth="260" />
-                                </Button>
-                                <TextBlock x:Name="Dots" Text="…" Margin="6,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}"
-                                           ToolTip="{Binding ToolTip}" Visibility="Collapsed" />
-                                <TextBlock x:Name="Sep" Text="/" Margin="2,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}" />
-                            </StackPanel>
-                            <DataTemplate.Triggers>
-                                <DataTrigger Binding="{Binding IsLast}" Value="True">
-                                    <Setter TargetName="Sep" Property="Visibility" Value="Collapsed" />
-                                    <Setter TargetName="CrumbText" Property="FontWeight" Value="SemiBold" />
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding IsEllipsis}" Value="True">
-                                    <Setter TargetName="Crumb" Property="Visibility" Value="Collapsed" />
-                                    <Setter TargetName="Dots" Property="Visibility" Value="Visible" />
-                                </DataTrigger>
-                            </DataTemplate.Triggers>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                <!--
+                  Address bar: the breadcrumb in a frame. A press on its blank part (or Ctrl+L / Alt+D)
+                  opens the edit box with the folder's path selected: Enter goes to a typed path or runs a
+                  command in the folder (cmd, wsl, powershell, …), Esc gives up. The crumbs stay laid out
+                  (Hidden) under the box, so the bar keeps its height.
+                -->
+                <Border Grid.Column="1" x:Name="AddressBar" Margin="4,0,8,0" VerticalAlignment="Center" CornerRadius="6" BorderThickness="1"
+                        Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}"
+                        MouseLeftButtonUp="OnAddressBarClick">
+                    <Grid>
+                        <Border Background="Transparent" Cursor="IBeam"
+                                ToolTip="クリックでパスを入力・コピー（Ctrl + L）。cmd・wsl・powershell などと入力すると、このフォルダで開きます" />
+                        <ItemsControl x:Name="Crumbs" ItemsSource="{Binding SelectedTab.Breadcrumbs}" Margin="1,0" HorizontalAlignment="Left"
+                                      VerticalAlignment="Center" ClipToBounds="True" Focusable="False">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:BreadcrumbItem}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button x:Name="Crumb" Style="{StaticResource Btn.Crumb}" ToolTip="{Binding ToolTip}"
+                                                Command="{Binding DataContext.NavigateCrumbCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                CommandParameter="{Binding}">
+                                            <TextBlock x:Name="CrumbText" Text="{Binding Text}" TextTrimming="CharacterEllipsis" MaxWidth="260" />
+                                        </Button>
+                                        <TextBlock x:Name="Dots" Text="…" Margin="6,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}"
+                                                   ToolTip="{Binding ToolTip}" Visibility="Collapsed" />
+                                        <TextBlock x:Name="Sep" Text="/" Margin="2,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}" />
+                                    </StackPanel>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsLast}" Value="True">
+                                            <Setter TargetName="Sep" Property="Visibility" Value="Collapsed" />
+                                            <Setter TargetName="CrumbText" Property="FontWeight" Value="SemiBold" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsEllipsis}" Value="True">
+                                            <Setter TargetName="Crumb" Property="Visibility" Value="Collapsed" />
+                                            <Setter TargetName="Dots" Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBox x:Name="AddressEdit" Style="{StaticResource AddressBox}" Visibility="Hidden"
+                                 AutomationProperties.Name="アドレス" PreviewKeyDown="OnAddressKeyDown" LostKeyboardFocus="OnAddressLostFocus" />
+                    </Grid>
+                </Border>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,12,0">
                     <TextBlock Text="{Binding SelectedTab.CountText}" Foreground="{DynamicResource Brush.Muted}"

@@ -38,6 +38,13 @@ public sealed class OpenTabSetting
     public string Root { get; set; } = string.Empty;
 
     public string Path { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The <see cref="Paths.FolderIdentity"/> of the folder the tab shows (null while unknown, and at a
+    /// top level): the tab follows the folder when it was renamed or moved while the app was closed.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? FileId { get; set; }
 }
 
 /// <summary>Ids of the sidebar's collapsible sections (<c>sidebar_collapsed_sections</c>).</summary>
@@ -377,6 +384,7 @@ public sealed class AppSettings
             tab.Kind = kind;
             tab.Root = blankRoot ? string.Empty : tab.Root;
             tab.Path = blankRoot ? string.Empty : tab.Path ?? string.Empty;
+            tab.FileId = blankRoot || string.IsNullOrWhiteSpace(tab.FileId) ? null : tab.FileId;
             kept.Add(tab);
         }
 
@@ -456,7 +464,7 @@ public sealed class AppSettings
             Maximized = Window.Maximized,
         };
         copy.Locations = Locations?.ToDictionary(kv => kv.Key, kv => new LocationSetting { Root = kv.Value.Root, Path = kv.Value.Path });
-        copy.OpenTabs = OpenTabs?.Select(t => new OpenTabSetting { Kind = t.Kind, Root = t.Root, Path = t.Path }).ToList();
+        copy.OpenTabs = OpenTabs?.Select(t => new OpenTabSetting { Kind = t.Kind, Root = t.Root, Path = t.Path, FileId = t.FileId }).ToList();
         copy.SidebarCollapsedSections = SidebarCollapsedSections?.ToList();
         copy.DetailsColumns = DetailsColumns is null ? null : new Dictionary<string, double>(DetailsColumns);
         copy.SortModes = SortModes is null ? null : new Dictionary<string, string>(SortModes);

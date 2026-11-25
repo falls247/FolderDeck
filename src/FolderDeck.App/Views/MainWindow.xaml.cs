@@ -79,7 +79,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _rename = new RenameEditor(this, text => vm.Message.Info(text));
         _rename.Ended += committed =>
         {
-            _cascade.SetEditing(false);
+            _cascade.SetEditing(IsAddressEditing);
             if (!committed)
             {
                 RunPendingActivation();
@@ -102,6 +102,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
             {
                 ApplySidebarLayout();
                 _sidebarJustToggled = true;
+            }
+            else if (e.PropertyName == nameof(MainViewModel.SelectedTab))
+            {
+                EndAddressEdit(); // the path in the box is the other tab's
             }
         };
 
@@ -356,6 +360,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 e.Handled = true;
                 _vm.GoUpCommand.Execute(null);
                 break;
+            case Key.L when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
+            case Key.D when Keyboard.Modifiers == ModifierKeys.Alt && _vm.HasTab:
+            case Key.F4 when Keyboard.Modifiers == ModifierKeys.None && _vm.HasTab:
+                e.Handled = true; // like Explorer: the address bar's path, selected
+                BeginAddressEdit();
+                break;
             case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
                 e.Handled = true; // like Explorer: closes the shown tab, whatever its kind
                 _vm.CloseTabCommand.Execute(_vm.SelectedTab);
@@ -387,6 +397,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
         // A press anywhere else commits the name being edited (first: the branches below may handle
         // the press). The items have no focus to take, so a lost focus alone would not end it.
         _rename.CommitIfOutside(e.OriginalSource);
+        if (IsAddressEditing && !RenameEditor.IsWithin(e.OriginalSource as DependencyObject, AddressEdit))
+        {
+            EndAddressEdit();
+        }
 
         if (e.ChangedButton == MouseButton.Left && _sidebarJustToggled)
         {
@@ -1372,6 +1386,179 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
         _drivesReadAt = now;
         _ = _vm.DriveList.RefreshAsync(recheck: false);
+    }
+
+    // ---- the address bar ------------------------------------------------------------------------
+
+    /// <summary>The address bar shows its edit box (the path, to type over or copy).</summary>
+    private bool IsAddressEditing => AddressEdit.Visibility == Visibility.Visible;
+
+    /// <summary>The tab whose path the edit box holds: when it moves, the edit ends.</summary>
+    private TabViewModel? _addressTab;
+
+    /// <summary>The edit box is being closed (its lost focus must not close it a second time).</summary>
+    private bool _addressEnding;
+
+    /// <summary>
+    /// Counts the openings and closings of the edit box: an Enter belongs to the one it was pressed in
+    /// (a later box is not closed by it, a box closed meanwhile drops what it asked for).
+    /// </summary>
+    private int _addressSession;
+
+    /// <summary>The session whose Enter is being handled (-1: none): another Enter of that session waits for it (one terminal per Enter).</summary>
+    private int _addressCommittingSession = -1;
+
+    /// <summary>A press on the blank part of the address bar (a crumb's own click is handled by its button).</summary>
+    private void OnAddressBarClick(object sender, MouseButtonEventArgs e)
+    {
+        if (!e.Handled && !IsAddressEditing && e.ChangedButton == MouseButton.Left)
+        {
+            e.Handled = true;
+            BeginAddressEdit();
+        }
+    }
+
+    /// <summary>
+    /// Opens the address bar's edit box with the shown folder's path, all of it selected: typing
+    /// replaces it, Ctrl+C (or the box's menu) copies it. At a top list the box starts empty.
+    /// </summary>
+    private void BeginAddressEdit()
+    {
+        if (!_vm.HasTab || _rename.IsOpen || ActiveList.IsMarqueeRunning)
+        {
+            return;
+        }
+
+        _cascade.SetEditing(true); // no hover opens a list over the items, and Esc reaches the box
+        if (!IsAddressEditing)
+        {
+            _addressSession++;
+            _addressTab = _vm.SelectedTab;
+            _addressTab.PropertyChanged += OnAddressTabChanged;
+            AddressEdit.Text = _addressTab.CurrentFolderPath ?? string.Empty;
+            AddressEdit.Visibility = Visibility.Visible;
+            Crumbs.Visibility = Visibility.Hidden;
+            AddressBar.SetResourceReference(Border.BorderBrushProperty, "Brush.Accent");
+        }
+
+        AddressEdit.Focus();
+        AddressEdit.SelectAll();
+    }
+
+    /// <summary>Closes the edit box (what was typed is dropped); the keys go back to the list.</summary>
+    private void EndAddressEdit()
+    {
+        if (!IsAddressEditing || _addressEnding)
+        {
+            return;
+        }
+
+        _addressEnding = true;
+        _addressSession++;
+        try
+        {
+            if (_addressTab is not null)
+            {
+                _addressTab.PropertyChanged -= OnAddressTabChanged;
+                _addressTab = null;
+            }
+
+            if (AddressEdit.IsKeyboardFocusWithin && IsActive)
+            {
+                RenameEditor.FocusWindowItself(this); // Backspace, Delete, Ctrl+C act on the list again
+            }
+
+            AddressEdit.Visibility = Visibility.Hidden;
+            Crumbs.Visibility = Visibility.Visible;
+            AddressBar.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
+            _cascade.SetEditing(_rename.IsOpen);
+        }
+        finally
+        {
+            _addressEnding = false;
+        }
+    }
+
+    /// <summary>The tab of the edit box moved (a navigation, a reload that followed a rename): its path in the box is stale.</summary>
+    private void OnAddressTabChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(TabViewModel.Location))
+        {
+            EndAddressEdit();
+        }
+    }
+
+    private void OnAddressKeyDown(object sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Enter:
+                e.Handled = true;
+                if (!e.IsRepeat && _addressCommittingSession != _addressSession)
+                {
+                    _ = CommitAddressAsync(AddressEdit.Text);
+                }
+
+                break;
+            case Key.Escape:
+                e.Handled = true;
+                EndAddressEdit();
+                break;
+        }
+    }
+
+    /// <summary>Enter: goes to the typed path or runs the command. When that fails (said on the message line) the box stays, with the text selected.</summary>
+    private async Task CommitAddressAsync(string text)
+    {
+        int session = _addressSession;
+        _addressCommittingSession = session;
+        bool done;
+        try
+        {
+            done = await _vm.GoToAddressAsync(text, () => session == _addressSession);
+        }
+        finally
+        {
+            if (_addressCommittingSession == session)
+            {
+                _addressCommittingSession = -1;
+            }
+        }
+
+        if (!IsAddressEditing || session != _addressSession)
+        {
+            return; // ended meanwhile (Esc, another tab, a press elsewhere, the tab moved)
+        }
+
+        if (done)
+        {
+            EndAddressEdit();
+        }
+        else
+        {
+            AddressEdit.Focus();
+            AddressEdit.SelectAll();
+        }
+    }
+
+    private void OnAddressLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (!IsAddressEditing || _addressEnding)
+        {
+            return;
+        }
+
+        if (e.NewFocus is DependencyObject next && (RenameEditor.IsWithin(next, AddressEdit) || RenameEditor.IsInContextMenu(next)))
+        {
+            return; // the box's own parts, or its menu (切り取り / コピー / 貼り付け): focus comes back
+        }
+
+        if (e.NewFocus is null && !IsActive)
+        {
+            return; // another window took over (to copy a path from it): the edit waits for the return
+        }
+
+        EndAddressEdit();
     }
 
     // ---- IMainView ----------------------------------------------------------------------------

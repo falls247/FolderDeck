@@ -66,6 +66,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     private static readonly TimeSpan RegisteredCheckTimeout = TimeSpan.FromSeconds(2);
 
+    /// <summary>How long a search for a renamed or moved folder may take (<see cref="FolderIdentity.Locate"/>).</summary>
+    private static readonly TimeSpan LocateTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long the address bar waits for the disk to say what a typed path is.</summary>
+    private static readonly TimeSpan AddressCheckTimeout = TimeSpan.FromSeconds(5);
+
     private readonly AppServices _services;
     private readonly HashSet<TabViewModel> _restoring = [];
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
@@ -248,7 +254,8 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 if (located)
                 {
-                    AddFolderTab(new NavLocation(TabKind.Folder, entry.Root, entry.Path));
+                    var location = new NavLocation(TabKind.Folder, entry.Root, entry.Path);
+                    AddFolderTab(location).SetIdentity(location, entry.FileId);
                 }
 
                 continue;
@@ -263,6 +270,7 @@ public sealed partial class MainViewModel : ObservableObject
             if (located)
             {
                 tab.Location = new NavLocation(kind, entry.Root, entry.Path);
+                tab.SetIdentity(tab.Location, entry.FileId);
                 _restoring.Add(tab);
             }
 
@@ -285,7 +293,7 @@ public sealed partial class MainViewModel : ObservableObject
         bool tabs = _tabsRestored;
         int selectedTab = Tabs.IndexOf(SelectedTab); // -1: no tab is open
         var openTabs = Tabs
-            .Select(t => new OpenTabSetting { Kind = TabKinds.ToSetting(t.Kind), Root = t.Location.Root, Path = t.Location.Rel })
+            .Select(t => new OpenTabSetting { Kind = TabKinds.ToSetting(t.Kind), Root = t.Location.Root, Path = t.Location.Rel, FileId = t.Identity })
             .ToList();
         _services.Stores.Settings.Update(s =>
         {
@@ -473,8 +481,9 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>The same folder, however the two split it into a root and a path below it (a tab that went above its root folder).</summary>
     private static bool SameLocation(NavLocation a, NavLocation b) =>
-        PathTools.PathEquals(a.Root, b.Root) && string.Equals(a.Rel, b.Rel, StringComparison.OrdinalIgnoreCase);
+        PathTools.PathEquals(PathTools.Combine(a.Root, a.Rel), PathTools.Combine(b.Root, b.Rel));
 
     /// <summary>
     /// Closes a tab of any kind (× / middle click / Ctrl + W). When it was the shown one, the tab to
@@ -551,7 +560,13 @@ public sealed partial class MainViewModel : ObservableObject
             return Task.CompletedTask;
         }
 
-        var target = loc.Rel.Length > 0 ? loc with { Rel = PathTools.ParentRel(loc.Rel) } : NavLocation.Top(loc.Tab);
+        // Above the root of a folder tab (a 登録フォルダ, a folder opened from the sidebar), its parent
+        // becomes the tab's root; a fixed tab goes back to its list.
+        NavLocation target = loc.Rel.Length > 0
+            ? loc with { Rel = PathTools.ParentRel(loc.Rel) }
+            : SelectedTab.IsFolderTab
+                ? new NavLocation(TabKind.Folder, PathTools.ParentOf(loc.Root), string.Empty)
+                : NavLocation.Top(loc.Tab);
         return NavigateAsync(target, NavMode.New);
     }
 
@@ -695,7 +710,22 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task<LoadOutcome> LoadTabAsync(TabViewModel tab)
     {
+        var location = tab.Location;
         var outcome = await tab.LoadAsync();
+        int generation = tab.LoadGeneration;
+
+        // Not found: the folder may have been renamed or moved. The tab follows it when its identity
+        // finds it, and lists it there. A check of the 登録フォルダ may move the tab first (before this
+        // load ended, or while it looked for its folder): listed there too, unless the user went on
+        // meanwhile (a navigation starts a load of its own: the generation moved).
+        if (outcome == LoadOutcome.NotFound && !tab.IsTop
+            && (tab.Location != location
+                || await FollowMovedFolderAsync(tab)
+                || (tab.Location != location && tab.LoadGeneration == generation)))
+        {
+            outcome = await tab.LoadAsync();
+        }
+
         if (_restoring.Remove(tab) && outcome is LoadOutcome.NotFound or LoadOutcome.Error && !tab.IsTop)
         {
             // The remembered location is gone: show the tab's top level instead (§5.5).
@@ -734,6 +764,300 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     private void SaveLocations() => SaveState(null);
+
+    // ---- the address bar ----------------------------------------------------------------------
+
+    /// <summary>
+    /// Enter in the address bar: a folder is shown in this tab, a file opens, anything else runs as a
+    /// command with the shown folder as its current directory (<c>cmd</c>, <c>wsl</c>, <c>code .</c>;
+    /// at a top list or a missing folder in the user's folder), as in Explorer. Returns false when the
+    /// edit box should stay open with the text (nothing at that path, the program did not start:
+    /// said on the message line).
+    /// </summary>
+    public async Task<bool> GoToAddressAsync(string typed, Func<bool>? stillWanted = null)
+    {
+        if (!HasTab)
+        {
+            return true;
+        }
+
+        var tab = SelectedTab;
+        var location = tab.Location;
+        string? shown = tab.BannerText is null ? tab.FolderTargetPath : null; // a folder that is not there is no place to start in
+        AddressTarget target;
+        try
+        {
+            target = await Task.Run(() => AddressInput.Resolve(typed, shown, _services.FileSystem.GetKind)).WaitAsync(AddressCheckTimeout);
+        }
+        catch (TimeoutException)
+        {
+            if (stillWanted?.Invoke() == false || !ReferenceEquals(tab, SelectedTab))
+            {
+                return true; // given up meanwhile: nothing to say about it
+            }
+
+            Message.Warning("応答がありません。ネットワークの接続とパスを確かめてください。");
+            return false;
+        }
+
+        if (stillWanted?.Invoke() == false || !ReferenceEquals(tab, SelectedTab) || tab.Location != location)
+        {
+            return true; // given up (Esc) or the user went elsewhere meanwhile: what was typed is not wanted here any more
+        }
+
+        switch (target.Action)
+        {
+            case AddressAction.None:
+                return true;
+            case AddressAction.NotFound:
+                Message.Info($"見つかりません：{target.Path}");
+                return false;
+            case AddressAction.OpenFolder:
+                await NavigateAsync(AddressLocation(tab, target.Path!), NavMode.New, recordPath: target.Path);
+                return true;
+            case AddressAction.OpenFile:
+                await OpenFileAsync(target.Path!, null);
+                return true;
+            default:
+                return await RunFromAddressAsync(target, shown);
+        }
+    }
+
+    /// <summary>
+    /// Where a typed folder goes in <paramref name="tab"/>: below the tab's root when it is inside it
+    /// (the breadcrumb keeps the root), else it becomes the root (of a folder tab, or a folder opened
+    /// inside 最近の履歴 / よく使う項目).
+    /// </summary>
+    private static NavLocation AddressLocation(TabViewModel tab, string path)
+    {
+        var location = tab.Location;
+        return !location.IsTop && PathTools.RelativeTo(location.Root, path) is { } rel
+            ? location with { Rel = rel }
+            : new NavLocation(tab.Kind, path, string.Empty);
+    }
+
+    private async Task<bool> RunFromAddressAsync(AddressTarget target, string? shown)
+    {
+        string folder = shown ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var spec = await Task.Run(() => TerminalCommand.Build(target.Program!, target.Arguments, folder, Environment.SystemDirectory,
+            name => ShellActions.FindProgram(name, excludedFolder: folder)));
+        if (spec.Refusal is not null)
+        {
+            Message.Error(spec.Refusal);
+            return false;
+        }
+
+        var result = await Task.Run(() => ShellActions.Launch(spec));
+        if (!result.Success)
+        {
+            Message.Error(result.Error ?? "実行できませんでした。");
+            return false;
+        }
+
+        if (spec.Note is not null)
+        {
+            Message.Info(spec.Note);
+        }
+        else
+        {
+            Message.Success($"{target.Program} を起動しました。");
+        }
+
+        return true;
+    }
+
+    // ---- following renamed and moved folders --------------------------------------------------
+
+    /// <summary>
+    /// A folder was renamed or moved (<paramref name="oldPath"/> → <paramref name="newPath"/>): the
+    /// 登録フォルダ at or below it and every tab whose location, or a back / forward entry, is at or
+    /// below it follow (in place: same row order, same tab). A tab that moved keeps its folder's
+    /// identity and is listed again when shown; the caller lists the shown one. Pins, the history and
+    /// the manual orders keep their old paths. True when anything moved.
+    /// </summary>
+    private bool ApplyRename(string oldPath, string newPath)
+    {
+        bool moved = false;
+        if (_services.Stores.Registered.Repath(oldPath, newPath) > 0)
+        {
+            RefreshRegistered();
+            moved = true;
+        }
+
+        NavLocation? Rebased(NavLocation location) =>
+            PathRebase.RebaseLocation(location.Root, location.Rel, oldPath, newPath) is { } at
+                ? location with { Root = at.Root, Rel = at.Rel }
+                : null;
+
+        foreach (var tab in AllTabs)
+        {
+            if (Rebased(tab.Location) is { } location)
+            {
+                tab.MoveTo(location);
+                tab.IsStale = true;
+                moved = true;
+            }
+
+            foreach (var stack in new[] { tab.BackStack, tab.ForwardStack })
+            {
+                for (int i = 0; i < stack.Count; i++)
+                {
+                    if (Rebased(stack[i].Location) is { } entry)
+                    {
+                        stack[i] = stack[i] with { Location = entry };
+                    }
+                }
+            }
+        }
+
+        if (moved)
+        {
+            AppLog.Info($"Followed {oldPath} => {newPath}");
+            View?.CloseCascade(); // its rows (and the sidebar row it may hang on) show the old paths
+            SaveLocations();
+        }
+
+        return moved;
+    }
+
+    /// <summary>
+    /// The folder last seen at <paramref name="oldPath"/> was found at <paramref name="newPath"/> by its
+    /// identity: <see cref="ApplyRename"/>. When it looks like an ancestor was renamed in place (the
+    /// names below it are the same), everything below that ancestor follows too, but only when that is
+    /// proven: the old ancestor is gone and an identity known for it (a 登録フォルダ or a tab there) is
+    /// the new folder's. Names alone do not tell a rename from a move into an existing folder whose
+    /// old parent was deleted afterwards.
+    /// </summary>
+    private async Task<bool> FollowAsync(string oldPath, string newPath)
+    {
+        var (from, to) = PathRebase.WidestRename(oldPath, newPath);
+        if (!PathTools.PathEquals(from, oldPath))
+        {
+            string? known = IdentityKnownAt(from);
+            bool proven = known is not null
+                && await OffThreadAsync(() => !Directory.Exists(from) && FolderIdentity.Capture(to) == known, RegisteredCheckTimeout);
+            if (!proven)
+            {
+                (from, to) = (oldPath, newPath);
+            }
+        }
+
+        return ApplyRename(from, to);
+    }
+
+    /// <summary>The identity last seen at <paramref name="path"/>: a 登録フォルダ's, or a tab's that shows that folder.</summary>
+    private string? IdentityKnownAt(string path) =>
+        _services.Stores.Registered.FindByPath(path)?.FileId
+        ?? AllTabs.Where(t => t.CurrentFolderPath is { } shown && PathTools.PathEquals(shown, path))
+            .Select(t => t.Identity)
+            .FirstOrDefault(identity => identity is not null);
+
+    /// <summary>
+    /// The folder of <paramref name="tab"/> is not found: looked for by the identity it had there, or
+    /// by the identity of the 登録フォルダ that holds it (the tab was opened from it, or below it).
+    /// Found, the tab and everything else at or below the old path follow. True when the tab moved
+    /// (the caller lists it again).
+    /// </summary>
+    private async Task<bool> FollowMovedFolderAsync(TabViewModel tab)
+    {
+        var location = tab.Location;
+        int generation = tab.LoadGeneration;
+        if (location.IsTop || tab.CurrentFolderPath is not { } oldPath)
+        {
+            return false;
+        }
+
+        (string From, string To)? move = null;
+        if (tab.IdentityOf(location) is { } identity && await LocateAsync(identity, oldPath) is { } found)
+        {
+            move = (oldPath, found);
+        }
+        else if (RegisteredHolding(oldPath) is { FileId: { } rootIdentity } registered
+            && await OffThreadAsync(() => !Directory.Exists(registered.Path), RegisteredCheckTimeout) // still there: its rename explains nothing
+            && await LocateAsync(rootIdentity, registered.Path) is { } foundRoot)
+        {
+            move = (registered.Path, foundRoot);
+        }
+
+        if (move is not { } m || tab.Location != location
+            || PathRebase.RebaseLocation(location.Root, location.Rel, m.From, m.To) is null)
+        {
+            return false;
+        }
+
+        await FollowAsync(m.From, m.To);
+        if (tab.Location == location || tab.LoadGeneration != generation)
+        {
+            return false; // nothing moved it, or the user went elsewhere meanwhile (that load is theirs)
+        }
+
+        Message.Info($"フォルダの名前か場所が変わっていたため、新しい場所を開きました：{tab.CurrentFolderPath}");
+        return true;
+    }
+
+    /// <summary>The deepest 登録フォルダ with a known identity at or above <paramref name="path"/>.</summary>
+    private RegisteredFolder? RegisteredHolding(string path) =>
+        _services.Stores.Registered.Folders
+            .Where(f => f.FileId is not null && PathTools.RelativeTo(f.Path, path) is not null)
+            .MaxBy(f => f.Path.Length);
+
+    /// <summary>
+    /// A 登録フォルダ was found missing: looked for by its identity. Found, it (and what else was at or
+    /// below its old path) follows, and its row is replaced by one at the new path. True when it moved.
+    /// </summary>
+    private async Task<bool> FollowRegisteredAsync(SidebarItemViewModel item)
+    {
+        var registered = _services.Stores.Registered;
+        if (registered.FindById(item.Id) is not { FileId: { } identity } folder || !PathTools.PathEquals(folder.Path, item.Path)
+            || await LocateAsync(identity, folder.Path) is not { } found)
+        {
+            return false;
+        }
+
+        if (registered.FindById(item.Id) is not { } now || !PathTools.PathEquals(now.Path, folder.Path))
+        {
+            return false; // moved by another check meanwhile, or unregistered
+        }
+
+        if (!await FollowAsync(folder.Path, found))
+        {
+            return false;
+        }
+
+        Message.Info($"登録フォルダ「{PathTools.DisplayName(folder.Path)}」の名前か場所が変わっていたため、新しい場所に合わせました：{found}");
+        return true;
+    }
+
+    /// <summary>Remembers the identity of a 登録フォルダ that was just found where it is registered (saved only when it changed).</summary>
+    private async Task RememberRegisteredIdentityAsync(SidebarItemViewModel item)
+    {
+        string? identity = await OffThreadAsync(() => FolderIdentity.Capture(item.Path), RegisteredCheckTimeout);
+        if (identity is not null && _services.Stores.Registered.FindById(item.Id) is { } folder && PathTools.PathEquals(folder.Path, item.Path))
+        {
+            _services.Stores.Registered.SetFileId(item.Id, identity);
+        }
+    }
+
+    private static Task<string?> LocateAsync(string identity, string lastKnownPath) =>
+        OffThreadAsync(() => FolderIdentity.Locate(identity, lastKnownPath), LocateTimeout);
+
+    /// <summary>Runs blocking file system work on the thread pool; gives up waiting after <paramref name="timeout"/> (default value then).</summary>
+    private static async Task<T?> OffThreadAsync<T>(Func<T> work, TimeSpan timeout)
+    {
+        try
+        {
+            return await Task.Run(work).WaitAsync(timeout);
+        }
+        catch (TimeoutException)
+        {
+            return default;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn("A folder check failed", ex);
+            return default;
+        }
+    }
 
     partial void OnCardSizeChanged(int value)
     {
@@ -1380,6 +1704,11 @@ public sealed partial class MainViewModel : ObservableObject
             case ShellOpOutcome.Failed:
                 Message.Error($"「{card.Name}」の名前を変更できませんでした：{result.Error ?? "不明なエラー"}");
                 return false;
+        }
+
+        if (card.Kind == CardKind.Folder && result.NewPath is { } renamed)
+        {
+            ApplyRename(card.Path, renamed); // the 登録フォルダ and tabs at or below it keep up with it
         }
 
         await ReloadAfterFileChangeAsync();
@@ -2578,6 +2907,14 @@ public sealed partial class MainViewModel : ObservableObject
                 ExistState.Timeout => SidebarItemState.NoResponse,
                 _ => SidebarItemState.Missing,
             };
+            if (item.State == SidebarItemState.Ok)
+            {
+                await RememberRegisteredIdentityAsync(item);
+            }
+            else if (item.State == SidebarItemState.Missing)
+            {
+                await FollowRegisteredAsync(item); // renamed or moved: the row is replaced by one at the new path
+            }
         }
         catch (Exception ex)
         {
@@ -2585,9 +2922,23 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>A click on a 登録フォルダ of the sidebar: opens it in a folder tab.</summary>
-    public Task OpenRegisteredAsync(SidebarItemViewModel item) =>
-        item.IsDisabled ? Task.CompletedTask : OpenFolderTabAsync(item.Target, recordPath: item.Path);
+    /// <summary>
+    /// A click on a 登録フォルダ of the sidebar: opens it in a folder tab. A folder shown as missing is
+    /// looked for first (renamed or moved since it was checked): found, it opens at its new path.
+    /// </summary>
+    public async Task OpenRegisteredAsync(SidebarItemViewModel item)
+    {
+        if (item.State == SidebarItemState.Missing && await FollowRegisteredAsync(item)
+            && Registered.FirstOrDefault(r => r.Id == item.Id) is { } moved)
+        {
+            item = moved;
+        }
+
+        if (!item.IsDisabled)
+        {
+            await OpenFolderTabAsync(item.Target, recordPath: item.Path);
+        }
+    }
 
     /// <summary>
     /// A click on a drive of the PC section: opens its root in a folder tab. Unlike a 登録フォルダ it
@@ -2855,7 +3206,7 @@ public sealed partial class MainViewModel : ObservableObject
                     {
                         _autoRefreshMissing = 0;
                         _autoRefreshMissingPath = null;
-                        await tab.LoadAsync();
+                        await LoadTabAsync(tab); // the banner, unless the folder was renamed or moved: then the tab follows it
                     }
                     else
                     {
