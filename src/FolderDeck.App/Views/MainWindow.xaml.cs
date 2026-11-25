@@ -1511,7 +1511,28 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 e.Handled = true;
                 EndAddressEdit();
                 break;
+            case Key.C when Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift):
+                e.Handled = true;
+                ToggleAddressWslPath();
+                break;
         }
+    }
+
+    /// <summary>
+    /// Ctrl + Shift + C in the box: its text becomes the same place seen from WSL (<c>C:\temp</c> →
+    /// <c>/mnt/c/temp</c>), or back from <c>/mnt/x/…</c>, selected so that Ctrl + C copies it. The
+    /// whole text, not the selection. Text that has no other form stays, said on the message line.
+    /// </summary>
+    private void ToggleAddressWslPath()
+    {
+        if (WslPath.Toggle(AddressEdit.Text) is not { } other)
+        {
+            _vm.Message.Info("WSL のパスに変換できません（ドライブ文字のパス・WSL のフォルダ・/mnt/ドライブ/… だけ）。");
+            return;
+        }
+
+        AddressEdit.Text = other;
+        AddressEdit.SelectAll();
     }
 
     /// <summary>Enter: goes to the typed path or runs the command. When that fails (said on the message line) the box stays, with the text selected.</summary>

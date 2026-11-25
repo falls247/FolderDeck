@@ -210,10 +210,11 @@ public sealed class AppSettings
 
     /// <summary>
     /// Items of a tab (cards, rows of the details list) open on a double click; a single click
-    /// without Ctrl / Shift selects only that item. Off: a single click opens (the default).
-    /// Read at every click, so OK in the settings applies without a restart.
+    /// without Ctrl / Shift selects only that item (the default, as Explorer). Off: a single click opens.
+    /// Read at every click, so OK in the settings applies without a restart. A settings.json that
+    /// already has the key keeps its value (a missing key is on).
     /// </summary>
-    public bool OpenOnDoubleClick { get; set; }
+    public bool OpenOnDoubleClick { get; set; } = true;
 
     /// <summary>
     /// Right-click menu of items: <c>app</c> (the app's own menu) or <c>windows</c> (Explorer's
