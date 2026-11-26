@@ -1186,7 +1186,8 @@ public sealed class CascadeController
         Rect rowRect = ScreenRect(origin);
         var monitor = MonitorOf(rowRect);
 
-        var model = new EntryListViewModel(path, target, _services.Icons, foldersOnly: _anchorItem is { FoldersOnly: true });
+        // FoldersOnly narrows only the first list (the crumb's subfolders); deeper lists show files too, like any cascade.
+        var model = new EntryListViewModel(path, target, _services.Icons, foldersOnly: index == 0 && _anchorItem is { FoldersOnly: true });
         var view = new FlyoutView { DataContext = model };
         double room = monitor.Work.Height; // physical pixels
         if (below)

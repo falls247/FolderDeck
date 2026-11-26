@@ -58,7 +58,10 @@ public interface ICascadeAnchor
     /// </summary>
     bool OpensBelow => false;
 
-    /// <summary>True when every list of the cascade shows folders only (a crumb: the user picks where to go).</summary>
+    /// <summary>
+    /// True when the first list shows folders only (a crumb: the user picks where to go).
+    /// Deeper lists show files too, like any other cascade.
+    /// </summary>
     bool FoldersOnly => false;
 
     /// <summary>
