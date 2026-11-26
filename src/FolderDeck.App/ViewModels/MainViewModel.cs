@@ -121,6 +121,7 @@ public sealed partial class MainViewModel : ObservableObject
         // The stores are loaded before this is created. The sidebar's shape is read here, not in
         // InitializeAsync: the window lays itself out in its constructor, before the first frame.
         var settings = services.Stores.Settings.Current;
+        Message.Placement = MessagePlacements.FromSetting(settings.MessagePosition); // before any message (startup warnings too)
         _sidebarWidth = settings.SidebarWidth;
         _isSidebarCollapsed = settings.SidebarCollapsed;
         _detailsColumns = DetailsColumnRules.Normalize(settings.DetailsColumns);
@@ -3355,6 +3356,7 @@ public sealed partial class MainViewModel : ObservableObject
             View?.ApplyTextScale(after.TextScale);
         }
 
+        Message.Placement = MessagePlacements.FromSetting(after.MessagePosition); // before 設定を保存しました below: it shows in the new place
         _services.ShowHidden = after.ShowHidden;
         if (before.ShowHidden != after.ShowHidden)
         {

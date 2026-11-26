@@ -75,6 +75,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Sidebar toggle + tabs + settings (§5.1): one strip for every open tab (the row keeps its height without any tab) -->
@@ -273,7 +274,8 @@
 
         <!-- Messages, notice, error banner (§5.4, §8.4, §10.2) -->
         <StackPanel Grid.Row="2">
-            <Border Style="{StaticResource MessageBar}" Visibility="{Binding Message.IsVisible, Converter={StaticResource BoolToVis}}">
+            <!-- top: メッセージの表示 = 上 (and all but success while it is 表示しない); the bottom one is under ContentHost -->
+            <Border Style="{StaticResource MessageBar}" Visibility="{Binding Message.ShowsAtTop, Converter={StaticResource BoolToVis}}">
                 <DockPanel>
                     <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="24" Height="22" FontSize="10" Content="&#xE711;"
                             ToolTip="閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
@@ -378,6 +380,16 @@
             </StackPanel>
 
         </Grid>
+
+        <!-- Message line at the bottom of the main area (メッセージの表示 = 下): its own row, so it never covers items -->
+        <Border Grid.Row="4" Style="{StaticResource MessageBar}" Margin="16,6,16,8"
+                Visibility="{Binding Message.ShowsAtBottom, Converter={StaticResource BoolToVis}}">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="24" Height="22" FontSize="10" Content="&#xE711;"
+                        ToolTip="閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
+                <TextBlock Text="{Binding Message.Text}" TextWrapping="Wrap" VerticalAlignment="Center" />
+            </DockPanel>
+        </Border>
       </Grid>
     </Grid>
 </Window>
