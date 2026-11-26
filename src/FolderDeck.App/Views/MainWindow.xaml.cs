@@ -1691,8 +1691,9 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     /// <summary>
     /// Ctrl + Shift + C in the box: its text becomes the same place seen from WSL (<c>C:\temp</c> →
-    /// <c>/mnt/c/temp</c>), or back from <c>/mnt/x/…</c>, selected so that Ctrl + C copies it. The
-    /// whole text, not the selection. Text that has no other form stays, said on the message line.
+    /// <c>/mnt/c/temp</c>), or back from <c>/mnt/x/…</c>, and is copied to the clipboard (either way;
+    /// it stays selected too). The whole text, not the selection. Text that has no other form stays,
+    /// said on the message line, and the clipboard is left alone.
     /// </summary>
     private void ToggleAddressWslPath()
     {
@@ -1704,6 +1705,14 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
         AddressEdit.Text = other;
         AddressEdit.SelectAll();
+        if (ShellActions.CopyPath(other))
+        {
+            _vm.Message.Success(other.StartsWith('/') ? "WSL のパスに変換してコピーしました。" : "Windows のパスに戻してコピーしました。");
+        }
+        else
+        {
+            _vm.Message.Error("パスは変換しましたが、クリップボードにコピーできませんでした。");
+        }
     }
 
     /// <summary>Enter: goes to the typed path or runs the command. When that fails (said on the message line) the box stays, with the text selected.</summary>
