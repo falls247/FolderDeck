@@ -6,6 +6,46 @@
     <!-- The tab strip: every open tab, of any kind. Like Explorer's tabs: click to show, × or middle
          click to close, drag to move. 最近の履歴 / よく使う項目 carry their own icon and the accent
          colour (Brush.Accent); folder tabs the folder colour (Brush.Folder). -->
+    <UserControl.Resources>
+        <!-- ◀ / ▶ of the strip (like Excel's sheet tabs): repeats while held -->
+        <Style x:Key="Btn.TabScroll" TargetType="{x:Type RepeatButton}">
+            <Setter Property="Width" Value="24" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource Brush.Muted}" />
+            <Setter Property="FontFamily" Value="{StaticResource Font.Icons}" />
+            <Setter Property="FontSize" Value="9" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Delay" Value="350" />
+            <Setter Property="Interval" Value="120" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type RepeatButton}">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Surface3}" />
+                                <Setter Property="Foreground" Value="{DynamicResource Brush.Text}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.35" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+    <DockPanel>
+    <!-- Shown only while the tabs do not fit (UpdateArrows). No scroll bar: the wheel (vertical or horizontal) scrolls too. -->
+    <StackPanel x:Name="Arrows" DockPanel.Dock="Left" Orientation="Horizontal" Visibility="Collapsed" Margin="0,0,4,0">
+        <RepeatButton x:Name="LeftArrow" Style="{StaticResource Btn.TabScroll}" Content="&#xEDD9;" ToolTip="左のタブを表示" />
+        <RepeatButton x:Name="RightArrow" Style="{StaticResource Btn.TabScroll}" Content="&#xEDDA;" ToolTip="右のタブを表示" />
+    </StackPanel>
     <ScrollViewer x:Name="Scroller" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" Focusable="False">
         <ItemsControl x:Name="Tabs" ItemsSource="{Binding Tabs}" Focusable="False" Background="Transparent">
             <ItemsControl.ItemsPanel>
@@ -65,4 +105,5 @@
             </ItemsControl.ItemTemplate>
         </ItemsControl>
     </ScrollViewer>
+    </DockPanel>
 </UserControl>
