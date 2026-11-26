@@ -33,11 +33,15 @@ public sealed class SessionMonitor
 
     private static readonly TimeSpan AliveInterval = TimeSpan.FromMinutes(1);
 
+    /// <summary>The working set has to move this much before the memory line is logged again.</summary>
+    private const long MemoryLogStepMb = 64;
+
     private readonly SessionMarker _marker;
     private SessionInfo _info;
     private DispatcherTimer? _alive;
     private long? _sysCloseTick;
     private string? _sessionEnding;
+    private long _loggedWorkingSetMb = -MemoryLogStepMb;
 
     public SessionMonitor(string logDirectory, string version)
     {
@@ -65,6 +69,12 @@ public sealed class SessionMonitor
         _alive.Tick += (_, _) => Touch();
         _alive.Start();
     }
+
+    /// <summary>
+    /// The memory line (<see cref="AppServices.DescribeMemory"/>), set once the services exist: logged
+    /// with the minute's record when the working set moved by <see cref="MemoryLogStepMb"/> since.
+    /// </summary>
+    public Func<string>? DescribeMemory { get; set; }
 
     /// <summary>Logs why <paramref name="window"/> is asked to close.</summary>
     public void Watch(Window window)
@@ -113,6 +123,11 @@ public sealed class SessionMonitor
             ManagedHeapMb = GC.GetTotalMemory(forceFullCollection: false) / (1024 * 1024),
         };
         _marker.Write(_info);
+        if (DescribeMemory is { } describe && Math.Abs(_info.WorkingSetMb - _loggedWorkingSetMb) >= MemoryLogStepMb)
+        {
+            _loggedWorkingSetMb = _info.WorkingSetMb;
+            AppLog.Info(describe());
+        }
     }
 
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)

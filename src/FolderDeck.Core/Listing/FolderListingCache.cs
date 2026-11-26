@@ -5,21 +5,30 @@ namespace FolderDeck.Core.Listing;
 /// <summary>
 /// Folder listings cached per path with a TTL (60 s by default, §7.4). Concurrent requests for the
 /// same path share one enumeration; the enumeration is cancelled once every caller has gone.
+/// Bounded by the number of listings and by their entries in total (<see cref="DefaultMaxTotalEntries"/>);
+/// expired listings (never served again) are dropped at most once per TTL, when a listing is stored.
 /// </summary>
 public sealed class FolderListingCache
 {
     public static readonly TimeSpan DefaultTtl = TimeSpan.FromSeconds(60);
+
+    /// <summary>The entries of every cached listing together (each counted up to a quarter of it), by default.</summary>
+    public const int DefaultMaxTotalEntries = 200_000;
 
     private readonly IFileSystem _fs;
     private readonly Func<bool> _includeHidden;
     private readonly Func<long> _ticks;
     private readonly long _ttlMs;
     private readonly int _maxEntries;
+    private readonly long _maxTotalEntries;
     private readonly VolumeThrottle _throttle;
     private readonly object _gate = new();
     private readonly Dictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, InFlight> _inFlight = new(StringComparer.OrdinalIgnoreCase);
     private long _generation;
+    private long _totalWeight;  // Σ Weight(listing) over _cache: what the entry budget counts
+    private long _totalEntries; // Σ Entries.Count over _cache (diagnostics)
+    private long _lastSweep;    // when expired listings were last dropped
 
     public FolderListingCache(
         IFileSystem fs,
@@ -27,7 +36,8 @@ public sealed class FolderListingCache
         TimeSpan? ttl = null,
         int maxEntries = 1500,
         VolumeThrottle? throttle = null,
-        Func<long>? tickSource = null)
+        Func<long>? tickSource = null,
+        int maxTotalEntries = DefaultMaxTotalEntries)
     {
         _fs = fs;
         _includeHidden = includeHidden;
@@ -35,11 +45,37 @@ public sealed class FolderListingCache
         _maxEntries = Math.Max(16, maxEntries);
         _throttle = throttle ?? new VolumeThrottle();
         _ticks = tickSource ?? (() => Environment.TickCount64);
+        _maxTotalEntries = Math.Max(4, maxTotalEntries);
+        _lastSweep = _ticks();
     }
 
     public IFileSystem FileSystem => _fs;
 
     public bool IncludeHidden => _includeHidden();
+
+    /// <summary>How many listings are cached (diagnostics, tests).</summary>
+    public int CachedListings
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _cache.Count;
+            }
+        }
+    }
+
+    /// <summary>The entries of the cached listings together (diagnostics, tests).</summary>
+    public long CachedEntries
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _totalEntries;
+            }
+        }
+    }
 
     /// <summary>Returns a cached, still-fresh listing without starting any I/O.</summary>
     public bool TryGetFresh(string path, out FolderListing listing)
@@ -69,7 +105,7 @@ public sealed class FolderListingCache
                     return Task.FromResult(entry.Listing);
                 }
 
-                _cache.Remove(path);
+                Drop(path);
             }
 
             bool hidden = _includeHidden();
@@ -97,6 +133,8 @@ public sealed class FolderListingCache
         lock (_gate)
         {
             _cache.Clear();
+            _totalWeight = 0;
+            _totalEntries = 0;
             _generation++;
             foreach (var flight in _inFlight.Values)
             {
@@ -112,7 +150,7 @@ public sealed class FolderListingCache
     {
         lock (_gate)
         {
-            _cache.Remove(path);
+            Drop(path);
             if (_inFlight.Remove(path, out var flight))
             {
                 flight.Detached = true;
@@ -167,10 +205,11 @@ public sealed class FolderListingCache
                 && flight.Generation == _generation
                 && flight.IncludeHidden == _includeHidden())
             {
-                _cache[flight.Path] = new CacheEntry(task.Result, _ticks());
-                if (_cache.Count > _maxEntries)
+                long now = _ticks();
+                Put(flight.Path, task.Result, now);
+                if (_cache.Count > _maxEntries || _totalWeight > _maxTotalEntries || now - _lastSweep > _ttlMs)
                 {
-                    Trim();
+                    Trim(now, keep: flight.Path);
                 }
             }
         }
@@ -178,32 +217,61 @@ public sealed class FolderListingCache
         flight.Cts.Dispose();
     }
 
-    private void Trim()
+    /// <summary>
+    /// What a listing counts for in the entry budget: one huge folder (shown by a tab, which holds its
+    /// listing anyway) counts as a quarter of the budget at most, so it does not make every later
+    /// listing push all the others out.
+    /// </summary>
+    private long Weight(FolderListing listing) => Math.Min(listing.Entries.Count, _maxTotalEntries / 4) + 1;
+
+    /// <summary>Every write to <see cref="_cache"/> goes through here or <see cref="Drop"/> (the totals follow it).</summary>
+    private void Put(string path, FolderListing listing, long now)
     {
-        long now = _ticks();
-        var stale = new List<string>();
-        foreach (var kv in _cache)
+        Drop(path);
+        _cache[path] = new CacheEntry(listing, now);
+        _totalWeight += Weight(listing);
+        _totalEntries += listing.Entries.Count;
+    }
+
+    private void Drop(string path)
+    {
+        if (_cache.Remove(path, out var old))
         {
-            if (now - kv.Value.Ticks > _ttlMs)
-            {
-                stale.Add(kv.Key);
-            }
+            _totalWeight -= Weight(old.Listing);
+            _totalEntries -= old.Listing.Entries.Count;
+        }
+    }
+
+    /// <summary>
+    /// Drops what is expired (callers only ever get fresh listings), then the oldest down to 9/10 of
+    /// both limits — never <paramref name="keep"/>, the listing just stored.
+    /// </summary>
+    private void Trim(long now, string keep)
+    {
+        _lastSweep = now;
+        foreach (string key in _cache.Where(kv => now - kv.Value.Ticks > _ttlMs).Select(kv => kv.Key).ToList())
+        {
+            Drop(key);
         }
 
-        foreach (string key in stale)
-        {
-            _cache.Remove(key);
-        }
-
-        if (_cache.Count <= _maxEntries)
+        if (_cache.Count <= _maxEntries && _totalWeight <= _maxTotalEntries)
         {
             return;
         }
 
-        int remove = _cache.Count - (_maxEntries * 9 / 10);
-        foreach (var kv in _cache.OrderBy(kv => kv.Value.Ticks).Take(remove).ToList())
+        int countTarget = _maxEntries * 9 / 10;
+        long weightTarget = _maxTotalEntries * 9 / 10;
+        foreach (var kv in _cache.OrderBy(kv => kv.Value.Ticks).ToList())
         {
-            _cache.Remove(kv.Key);
+            if (_cache.Count <= countTarget && _totalWeight <= weightTarget)
+            {
+                break;
+            }
+
+            if (!string.Equals(kv.Key, keep, StringComparison.OrdinalIgnoreCase))
+            {
+                Drop(kv.Key);
+            }
         }
     }
 

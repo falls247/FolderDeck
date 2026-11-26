@@ -1,3 +1,6 @@
+using CommunityToolkit.Mvvm.ComponentModel;
+using FolderDeck.Views;
+
 namespace FolderDeck.ViewModels;
 
 public enum TabKind
@@ -74,7 +77,11 @@ public sealed record ItemRef(string Path, bool IsFolder, NavLocation? Target, It
 /// One crumb of the address bar: a folder of the shown path (or a fixed tab's list) and what follows
 /// it, so the crumbs read as the path (<c>E:\</c> <c>仕事</c> <c>\</c> <c>案件</c>).
 /// </summary>
-public sealed class BreadcrumbItem
+/// <summary>
+/// A crumb of the address bar. As an <see cref="ICascadeAnchor"/>, resting on it lists the
+/// subfolders of its folder under it (folders only, picked ones open inside the shown tab).
+/// </summary>
+public sealed partial class BreadcrumbItem : ObservableObject, ICascadeAnchor
 {
     public BreadcrumbItem(string text, NavLocation target, string? toolTip, string separator, bool isLast)
     {
@@ -96,6 +103,33 @@ public sealed class BreadcrumbItem
     public string Separator { get; }
 
     public bool IsLast { get; }
+
+    /// <summary>Set by the cascade while the list under the crumb is showing (the crumb stays highlighted).</summary>
+    [ObservableProperty]
+    private bool _isHoverHeld;
+
+    // The crumb's folder is its tooltip (none for a fixed tab's list or an unknown root: nothing to list).
+    string ICascadeAnchor.Path => ToolTip ?? string.Empty;
+
+    NavLocation? ICascadeAnchor.Target => ToolTip is null ? null : Target;
+
+    public bool IsDisabled => ToolTip is null;
+
+    /// <summary>Folders picked under a crumb go to the shown tab, as the crumb itself does.</summary>
+    public bool OpensInNewTab => false;
+
+    public bool YieldsToModifiers => false;
+
+    /// <summary>The address bar is not the tab's content: a load finishing or an auto refresh leaves the list open.</summary>
+    public bool OutlivesContent => true;
+
+    public bool OpensBelow => true;
+
+    public bool FoldersOnly => true;
+
+    /// <summary>Shows the same as <paramref name="other"/> (the bar keeps its crumbs, and so the list under one, when a reload builds the same path).</summary>
+    public bool SameAs(BreadcrumbItem other) =>
+        Text == other.Text && Target == other.Target && ToolTip == other.ToolTip && Separator == other.Separator && IsLast == other.IsLast;
 }
 
 public static class TabKinds

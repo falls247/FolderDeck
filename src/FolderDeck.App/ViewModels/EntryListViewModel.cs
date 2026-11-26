@@ -127,9 +127,16 @@ public sealed partial class EntryListViewModel : ObservableObject
     [ObservableProperty]
     private bool _countsKnown;
 
-    public EntryListViewModel(string path, NavLocation location, IconCache icons)
+    /// <summary>
+    /// The list shows the folder's subfolders only (the list under a crumb, <see cref="Views.ICascadeAnchor.FoldersOnly"/>).
+    /// The counts in the header stay those of the whole folder.
+    /// </summary>
+    private readonly bool _foldersOnly;
+
+    public EntryListViewModel(string path, NavLocation location, IconCache icons, bool foldersOnly = false)
     {
         _icons = icons;
+        _foldersOnly = foldersOnly;
         Path = path;
         Location = location;
         Title = PathTools.DisplayName(path);
@@ -172,10 +179,11 @@ public sealed partial class EntryListViewModel : ObservableObject
             return;
         }
 
-        var rows = new EntryRowViewModel[listing.Entries.Count];
+        IReadOnlyList<FsEntry> entries = _foldersOnly ? listing.Entries.Where(e => e.IsDirectory).ToList() : listing.Entries;
+        var rows = new EntryRowViewModel[entries.Count];
         for (int i = 0; i < rows.Length; i++)
         {
-            var e = listing.Entries[i];
+            var e = entries[i];
             rows[i] = new EntryRowViewModel(e, Location with { Rel = PathTools.JoinRel(Location.Rel, e.Name) }, _icons);
         }
 
@@ -188,7 +196,7 @@ public sealed partial class EntryListViewModel : ObservableObject
         Rows = rows;
         if (rows.Length == 0)
         {
-            StatusText = "空のフォルダ";
+            StatusText = _foldersOnly && listing.FileCount > 0 ? "サブフォルダはありません" : "空のフォルダ";
             State = ListState.Empty;
         }
         else

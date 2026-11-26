@@ -68,6 +68,18 @@ public sealed class AppServices : IDisposable
         }
     }
 
+    /// <summary>
+    /// One line for app.log: the process's working set and managed heap, and what the two largest
+    /// caches hold (thumbnail LRU, folder listings). Cheap: counters only, no walk.
+    /// </summary>
+    public string DescribeMemory()
+    {
+        const int Mb = 1024 * 1024;
+        return $"memory: ws {Environment.WorkingSet / Mb} MB, managed {GC.GetTotalMemory(forceFullCollection: false) / Mb} MB, "
+            + $"thumbs {Thumbnails.CachedCount} ({Thumbnails.CachedBytes / Mb} MB), "
+            + $"listings {Listings.CachedListings} ({Listings.CachedEntries} entries)";
+    }
+
     public void ClearCaches()
     {
         Listings.Clear();

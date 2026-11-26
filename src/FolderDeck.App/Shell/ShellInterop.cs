@@ -346,6 +346,92 @@ internal static class ShellInterop
         return !PInvoke.MonitorFromRect(r, MONITOR_FROM_FLAGS.MONITOR_DEFAULTTONULL).IsNull;
     }
 
+    /// <summary>
+    /// True when the title bar strip of a window (its top 40 DIPs, at least 100 px wide) lands on
+    /// some monitor: otherwise the window cannot be reached with the mouse. Physical pixels; the
+    /// rule of RestorePlacement at startup and of the check after a display change.
+    /// </summary>
+    public static bool IsTitleStripOnAnyMonitor(double left, double top, double width, double scale) =>
+        IsOnAnyMonitor(new Rect(left, top, Math.Max(100, width), 40 * scale));
+
+    /// <summary>
+    /// The window above all non-topmost windows again (and its owned dialogs with it: no
+    /// SWP_NOOWNERZORDER). Neither moves, resizes nor activates it.
+    /// </summary>
+    public static void RaiseToTop(IntPtr hwnd)
+    {
+        PInvoke.SetWindowPos(
+            new HWND(hwnd),
+            HWND.Null, // HWND_TOP
+            0,
+            0,
+            0,
+            0,
+            SET_WINDOW_POS_FLAGS.SWP_NOMOVE | SET_WINDOW_POS_FLAGS.SWP_NOSIZE | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE);
+    }
+
+    /// <summary>
+    /// One line about a top-level window for the <c>display:</c> log lines: its rectangle (physical
+    /// pixels), WS_EX_TOPMOST, minimized, whether its title strip is on a monitor, the foreground
+    /// window and the first visible window above it in the z-order (with their processes). Never throws.
+    /// </summary>
+    public static unsafe string DescribeWindow(IntPtr hwnd, double scale)
+    {
+        try
+        {
+            var h = new HWND(hwnd);
+            PInvoke.GetWindowRect(h, out RECT r);
+            long exStyle = (long)PInvoke.GetWindowLongPtr(h, WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE);
+            bool topmost = (exStyle & 0x00000008) != 0; // WS_EX_TOPMOST
+            bool onMonitor = IsTitleStripOnAnyMonitor(r.left, r.top, r.right - r.left, scale);
+
+            HWND fg = PInvoke.GetForegroundWindow();
+            uint fgPid = 0;
+            if (!fg.IsNull)
+            {
+                PInvoke.GetWindowThreadProcessId(fg, &fgPid);
+            }
+
+            // Topmost windows (the taskbar) always come first, and cloaked ones (suspended UWP apps)
+            // report visible: neither says our window was left behind. 0x0 = nothing above it.
+            HWND above = PInvoke.GetWindow(h, GET_WINDOW_CMD.GW_HWNDPREV);
+            while (!above.IsNull && IsNotAbove(above, topmost))
+            {
+                above = PInvoke.GetWindow(above, GET_WINDOW_CMD.GW_HWNDPREV);
+            }
+
+            uint abovePid = 0;
+            if (!above.IsNull)
+            {
+                PInvoke.GetWindowThreadProcessId(above, &abovePid);
+            }
+
+            string foreground = (nint)fg == hwnd ? "self" : $"0x{(nint)fg:X} pid {fgPid}";
+            return $"rect {r.left},{r.top},{r.right},{r.bottom}, topmost {topmost}, iconic {(bool)PInvoke.IsIconic(h)}, onMonitor {onMonitor}, "
+                + $"foreground {foreground}, above 0x{(nint)above:X} pid {abovePid} (self pid {Environment.ProcessId})";
+        }
+        catch (Exception ex)
+        {
+            return $"(not described: {ex.GetType().Name})";
+        }
+    }
+
+    private static unsafe bool IsNotAbove(HWND window, bool selfTopmost)
+    {
+        if (!PInvoke.IsWindowVisible(window))
+        {
+            return true;
+        }
+
+        if (!selfTopmost && ((long)PInvoke.GetWindowLongPtr(window, WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE) & 0x00000008) != 0)
+        {
+            return true; // WS_EX_TOPMOST
+        }
+
+        uint cloaked = 0;
+        return PInvoke.DwmGetWindowAttribute(window, Windows.Win32.Graphics.Dwm.DWMWINDOWATTRIBUTE.DWMWA_CLOAKED, &cloaked, sizeof(uint)).Succeeded && cloaked != 0;
+    }
+
     public static unsafe Rect? GetWindowRect(IntPtr hwnd)
     {
         if (PInvoke.GetWindowRect(new HWND(hwnd), out RECT r))

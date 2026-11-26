@@ -106,6 +106,36 @@ public static class ImageDecoder
             : image;
     }
 
+    /// <summary>
+    /// <paramref name="image"/> (frozen) scaled down to <paramref name="width"/> × <paramref name="height"/>,
+    /// frozen: the shell, asked with SIIGBF_BIGGERSIZEOK, returns the size its cache holds, and an
+    /// Office file's embedded thumbnail has its own. The image itself when it is not clearly larger
+    /// (area within 1.2 times) or cannot be scaled. Any thread.
+    /// </summary>
+    public static BitmapSource Shrink(BitmapSource image, int width, int height)
+    {
+        int sourceWidth = image.PixelWidth;
+        int sourceHeight = image.PixelHeight;
+        if (width <= 0 || height <= 0 || sourceWidth <= 0 || sourceHeight <= 0
+            || (long)sourceWidth * sourceHeight * 5 <= (long)width * height * 6)
+        {
+            return image;
+        }
+
+        try
+        {
+            // Straight alpha (and anything not 32-bit) is premultiplied first, as in Decode.
+            bool opaque = image.Format == PixelFormats.Bgr32;
+            BitmapSource source = opaque ? image : ConvertTo(image, PixelFormats.Pbgra32);
+            var scale = new ScaleTransform((double)width / sourceWidth, (double)height / sourceHeight);
+            return ToMemory(ConvertTo(new TransformedBitmap(source, scale), opaque ? PixelFormats.Bgr32 : PixelFormats.Pbgra32));
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or OverflowException or NotSupportedException or System.Runtime.InteropServices.COMException)
+        {
+            return image;
+        }
+    }
+
     /// <summary>Opaque full-color formats; everything else may carry transparency or needs conversion first.</summary>
     private static bool ScalesInCodec(PixelFormat format) =>
         format == PixelFormats.Bgr24 || format == PixelFormats.Bgr32 || format == PixelFormats.Rgb24

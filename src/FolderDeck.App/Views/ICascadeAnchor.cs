@@ -8,7 +8,8 @@ namespace FolderDeck.Views;
 /// <summary>
 /// What a cascade that does not hang on a card is opened from (<see cref="CascadeController.AnchorMouseEnter"/>):
 /// a folder whose list opens in a flyout beside an element of the window. A sidebar row (登録フォルダ,
-/// drive) is one, a folder row of the details list (<see cref="CardAnchor"/>) another; the element
+/// drive) is one, a folder row of the details list (<see cref="CardAnchor"/>) another, a crumb of the
+/// address bar (<see cref="BreadcrumbItem"/>, its list under it) a third; the element
 /// itself is passed separately, so one item can be shown by any view.
 /// </summary>
 public interface ICascadeAnchor
@@ -50,6 +51,22 @@ public interface ICascadeAnchor
     /// while one of them is down. Never true for a sidebar row.
     /// </summary>
     bool YieldsToModifiers { get; }
+
+    /// <summary>
+    /// True when the first list opens under the element (a crumb of the address bar) instead of
+    /// beside it. Deeper lists still open beside their parent list.
+    /// </summary>
+    bool OpensBelow => false;
+
+    /// <summary>True when every list of the cascade shows folders only (a crumb: the user picks where to go).</summary>
+    bool FoldersOnly => false;
+
+    /// <summary>
+    /// True when the cascade does not hang on the tab's content, so changes of that content
+    /// (<see cref="CascadeController.CloseCardCascade"/>) leave it open: a sidebar row
+    /// (<see cref="OpensInNewTab"/>) and a crumb of the address bar, whose folders open inside the tab.
+    /// </summary>
+    bool OutlivesContent => OpensInNewTab;
 }
 
 /// <summary>

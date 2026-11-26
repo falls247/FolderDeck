@@ -1,6 +1,6 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Windows.Interop;
 using System.Windows.Threading;
 using FolderDeck.Core.Infrastructure;
 using FolderDeck.Core.Paths;
@@ -71,7 +71,10 @@ public readonly record struct ShellMenuAppEntry(string Text, bool Enabled, bool 
 /// deliberately not owned by the main window: ownership across threads attaches the input queues,
 /// and a hung extension would then freeze the UI as well. A hung extension therefore costs one
 /// abandoned background thread and a <see cref="ShellMenuOutcome.TimedOut"/> result; an extension
-/// that crashes still takes the process down.
+/// that crashes still takes the process down. The owner is a plain Win32 window, not a WPF
+/// <c>HwndSource</c>: an <c>HwndSource</c> on a new thread registers with WPF's stylus input (a
+/// pen thread shared with the UI thread, which creates and destroys the cascade's popups at the
+/// same moment) and starts WPF's rendering, all inside the build timeout.
 /// </para>
 /// <para>
 /// The entries for delete, rename, cut, copy and paste are removed: the app has its own, and the
@@ -123,9 +126,15 @@ public static class ShellContextMenu
     private const int WM_INITMENUPOPUP = 0x0117;
     private const int WM_MENUCHAR = 0x0120;
 
-    private const int WS_POPUP = unchecked((int)0x80000000);
-    private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int SW_SHOWNORMAL = 1;
+
+    /// <summary>The window class of the invisible owner (see <see cref="Session.CreateOwner"/>).</summary>
+    private const string OwnerClassName = "FolderDeckShellMenuOwner";
+
+    private const int ErrorClassAlreadyExists = 1410;
+
+    /// <summary>A build that took longer than this is logged with the time of each phase.</summary>
+    private const long SlowBuildMs = 1000;
 
     /// <summary><c>HRESULT_FROM_WIN32(ERROR_CANCELLED)</c>: the user backed out of the command (an elevation prompt…).</summary>
     private const int ErrorCancelled = unchecked((int)0x800704C7);
@@ -180,6 +189,12 @@ public static class ShellContextMenu
 
     /// <summary>1 while a menu is being built or shown (not while a finished one still pumps).</summary>
     private static int _open;
+
+    /// <summary>
+    /// Menu threads not ended yet: building, showing, pumping after a command, or abandoned after a
+    /// timeout (still inside an extension). For the logs only.
+    /// </summary>
+    private static int _liveThreads;
 
     /// <summary>
     /// Shows the menu for <paramref name="paths"/> at a screen point (physical pixels) and completes
@@ -500,6 +515,23 @@ public static class ShellContextMenu
         private IContextMenu2? _menu2;
         private IContextMenu3? _menu3;
 
+        /// <summary>The session of this menu thread, for <see cref="OwnerProc"/> (each menu thread runs one session).</summary>
+        [ThreadStatic]
+        private static Session? _current;
+
+        private static readonly object OwnerClassGate = new();
+        private static bool _ownerClassRegistered;
+
+        /// <summary>Kept for the life of the process: the window class calls it through a marshalled pointer.</summary>
+        private static readonly WNDPROC OwnerProcDelegate = OwnerProc;
+
+        // Where the build is, for the logs: the phase is read by the timeout (another thread), the
+        // times of the finished phases only by the menu thread.
+        private readonly Stopwatch _clock = new();
+        private volatile string _phase = "thread";
+        private long _phaseStart;
+        private readonly List<string> _phaseTimes = new(5);
+
         public Session(List<string> paths, int x, int y, bool extended, nint mainWindow, ShellMenuAppEntry[] app, bool background)
         {
             _paths = paths;
@@ -515,11 +547,15 @@ public static class ShellContextMenu
 
         public void Start()
         {
+            _clock.Start();
             _timer = new Timer(_ => OnBuildTimeout(), null, BuildTimeout, Timeout.InfiniteTimeSpan);
+
+            // Counted before the thread starts, so that one that hangs at once is counted too.
+            Interlocked.Increment(ref _liveThreads);
 
             // The task of the thread is not awaited: the result is reported as soon as it is known,
             // while the thread may go on pumping for a command it started.
-            _ = StaThread.RunPumped(
+            var thread = StaThread.RunPumped(
                 "FolderDeck shell menu",
                 dispatcher =>
                 {
@@ -535,11 +571,36 @@ public static class ShellContextMenu
                     Complete(ShellMenuOutcome.Failed, null, ex.Message);
                     return false;
                 });
+            _ = thread.ContinueWith(_ => Interlocked.Decrement(ref _liveThreads), TaskScheduler.Default);
         }
 
         private string Describe() =>
             _background ? $"background of {_paths[0]}"
             : _paths.Count == 1 ? _paths[0] : $"{_paths[0]} (+{_paths.Count - 1})";
+
+        /// <summary>The build goes on to <paramref name="phase"/> (menu thread).</summary>
+        private void EnterPhase(string phase)
+        {
+            long now = _clock.ElapsedMilliseconds;
+            _phaseTimes.Add($"{_phase} {now - _phaseStart}");
+            _phaseStart = now;
+            _phase = phase;
+        }
+
+        /// <summary>
+        /// The build ended (the menu is about to show, or the timeout came first): logged when it was
+        /// slow, with the time of each phase (menu thread).
+        /// </summary>
+        private void EndBuild(bool tooLate)
+        {
+            long built = _clock.ElapsedMilliseconds;
+            _phaseTimes.Add($"{_phase} {built - _phaseStart}");
+            if (built >= SlowBuildMs)
+            {
+                string what = tooLate ? "ready too late" : "slow to build";
+                AppLog.Info($"Shell menu {what}, {built} ms ({string.Join(", ", _phaseTimes)} ms): {Describe()}");
+            }
+        }
 
         private void OnBuildTimeout()
         {
@@ -549,9 +610,78 @@ public static class ShellContextMenu
             }
 
             // The thread is left to itself: when the extension returns after all, it finds the stage
-            // cancelled, shows nothing and cleans up.
-            AppLog.Warn($"Shell menu timed out: {Describe()}");
+            // cancelled, shows nothing and cleans up. The phase tells the app's part (thread, owner)
+            // from the shell's and its extensions' (bind, query, verbs).
+            AppLog.Warn(
+                $"Shell menu timed out in {_phase} after {_clock.ElapsedMilliseconds} ms " +
+                $"(menu threads alive: {Volatile.Read(ref _liveThreads)}): {Describe()}");
             Complete(ShellMenuOutcome.TimedOut, null, TimedOutMessage);
+        }
+
+        /// <summary>
+        /// Creates the invisible owner on the menu thread: a plain Win32 window (see the class
+        /// remarks), its class registered once for the process. Throws when it cannot be created.
+        /// </summary>
+        private unsafe HWND CreateOwner()
+        {
+            HINSTANCE instance = new((nint)PInvoke.GetModuleHandle((PCWSTR)null).Value);
+            fixed (char* className = OwnerClassName)
+            fixed (char* title = "FolderDeck shell menu owner")
+            {
+                lock (OwnerClassGate)
+                {
+                    if (!_ownerClassRegistered)
+                    {
+                        var windowClass = new WNDCLASSEXW
+                        {
+                            cbSize = (uint)Marshal.SizeOf<WNDCLASSEXW>(),
+                            lpfnWndProc = OwnerProcDelegate,
+                            hInstance = instance,
+                            lpszClassName = className,
+                        };
+                        if (PInvoke.RegisterClassEx(in windowClass) == 0
+                            && Marshal.GetLastPInvokeError() is int error and not ErrorClassAlreadyExists)
+                        {
+                            throw new Win32Exception(error);
+                        }
+
+                        _ownerClassRegistered = true;
+                    }
+                }
+
+                // Invisible and empty, placed at the click so that a handler's dialog opens near it.
+                // No parent: see the class remarks.
+                HWND owner = PInvoke.CreateWindowEx(
+                    WINDOW_EX_STYLE.WS_EX_TOOLWINDOW, className, title, WINDOW_STYLE.WS_POPUP,
+                    _x, _y, 0, 0, HWND.Null, HMENU.Null, instance, null);
+                if (owner.IsNull)
+                {
+                    throw new Win32Exception(Marshal.GetLastPInvokeError());
+                }
+
+                return owner;
+            }
+        }
+
+        /// <summary>
+        /// The owner's window procedure: hands the menu messages to the handlers (<see cref="Hook"/>),
+        /// the rest to <c>DefWindowProc</c>. Nothing may escape it (it would end the process).
+        /// </summary>
+        private static LRESULT OwnerProc(HWND hwnd, uint msg, WPARAM wParam, LPARAM lParam)
+        {
+            try
+            {
+                if (_current is { } session && session.Hook(msg, wParam, lParam, out nint result))
+                {
+                    return new LRESULT(result);
+                }
+
+                return PInvoke.DefWindowProc(hwnd, msg, wParam, lParam);
+            }
+            catch (Exception)
+            {
+                return new LRESULT(0);
+            }
         }
 
         /// <summary>
@@ -618,26 +748,16 @@ public static class ShellContextMenu
 
         private unsafe void Run(Dispatcher dispatcher)
         {
-            HwndSource? source = null;
-            HwndSourceHook hook = Hook;
+            EnterPhase("owner");
+            HWND owner = HWND.Null;
             HMENU menu = default;
             var bound = new Bound();
+            _current = this;
             try
             {
-                // Invisible and empty, placed at the click so that a handler's dialog opens near it.
-                // No parent: see the class remarks.
-                var parameters = new HwndSourceParameters("FolderDeck shell menu owner", 0, 0)
-                {
-                    PositionX = _x,
-                    PositionY = _y,
-                    WindowStyle = WS_POPUP,
-                    ExtendedWindowStyle = WS_EX_TOOLWINDOW,
-                    ParentWindow = IntPtr.Zero,
-                };
-                source = new HwndSource(parameters);
-                source.AddHook(hook);
-                var owner = new HWND(source.Handle);
+                owner = CreateOwner();
 
+                EnterPhase("bind");
                 string? bindError = Bind(owner, bound);
                 if (bound.Menu is not { } contextMenu)
                 {
@@ -660,6 +780,7 @@ public static class ShellContextMenu
                 }
 
                 // The count in the return value is not needed: TPM_RETURNCMD and the id range do.
+                EnterPhase("query");
                 HRESULT filled = contextMenu.QueryContextMenu(menu, shellIndex, FirstId, LastId, CMF_NORMAL | (_extended ? CMF_EXTENDEDVERBS : 0u));
                 if (filled.Failed)
                 {
@@ -678,6 +799,7 @@ public static class ShellContextMenu
                     }
                 }
 
+                EnterPhase("verbs");
                 bool anyVerb = RemoveVerbs(contextMenu, menu, extra);
                 if (!anyVerb && (bound.FromItemArray || _background))
                 {
@@ -709,11 +831,13 @@ public static class ShellContextMenu
                 if (Interlocked.CompareExchange(ref _stage, StageShowing, StageBuilding) != StageBuilding)
                 {
                     // The timeout reports this itself; said here too in case this thread is faster.
+                    EndBuild(tooLate: true);
                     Complete(ShellMenuOutcome.TimedOut, null, TimedOutMessage);
                     return;
                 }
 
                 Interlocked.Exchange(ref _timer, null)?.Dispose();
+                EndBuild(tooLate: false);
 
                 int picked;
                 _menu2 = contextMenu as IContextMenu2;
@@ -828,11 +952,15 @@ public static class ShellContextMenu
                 }
 
                 bound.Release();
-                if (source is not null)
+                if (!owner.IsNull)
                 {
-                    source.RemoveHook(hook);
-                    source.Dispose();
+                    // Every way out (an unexpected failure too): the foreground must not stay with
+                    // the invisible owner. Does nothing when the owner does not have it.
+                    GiveForegroundBack(owner);
+                    PInvoke.DestroyWindow(owner);
                 }
+
+                _current = null;
             }
         }
 
@@ -1046,33 +1174,40 @@ public static class ShellContextMenu
         /// Lets the handlers fill and draw their own entries while the menu is tracked (送る,
         /// プログラムから開く, owner-drawn icons).
         /// </summary>
-        private unsafe nint Hook(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+        /// <returns>
+        /// True when the handler took <paramref name="msg"/>; <paramref name="value"/> is then the
+        /// window procedure's result. False: default processing.
+        /// </returns>
+        private unsafe bool Hook(uint msg, WPARAM w, LPARAM l, out nint value)
         {
+            value = 0;
             if (msg != WM_INITMENUPOPUP && msg != WM_DRAWITEM && msg != WM_MEASUREITEM && msg != WM_MENUCHAR)
             {
-                return 0;
+                return false;
             }
 
-            var w = new WPARAM(unchecked((nuint)wParam));
-            var l = new LPARAM(lParam);
             try
             {
                 if (_menu3 is { } menu3)
                 {
                     LRESULT result = default;
-                    menu3.HandleMenuMsg2((uint)msg, w, l, &result);
-                    handled = true;
-                    nint value = result.Value;
+                    menu3.HandleMenuMsg2(msg, w, l, &result);
+                    value = result.Value;
 
                     // "Processed" is TRUE for these two; handlers often leave the result alone.
-                    return value == 0 && (msg == WM_DRAWITEM || msg == WM_MEASUREITEM) ? 1 : value;
+                    if (value == 0 && (msg == WM_DRAWITEM || msg == WM_MEASUREITEM))
+                    {
+                        value = 1;
+                    }
+
+                    return true;
                 }
 
                 if (_menu2 is { } menu2 && msg != WM_MENUCHAR)
                 {
-                    menu2.HandleMenuMsg((uint)msg, w, l);
-                    handled = true;
-                    return msg == WM_INITMENUPOPUP ? 0 : 1;
+                    menu2.HandleMenuMsg(msg, w, l);
+                    value = msg == WM_INITMENUPOPUP ? 0 : 1;
+                    return true;
                 }
             }
             catch (Exception)
@@ -1081,7 +1216,8 @@ public static class ShellContextMenu
                 // Nothing may escape into the window procedure.
             }
 
-            return 0;
+            value = 0;
+            return false;
         }
     }
 }

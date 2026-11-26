@@ -168,6 +168,9 @@ public sealed class CascadeController
     /// <summary>A hover is about to open something (an overlay, a flyout, a preview): a replaced list would leave it on a discarded element.</summary>
     public bool IsHoverPending => _overlayTimer.IsEnabled || _openTimer.IsEnabled || _previewTimer.IsEnabled;
 
+    /// <summary>For the <c>display:</c> log line: what is open and what would keep <see cref="CloseAll"/> from closing it.</summary>
+    public string DiagnosticState => $"cascade open {IsOpen}, levels {_levels.Count}, nativeMenu {_nativeMenu}, dragging {_dragging}";
+
     /// <summary>
     /// A drag started (a card, a row or a preview): the whole cascade disappears at once and nothing
     /// opens on hover until <see cref="EndDrag"/>, which then really closes it. Taking it away at the
@@ -530,12 +533,12 @@ public sealed class CascadeController
     /// <summary>
     /// Closes a cascade that hangs on an item of the shown tab (a card), for reasons that only
     /// concern the tab's content (it scrolled, its items were rebuilt). A cascade opened from outside
-    /// the tab (a sidebar row: <see cref="ICascadeAnchor.OpensInNewTab"/>) is not anchored to the
-    /// content and stays: a tab that finishes loading must not take away the list the user is in.
+    /// the tab (a sidebar row or a crumb: <see cref="ICascadeAnchor.OutlivesContent"/>) is not anchored
+    /// to the content and stays: a tab that finishes loading must not take away the list the user is in.
     /// </summary>
     public void CloseCardCascade()
     {
-        if (_anchorItem is not { OpensInNewTab: true })
+        if (_anchorItem is not { OutlivesContent: true })
         {
             CloseAll();
         }
@@ -1169,22 +1172,32 @@ public sealed class CascadeController
             return;
         }
 
-        OpenFlyout(0, item.Path, target, hover, anchorRect, preferLeft: false, parentRow: null);
+        OpenFlyout(0, item.Path, target, hover, anchorRect, preferLeft: false, parentRow: null, below: item.OpensBelow);
         item.IsHoverHeld = true;
     }
 
     /// <summary>
     /// Opens the flyout of level <paramref name="index"/> next to <paramref name="anchor"/>, at the
-    /// height of <paramref name="origin"/> (the row it hangs at, also what its window is created on: <see cref="OpenOn"/>).
+    /// height of <paramref name="origin"/> (the row it hangs at, also what its window is created on: <see cref="OpenOn"/>),
+    /// or, when <paramref name="below"/> (<see cref="ICascadeAnchor.OpensBelow"/>), under <paramref name="anchor"/>.
     /// </summary>
-    private void OpenFlyout(int index, string path, NavLocation target, FrameworkElement origin, Rect anchor, bool preferLeft, EntryRowViewModel? parentRow)
+    private void OpenFlyout(int index, string path, NavLocation target, FrameworkElement origin, Rect anchor, bool preferLeft, EntryRowViewModel? parentRow, bool below = false)
     {
         Rect rowRect = ScreenRect(origin);
         var monitor = MonitorOf(rowRect);
 
-        var model = new EntryListViewModel(path, target, _services.Icons);
+        var model = new EntryListViewModel(path, target, _services.Icons, foldersOnly: _anchorItem is { FoldersOnly: true });
         var view = new FlyoutView { DataContext = model };
-        view.CardMaxHeight = Math.Max(120, (monitor.Work.Height / monitor.Scale) - WorkMargin);
+        double room = monitor.Work.Height; // physical pixels
+        if (below)
+        {
+            // Under the element; when that room is too short and above is wider, Place puts it above.
+            double under = monitor.Work.Bottom - anchor.Bottom;
+            double over = anchor.Top - monitor.Work.Top;
+            room = (under / monitor.Scale) - FlyoutGap - WorkMargin >= 120 || under >= over ? under : over;
+        }
+
+        view.CardMaxHeight = Math.Max(120, (room / monitor.Scale) - (below ? FlyoutGap : 0) - WorkMargin);
         var popup = new Popup
         {
             AllowsTransparency = true,
@@ -1203,6 +1216,7 @@ public sealed class CascadeController
             RowRect = rowRect,
             AnchorRect = anchor,
             PreferLeft = preferLeft,
+            Below = below,
         };
         _levels.Add(level);
         Wire(level);
@@ -1214,9 +1228,18 @@ public sealed class CascadeController
         // Rough position first, exact position once the popup has a size. The offsets are DIPs of
         // the popup's own DPI, which is the row's monitor's (OpenOn), not the main window's.
         double scale = monitor.Scale;
-        double guessX = (level.PreferLeft ? anchor.Left - ((FlyoutView.CardWidth + FlyoutView.ShadowMargin) * scale) : anchor.Right) / scale;
-        popup.HorizontalOffset = guessX;
-        popup.VerticalOffset = (rowRect.Top / scale) - RowLead - FlyoutView.ShadowMargin;
+        if (below)
+        {
+            popup.HorizontalOffset = (anchor.Left / scale) - FlyoutView.ShadowMargin;
+            popup.VerticalOffset = (anchor.Bottom / scale) + FlyoutGap - FlyoutView.ShadowMargin;
+        }
+        else
+        {
+            double guessX = (level.PreferLeft ? anchor.Left - ((FlyoutView.CardWidth + FlyoutView.ShadowMargin) * scale) : anchor.Right) / scale;
+            popup.HorizontalOffset = guessX;
+            popup.VerticalOffset = (rowRect.Top / scale) - RowLead - FlyoutView.ShadowMargin;
+        }
+
         OpenOn(popup, origin);
 
         _ = LoadLevelAsync(level);
@@ -1268,7 +1291,7 @@ public sealed class CascadeController
             return;
         }
 
-        var placed = Place(level.Popup, level.Flyout, level.Flyout.CardElement, FlyoutView.CardWidth, FlyoutView.ShadowMargin, level.RowRect, level.AnchorRect, level.PreferLeft);
+        var placed = Place(level.Popup, level.Flyout, level.Flyout.CardElement, FlyoutView.CardWidth, FlyoutView.ShadowMargin, level.RowRect, level.AnchorRect, level.PreferLeft, level.Below);
         if (placed is not { } p)
         {
             return;
@@ -1291,10 +1314,11 @@ public sealed class CascadeController
 
     /// <summary>
     /// Moves a popup whose visible card is <paramref name="cardWidth"/> DIP wide next to
-    /// <paramref name="a"/> (the parent's card, or the anchor), <see cref="FlyoutGap"/> away.
+    /// <paramref name="a"/> (the parent's card, or the anchor), <see cref="FlyoutGap"/> away; when
+    /// <paramref name="below"/>, under it with the left edges aligned (above it when the screen ends first).
     /// </summary>
     private (HwndSource Source, int X, int Y, bool Left)? Place(
-        Popup popup, FrameworkElement root, FrameworkElement card, double cardWidth, double shadowMargin, Rect row, Rect a, bool preferLeft)
+        Popup popup, FrameworkElement root, FrameworkElement card, double cardWidth, double shadowMargin, Rect row, Rect a, bool preferLeft, bool below = false)
     {
         if (PresentationSource.FromVisual(root) is not HwndSource source)
         {
@@ -1313,31 +1337,47 @@ public sealed class CascadeController
         double margin = shadowMargin * p;
         double gap = FlyoutGap * s;
 
-        double rightX = a.Right + gap;
-        double leftX = a.Left - gap - w;
-        bool rightFits = rightX + w <= work.Right;
-        bool leftFits = leftX >= work.Left;
         double x;
+        double y;
         bool left;
-        if (preferLeft)
+        if (below)
         {
-            (x, left) = leftFits ? (leftX, true) : rightFits ? (rightX, false) : (a.Right - (OverlapShift * s) - w, true);
+            x = Math.Clamp(a.Left, work.Left, Math.Max(work.Left, work.Right - w));
+            y = a.Bottom + gap;
+            if (y + h > work.Bottom)
+            {
+                double above = a.Top - gap - h;
+                y = above >= work.Top ? above : Math.Max(work.Top, work.Bottom - h);
+            }
+
+            left = false; // deeper lists go right
         }
         else
         {
-            (x, left) = rightFits ? (rightX, false) : leftFits ? (leftX, true) : (a.Left + (OverlapShift * s), false);
-        }
+            double rightX = a.Right + gap;
+            double leftX = a.Left - gap - w;
+            bool rightFits = rightX + w <= work.Right;
+            bool leftFits = leftX >= work.Left;
+            if (preferLeft)
+            {
+                (x, left) = leftFits ? (leftX, true) : rightFits ? (rightX, false) : (a.Right - (OverlapShift * s) - w, true);
+            }
+            else
+            {
+                (x, left) = rightFits ? (rightX, false) : leftFits ? (leftX, true) : (a.Left + (OverlapShift * s), false);
+            }
 
-        x = Math.Clamp(x, work.Left, Math.Max(work.Left, work.Right - w));
-        double y = row.Top - (RowLead * s);
-        if (y + h > work.Bottom)
-        {
-            y = work.Bottom - h;
-        }
+            x = Math.Clamp(x, work.Left, Math.Max(work.Left, work.Right - w));
+            y = row.Top - (RowLead * s);
+            if (y + h > work.Bottom)
+            {
+                y = work.Bottom - h;
+            }
 
-        if (y < work.Top)
-        {
-            y = work.Top;
+            if (y < work.Top)
+            {
+                y = work.Top;
+            }
         }
 
         int wx = (int)Math.Round(x - margin);
@@ -1356,8 +1396,9 @@ public sealed class CascadeController
 
         ShellInterop.MoveWindow(source.Handle, wx, wy);
 
-        // Which way did it actually go? Judge from the real window rectangle and pass it down.
-        if (ShellInterop.GetWindowRect(source.Handle) is { } actual)
+        // Which way did it actually go? Judge from the real window rectangle and pass it down
+        // (a list under its element has no side: its children go right).
+        if (!below && ShellInterop.GetWindowRect(source.Handle) is { } actual)
         {
             double center = actual.Left + (actual.Width / 2);
             left = center < a.Left + (a.Width / 2);
@@ -1908,9 +1949,10 @@ public sealed class CascadeController
                 if (level.KeyRow is { } row)
                 {
                     OnRowClicked(row);
+                    return true;
                 }
 
-                return true;
+                return false; // no row chosen with the keys: Enter is the selection's (MainWindow.HandleSelectionKey closes the cascade)
         }
 
         return false;
@@ -2056,6 +2098,11 @@ public sealed class CascadeController
         if (_suspended)
         {
             return false; // a drag, Explorer's menu or an edit box: nothing waits (StopTimers ran)
+        }
+
+        if (index < 0 && _anchorItem is { OpensBelow: true })
+        {
+            return false; // the list is right under its element, nothing to cross (MenuAim knows side edges only)
         }
 
         FrameworkElement? card = null;
@@ -2276,6 +2323,9 @@ public sealed class CascadeController
         public Rect AnchorRect { get; init; }
 
         public bool PreferLeft { get; init; }
+
+        /// <summary>Under its anchor rather than beside it (<see cref="ICascadeAnchor.OpensBelow"/>, level 0 only).</summary>
+        public bool Below { get; init; }
 
         public bool DirectionLeft { get; set; }
 
