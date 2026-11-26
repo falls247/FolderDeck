@@ -166,6 +166,39 @@ public class CardOrderingTests
         }
     }
 
+    [Fact]
+    public void InsideFolder_ByModified_InterleavesFoldersAndFiles_PinnedKeepSlot()
+    {
+        // base order = listing order (folders first, natural); b is pinned at slot 1
+        Item[] items =
+        [
+            new("a", Folder: true, Modified: T(2)), new("b", Pinned: true, Folder: true, Modified: T(9)),
+            new("c", Folder: true, Modified: T(5)), new("x.txt", Modified: T(3)),
+            new("y.txt", Modified: T(1)), new("none", Folder: true),
+        ];
+        IComparer<Item> For(CardSortMode m) => CardOrdering.InsideFolder<Item>(m, i => i.Folder,
+            CardOrdering.ComparerFor<Item>(m, i => i.Name, i => i.Modified)!);
+        Assert.Equal(["c", "b", "x.txt", "a", "y.txt", "none"],
+            Names(CardOrdering.SortKeepingPinned(items, i => i.Pinned, For(CardSortMode.ModifiedDesc))));
+        Assert.Equal(["y.txt", "b", "a", "x.txt", "c", "none"],
+            Names(CardOrdering.SortKeepingPinned(items, i => i.Pinned, For(CardSortMode.ModifiedAsc))));
+    }
+
+    [Theory]
+    [InlineData(CardSortMode.NameAsc)]
+    [InlineData(CardSortMode.NameDesc)]
+    [InlineData(CardSortMode.SizeAsc)]
+    [InlineData(CardSortMode.SizeDesc)]
+    [InlineData(CardSortMode.TypeAsc)]
+    [InlineData(CardSortMode.TypeDesc)]
+    public void InsideFolder_OtherModes_KeepFoldersFirst(CardSortMode mode)
+    {
+        Item[] items = [new("a.txt", Modified: T(9)), new("z", Folder: true, Modified: T(1)), new("m.bin", Modified: T(5))];
+        var comparer = CardOrdering.InsideFolder<Item>(mode, i => i.Folder,
+            CardOrdering.ComparerFor<Item>(mode, i => i.Name, i => i.Modified)!);
+        Assert.Equal("z", items.OrderBy(i => i, comparer).First().Name);
+    }
+
     [Theory]
     // a new column starts ascending for name / type and descending for modified / size
     [InlineData(CardSortMode.Manual, SortColumn.Name, CardSortMode.NameAsc)]

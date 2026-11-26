@@ -75,6 +75,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Sidebar toggle + tabs + settings (§5.1): one strip for every open tab (the row keeps its height without any tab) -->
@@ -108,7 +109,8 @@
 
                 <!--
                   Address bar: the shown folder's whole path, a crumb per folder (E:\ 仕事 \ 案件; a
-                  fixed tab's list first). A crumb goes to its folder. Too narrow: the first crumbs
+                  fixed tab's list first). A crumb goes to its folder; resting on it lists its subfolders
+                  under it (the cascade, folders only). Too narrow: the first crumbs
                   give way to "…" (TrailPanel), the end of the path stays. A press on the blank part
                   (or Ctrl+L / Alt+D / F4) opens the edit box with the path selected: Enter goes to a
                   typed path or runs a command in the folder (cmd, wsl, powershell, …), Esc gives up.
@@ -137,15 +139,23 @@
                                              last crumb too long for the bar trims its name (TrailPanel measures it narrower) -->
                                         <DockPanel>
                                             <TextBlock DockPanel.Dock="Right" Text="{Binding Separator}" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}" />
-                                            <Button Style="{StaticResource Btn.Crumb}" Padding="4,3" ToolTip="{Binding ToolTip}"
+                                            <!-- resting on it lists its subfolders under it (the cascade: BreadcrumbItem is an anchor) -->
+                                            <Button x:Name="CrumbButton" Style="{StaticResource Btn.Crumb}" Padding="4,3" ToolTip="{Binding ToolTip}"
                                                     Command="{Binding DataContext.NavigateCrumbCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                                    CommandParameter="{Binding}">
+                                                    CommandParameter="{Binding}"
+                                                    MouseEnter="OnCrumbMouseEnter" MouseMove="OnCrumbMouseMove" MouseLeave="OnCrumbMouseLeave"
+                                                    PreviewMouseDown="OnCrumbMouseDown">
                                                 <TextBlock x:Name="CrumbText" Text="{Binding Text}" TextTrimming="CharacterEllipsis" MaxWidth="320" />
                                             </Button>
                                         </DockPanel>
                                         <DataTemplate.Triggers>
                                             <DataTrigger Binding="{Binding IsLast}" Value="True">
                                                 <Setter TargetName="CrumbText" Property="FontWeight" Value="SemiBold" />
+                                            </DataTrigger>
+                                            <!-- the list under it is showing: highlighted as under the pointer, and no tooltip over the list -->
+                                            <DataTrigger Binding="{Binding IsHoverHeld}" Value="True">
+                                                <Setter TargetName="CrumbButton" Property="Background" Value="{DynamicResource Brush.Surface3}" />
+                                                <Setter TargetName="CrumbButton" Property="ToolTipService.IsEnabled" Value="False" />
                                             </DataTrigger>
                                         </DataTemplate.Triggers>
                                     </DataTemplate>
@@ -264,7 +274,8 @@
 
         <!-- Messages, notice, error banner (§5.4, §8.4, §10.2) -->
         <StackPanel Grid.Row="2">
-            <Border Style="{StaticResource MessageBar}" Visibility="{Binding Message.IsVisible, Converter={StaticResource BoolToVis}}">
+            <!-- top: メッセージの表示 = 上 (and all but success while it is 表示しない); the bottom one is under ContentHost -->
+            <Border Style="{StaticResource MessageBar}" Visibility="{Binding Message.ShowsAtTop, Converter={StaticResource BoolToVis}}">
                 <DockPanel>
                     <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="24" Height="22" FontSize="10" Content="&#xE711;"
                             ToolTip="閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
@@ -369,6 +380,16 @@
             </StackPanel>
 
         </Grid>
+
+        <!-- Message line at the bottom of the main area (メッセージの表示 = 下): its own row, so it never covers items -->
+        <Border Grid.Row="4" Style="{StaticResource MessageBar}" Margin="16,6,16,8"
+                Visibility="{Binding Message.ShowsAtBottom, Converter={StaticResource BoolToVis}}">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="24" Height="22" FontSize="10" Content="&#xE711;"
+                        ToolTip="閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
+                <TextBlock Text="{Binding Message.Text}" TextWrapping="Wrap" VerticalAlignment="Center" />
+            </DockPanel>
+        </Border>
       </Grid>
     </Grid>
 </Window>

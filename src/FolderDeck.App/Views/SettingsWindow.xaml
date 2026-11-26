@@ -140,6 +140,18 @@
                     <TextBlock Text="「Windows のメニュー」は、項目と一覧の空いているところの右クリックでエクスプローラーのメニュー（7-Zip・送る・プロパティ、空いているところでは新規作成など）を出し、その上にアプリの項目を並べます。ドライブ・表示中のフォルダがない空いているところ・使えない項目や、エクスプローラーのメニューが 5 秒以内に準備できなかったときは、アプリのメニューを出します（準備できなかった項目は、しばらくアプリのメニューになります）。"
                                Style="{StaticResource Help}" Margin="0,6,0,0" />
 
+                    <TextBlock Text="メッセージの表示" Style="{StaticResource Section}" />
+                    <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3" Background="{DynamicResource Brush.Surface2}"
+                            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="MessagePlacement" Content="上（アドレス欄の下）" IsChecked="{Binding IsMessageTop}" />
+                            <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="MessagePlacement" Content="下（一覧の下）" IsChecked="{Binding IsMessageBottom}" Margin="3,0,0,0" />
+                            <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="MessagePlacement" Content="表示しない" IsChecked="{Binding IsMessageOff}" Margin="3,0,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Text="「～を開きました」「パスをコピーしました」などの操作のメッセージを出す場所です。「表示しない」で出さなくなるのは、操作できたことを知らせるメッセージだけです。操作できなかった理由（見つからない・〜できない・前の操作の途中など）、警告、エラーは上に出します。OK を押すとすぐ切り替わります。"
+                               Style="{StaticResource Help}" Margin="0,6,0,0" />
+
                     <TextBlock Text="エクスプローラー" Style="{StaticResource Section}" />
                     <CheckBox IsChecked="{Binding OpenExplorerInNewTab}">
                         <TextBlock Text="エクスプローラーで表示するとき、開いているエクスプローラーに新しいタブで開く（Windows 11）" TextWrapping="Wrap" />

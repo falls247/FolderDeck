@@ -561,8 +561,10 @@ public class SettingsStoreTests
         Assert.Equal(512, s.ThumbCacheMb);
         Assert.Null(s.RecentClearedAt);
         Assert.Equal(AppSettings.SidebarWidthDefault, s.SidebarWidth);
-        Assert.False(s.AutoRefresh);
+        Assert.True(s.AutoRefresh);
         Assert.Equal(5, s.AutoRefreshSeconds);
+        Assert.True(s.OpenOnDoubleClick);
+        Assert.Equal("top", s.MessagePosition);
     }
 
     private static string Describe(OpenTabSetting tab) => $"{tab.Kind}|{tab.Root}|{tab.Path}";
@@ -926,6 +928,38 @@ public class SettingsStoreTests
         reloaded.Load();
         Assert.False(reloaded.Current.AutoRefresh);
         Assert.Equal(30, reloaded.Current.Clone().AutoRefreshSeconds);
+    }
+
+    [Theory]
+    [InlineData("""{"version":2,"show_hidden":true}""", true)]
+    [InlineData("""{"version":2,"auto_refresh":false}""", false)]
+    public void AutoRefresh_MissingKeyInAnOldFileIsOn_SavedOffStaysOff(string json, bool expected)
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        File.WriteAllText(file, json);
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        Assert.Equal(expected, store.Current.AutoRefresh);
+    }
+
+    [Theory]
+    [InlineData("""{"version":2}""", "top")]
+    [InlineData("""{"version":2,"message_position":" BOTTOM "}""", "bottom")]
+    [InlineData("""{"version":2,"message_position":"off"}""", "off")]
+    [InlineData("""{"version":2,"message_position":"middle"}""", "top")]
+    public void MessagePosition_UnknownOrMissing_IsTop_CaseNormalized(string json, string expected)
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        File.WriteAllText(file, json);
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        Assert.Equal(expected, store.Current.MessagePosition);
+
+        store.Update(s => s.MessagePosition = "bottom");
+        store.Flush();
+        Assert.Contains("\"message_position\": \"bottom\"", File.ReadAllText(file));
     }
 
     [Fact]

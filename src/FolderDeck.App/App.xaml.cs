@@ -54,6 +54,7 @@ public partial class App : Application
         var stores = new DataStores(dataDir, SystemClock.Instance);
         await Task.Run(stores.LoadAll); // JSON I/O off the UI thread (§16)
         _services = new AppServices(stores);
+        _session.DescribeMemory = _services.DescribeMemory;
         AppLog.Info($"startup: data loaded at {Since()}");
 
         // The theme chosen in the settings (until now: Windows' mode) and 文字の大きさ, before any window exists.

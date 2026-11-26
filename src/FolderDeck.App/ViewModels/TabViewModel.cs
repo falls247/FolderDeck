@@ -870,7 +870,8 @@ public sealed partial class TabViewModel : ObservableObject
 
         if (!_baseIsTop)
         {
-            comparer = CardOrdering.FoldersFirst(c => c.IsFolderLike, comparer); // folders stay before files
+            // folders stay before files, except by modified time (they interleave by their own time)
+            comparer = CardOrdering.InsideFolder(SortMode, c => c.IsFolderLike, comparer);
         }
 
         return CardOrdering.SortKeepingPinned(baseOrder, c => c.IsPinned, comparer);
@@ -943,7 +944,14 @@ public sealed partial class TabViewModel : ObservableObject
             }
         }
 
-        Breadcrumbs = items.Select((c, i) => new BreadcrumbItem(c.Text, c.Target, c.Tip, SeparatorAfter(i), i == items.Count - 1)).ToList();
+        var next = items.Select((c, i) => new BreadcrumbItem(c.Text, c.Target, c.Tip, SeparatorAfter(i), i == items.Count - 1)).ToList();
+        if (next.Count != Breadcrumbs.Count || !next.Zip(Breadcrumbs).All(p => p.First.SameAs(p.Second)))
+        {
+            // The same path keeps its crumbs (every load starts here): a crumb is a cascade anchor,
+            // and a replaced one would take the list under it away (MainWindow.DropCrumbs).
+            Breadcrumbs = next;
+        }
+
         AddressText = fullPath;
 
         string SeparatorAfter(int i) =>

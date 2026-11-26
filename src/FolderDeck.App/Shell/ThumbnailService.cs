@@ -127,6 +127,12 @@ public sealed class ThumbnailService : IDisposable
 
     public bool TryGetCached(string key, out ThumbResult result) => _cache.TryGet(key, out result);
 
+    /// <summary>Thumbnails in the memory cache (diagnostics).</summary>
+    public int CachedCount => _cache.Count;
+
+    /// <summary>Their estimated size in bytes (diagnostics).</summary>
+    public long CachedBytes => _cache.Bytes;
+
     public static string KeyOf(string path, DateTime modifiedUtc, long length, int size, ThumbSource source) =>
         $"{path.ToUpperInvariant()}|{modifiedUtc.Ticks}|{length}|{size}|{(int)source}";
 
@@ -193,10 +199,15 @@ public sealed class ThumbnailService : IDisposable
             await Task.Delay(PendingRetryDelay, cancellationToken).ConfigureAwait(false);
             try
             {
-                var image = await _pool.RunAsync(() => ShellInterop.GetShellImage(path, sizePx, ShellThumbFlags), cancellationToken, CallTimeout).ConfigureAwait(false);
-                if (image is not null)
+                var retried = await _pool.RunAsync(
+                    () => ShellInterop.GetShellImage(path, sizePx, ShellThumbFlags) is { } image
+                        ? ShrinkPicture(new ThumbResult(image, ThumbMode.Image), sizePx)
+                        : ThumbResult.Empty,
+                    cancellationToken,
+                    CallTimeout).ConfigureAwait(false);
+                if (retried.Image is not null)
                 {
-                    return (new ThumbResult(image, ThumbMode.Image), true);
+                    return (retried, true);
                 }
             }
             catch (TimeoutException)
@@ -274,7 +285,7 @@ public sealed class ThumbnailService : IDisposable
                     {
                         var produced = Produce(path, source, sizePx, iconPx, out bool shellPending);
                         pending = shellPending;
-                        return produced;
+                        return ShrinkPicture(produced, sizePx);
                     },
                     cancellationToken,
                     CallTimeout).ConfigureAwait(false);
@@ -554,6 +565,39 @@ public sealed class ThumbnailService : IDisposable
         }
     }
 
+    /// <summary>
+    /// A picture from the shell (or an Open XML file's own) at no more than the size the card needs:
+    /// with SIIGBF_BIGGERSIZEOK the shell returns the size its cache holds. Image (cropped to the
+    /// card): the shorter side covers the picture area (<paramref name="sizePx"/> × 4/3, the portrait card's height).
+    /// Shell (shown whole, Margin + Uniform): the longer side that size at most.
+    /// Icons are drawn at their own size and stay as they are. Runs on the shell worker, after
+    /// <see cref="Produce"/> (whose folder test, <see cref="ShellInterop.HasOpaqueCorners"/>, sees the original).
+    /// </summary>
+    private static ThumbResult ShrinkPicture(ThumbResult result, int sizePx)
+    {
+        if (result.Image is not BitmapSource image || result.Mode is not (ThumbMode.Image or ThumbMode.Shell))
+        {
+            return result;
+        }
+
+        int width = image.PixelWidth;
+        int height = image.PixelHeight;
+        // sizePx comes from the card's width only; a portrait card's picture area is 4/3 as tall
+        // (CardShapes.ThumbHeight), so the target covers that height too: never smaller than shown.
+        int areaPx = (int)Math.Ceiling(sizePx * 4.0 / 3);
+        (int w, int h) = result.Mode == ThumbMode.Image
+            ? ThumbSizing.Fit(width, height, areaPx)
+            : FitInside(width, height, areaPx);
+        var shrunk = ImageDecoder.Shrink(image, w, h);
+        return ReferenceEquals(shrunk, image) ? result : new ThumbResult(shrunk, result.Mode);
+    }
+
+    private static (int Width, int Height) FitInside(int width, int height, int sizePx)
+    {
+        double scale = Math.Min(1.0, (double)sizePx / Math.Max(1, Math.Max(width, height)));
+        return (Math.Max(1, (int)Math.Round(width * scale)), Math.Max(1, (int)Math.Round(height * scale)));
+    }
+
     private Task<ThumbResult> FallbackIconAsync(string path, bool isFolder, int iconPx, CancellationToken cancellationToken) =>
         _pool.RunAsync(
             () =>
@@ -585,6 +629,29 @@ public sealed class LruCache<TKey, TValue>
         _maxCount = maxCount;
         _maxBytes = maxBytes;
         _sizeOf = sizeOf;
+    }
+
+    public int Count
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _map.Count;
+            }
+        }
+    }
+
+    /// <summary>The estimated size of what is held.</summary>
+    public long Bytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _bytes;
+            }
+        }
     }
 
     public bool TryGet(TKey key, out TValue value)

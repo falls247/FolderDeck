@@ -1,5 +1,6 @@
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using FolderDeck.Core.Layout;
 
 namespace FolderDeck.ViewModels;
 
@@ -13,7 +14,9 @@ public enum MessageKind
 
 /// <summary>
 /// Message line (§5.4): success and info vanish after 5 s; warnings and errors stay until the next
-/// action.
+/// action. Shown at the top or the bottom of the main area by <see cref="Placement"/> (the setting
+/// メッセージの表示): the view binds <see cref="ShowsAtTop"/> / <see cref="ShowsAtBottom"/>, never
+/// <see cref="IsVisible"/>.
 /// </summary>
 public sealed partial class MessageBarViewModel : ObservableObject
 {
@@ -23,10 +26,28 @@ public sealed partial class MessageBarViewModel : ObservableObject
     private string? _text;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsAtTop), nameof(ShowsAtBottom))]
     private MessageKind _kind;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsAtTop), nameof(ShowsAtBottom))]
     private bool _isVisible;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsAtTop), nameof(ShowsAtBottom))]
+    private MessagePlacement _placement;
+
+    /// <summary>
+    /// The line under the toolbar: for <see cref="MessagePlacement.Top"/>, and for everything but
+    /// success while <see cref="MessagePlacement.Off"/>. Info stays because it also carries the
+    /// reasons an action was refused (見つかりません, 〜できません, 前の操作が終わってから…): a refusal
+    /// is never silent.
+    /// </summary>
+    public bool ShowsAtTop => IsVisible && (Placement == MessagePlacement.Top
+        || (Placement == MessagePlacement.Off && Kind is not MessageKind.Success));
+
+    /// <summary>The line under the items, at the bottom of the main area.</summary>
+    public bool ShowsAtBottom => IsVisible && Placement == MessagePlacement.Bottom;
 
     public MessageBarViewModel()
     {

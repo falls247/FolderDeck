@@ -223,6 +223,13 @@ public sealed class AppSettings
     public string? ItemMenu { get; set; } = ItemMenuStyles.App;
 
     /// <summary>
+    /// Where the message line is shown: <c>top</c> (under the toolbar), <c>bottom</c> (under the
+    /// items) or <c>off</c> (success messages are not shown; info, warnings and errors still are, at
+    /// the top). Applied on OK in the settings, without a restart.
+    /// </summary>
+    public string? MessagePosition { get; set; } = MessagePlacements.Top;
+
+    /// <summary>
     /// Upper limit, in megabytes, of the thumbnail cache kept in the data folder (<c>thumbs</c>);
     /// 0 turns the disk cache off. Read at startup.
     /// </summary>
@@ -231,9 +238,10 @@ public sealed class AppSettings
     /// <summary>
     /// The folder shown is listed again every <see cref="AutoRefreshSeconds"/> and its list is
     /// updated when something changed (off: only F5 and the app's own operations reload it).
-    /// Applied on OK in the settings, without a restart.
+    /// Applied on OK in the settings, without a restart. On by default; a settings.json that already
+    /// has the key keeps its value (a missing key is on).
     /// </summary>
-    public bool AutoRefresh { get; set; }
+    public bool AutoRefresh { get; set; } = true;
 
     /// <summary>The interval of <see cref="AutoRefresh"/>, in seconds (kept while it is off).</summary>
     public int AutoRefreshSeconds { get; set; } = AutoRefreshSecondsDefault;
@@ -447,6 +455,7 @@ public sealed class AppSettings
         Theme = AppThemes.ToSetting(AppThemes.FromSetting(Theme));
         TextScale = ClampTextScale(TextScale);
         ItemMenu = ItemMenuStyles.ToSetting(ItemMenuStyles.FromSetting(ItemMenu));
+        MessagePosition = MessagePlacements.ToSetting(MessagePlacements.FromSetting(MessagePosition));
         RecentLimit = Math.Clamp(RecentLimit, 10, 500);
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
         ThumbCacheMb = Math.Clamp(ThumbCacheMb, 0, ThumbCacheMbMax);

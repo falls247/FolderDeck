@@ -4,6 +4,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using FolderDeck.Core.Infrastructure;
 using FolderDeck.Core.Layout;
 using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
@@ -106,8 +107,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
             else if (e.PropertyName == nameof(MainViewModel.SelectedTab))
             {
                 EndAddressEdit(); // the path in the box is the other tab's
+                WatchCrumbs(vm.SelectedTab); // the other tab's crumbs replace these
             }
         };
+        WatchCrumbs(vm.SelectedTab);
 
         Grid.Scrolled += (_, _) => _cascade.CloseCardCascade();
         Grid.CardSizeStepRequested += step => vm.StepCardSize(step);
@@ -228,8 +231,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             double scale = Math.Max(1.0, System.Windows.Media.VisualTreeHelper.GetDpi(this).DpiScaleX);
             // The title bar strip must land on some monitor, or the window would be unreachable.
-            var strip = new Rect(left * scale, top * scale, Math.Max(100, placement.Width * scale), 40 * scale);
-            visible = ShellInterop.IsOnAnyMonitor(strip);
+            visible = ShellInterop.IsTitleStripOnAnyMonitor(left * scale, top * scale, placement.Width * scale, scale);
             if (visible)
             {
                 WindowStartupLocation = WindowStartupLocation.Manual;
@@ -431,7 +433,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     /// <summary>
     /// The selection keys (not in a text box): Ctrl+A, Esc (after the cascade had its turn),
-    /// Ctrl+C / Ctrl+X / Ctrl+V, Delete and F2 (rename). Copy, cut, delete and rename act on the selection only, never on
+    /// Ctrl+C / Ctrl+X / Ctrl+V, Delete, F2 (rename) and Enter (open). Copy, cut, delete, rename and open act on the selection only, never on
     /// the item under the pointer (nor the row the cascade's keys highlight); a held key repeats
     /// nothing (one paste or one delete confirmation per press). Delete only recycles: Shift+Delete
     /// (Explorer's permanent delete) and Ctrl+Delete are not used. Returns true when the key was used.
@@ -472,6 +474,30 @@ public partial class MainWindow : Window, IMainView, ICardHost
             _cascade.CloseAll(); // as BeforeNavigate: the reload replaces the cascade
             _ = _vm.DeleteAsync(selected);
             return true;
+        }
+
+        if (key == Key.Enter && modifiers == ModifierKeys.None)
+        {
+            // A menu item takes Enter (the app's menu, Explorer's menu being prepared or shown).
+            if (_cascade.IsMenuOpen
+                || (Keyboard.FocusedElement is DependencyObject focused && RenameEditor.IsInContextMenu(focused)))
+            {
+                return false;
+            }
+
+            if (e.IsRepeat)
+            {
+                return true; // a held Enter opens once
+            }
+
+            if (_vm.SelectedItems().Count == 0)
+            {
+                return false; // nothing selected: not used (never the item under the pointer)
+            }
+
+            e.Handled = true; // before a modal confirmation (a program, many items)
+            _cascade.CloseAll(); // as Delete: what opens replaces the cascade
+            return _vm.OpenSelection();
         }
 
         if (modifiers != ModifierKeys.Control || key is not (Key.A or Key.C or Key.X or Key.V))
@@ -1370,6 +1396,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _hook = new MainWindowHook(this);
         _hook.DrivesChanged += () => _ = _vm.DriveList.RefreshAsync(recheck: true);
         _hook.ClipboardChanged += _vm.OnClipboardChanged;
+        _hook.DisplayChanged += OnDisplayChanged;
+        _hook.Activated += OnHookActivated;
     }
 
     /// <summary>
@@ -1387,6 +1415,149 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
         _drivesReadAt = now;
         _ = _vm.DriveList.RefreshAsync(recheck: false);
+    }
+
+    // ---- display changes (a monitor plugged in or out, Win + P, resolution, work area) ------------
+
+    /// <summary>How long after a display change an activation also puts the window on top of the z-order.</summary>
+    private const long RaiseAfterDisplayChangeMs = 120_000;
+
+    /// <summary>When the last display change was reported (null: none yet).</summary>
+    private long? _displayChangedAt;
+
+    /// <summary>The activation after a display change was logged (once per change).</summary>
+    private bool _raiseLogged;
+
+    /// <summary>
+    /// The monitors changed while the app runs (HDMI unplugged or moved to another monitor, a
+    /// projection mode, a resolution, the taskbar). The cause of "the window no longer comes to
+    /// the front" afterwards is not known: one display: line records what is needed to tell, then
+    /// the cascade (topmost popups placed for the old layout) is closed, windows whose title bar is
+    /// on no monitor are brought back, and WPF is made to build its render target again.
+    /// </summary>
+    private void OnDisplayChanged()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        _displayChangedAt = Environment.TickCount64;
+        _raiseLogged = false;
+        AppLog.Info($"display: changed; state {WindowState}, active {IsActive}, enabled {IsEnabled}, render tier {System.Windows.Media.RenderCapability.Tier >> 16}, "
+            + $"{_cascade.DiagnosticState}; main {ShellInterop.DescribeWindow(hwnd, DpiScaleOf(this))}");
+        foreach (Window owned in OwnedWindows)
+        {
+            var ownedHwnd = new WindowInteropHelper(owned).Handle;
+            if (ownedHwnd != IntPtr.Zero)
+            {
+                AppLog.Info($"display: owned {owned.GetType().Name}, state {owned.WindowState}, visible {owned.IsVisible}; {ShellInterop.DescribeWindow(ownedHwnd, DpiScaleOf(owned))}");
+            }
+        }
+
+        _cascade.CloseAll(); // skipped while Explorer's menu or a drag is on (they close it when they end)
+        EnsureOnScreen(this, hwnd, new Point(0, 0)); // the primary monitor holds (0, 0)
+        var main = ShellInterop.GetWindowRect(hwnd);
+        var ownerCenter = main is { } m ? new Point(m.Left + (m.Width / 2), m.Top + (m.Height / 2)) : new Point(0, 0);
+        foreach (Window owned in OwnedWindows)
+        {
+            var ownedHwnd = new WindowInteropHelper(owned).Handle;
+            if (ownedHwnd != IntPtr.Zero && owned.IsVisible)
+            {
+                EnsureOnScreen(owned, ownedHwnd, ownerCenter);
+            }
+        }
+
+        RefreshRendering(hwnd);
+    }
+
+    private static double DpiScaleOf(System.Windows.Media.Visual visual) => Math.Max(1.0, System.Windows.Media.VisualTreeHelper.GetDpi(visual).DpiScaleX);
+
+    /// <summary>
+    /// A normal window whose title bar strip is on no monitor (RestorePlacement's rule) is centred
+    /// in the work area of the monitor nearest to <paramref name="target"/>. Everything in physical
+    /// pixels: Left / Top are DIPs of the window's own monitor and SystemParameters.WorkArea those of
+    /// the primary one, which differ under per-monitor DPI. Maximized and minimized windows are left
+    /// to Windows (moving them would spoil RestoreBounds).
+    /// </summary>
+    private static void EnsureOnScreen(Window window, IntPtr hwnd, Point target)
+    {
+        if (window.WindowState != WindowState.Normal || ShellInterop.GetWindowRect(hwnd) is not { } rect)
+        {
+            return;
+        }
+
+        double scale = DpiScaleOf(window);
+        if (ShellInterop.IsTitleStripOnAnyMonitor(rect.Left, rect.Top, rect.Width, scale))
+        {
+            return;
+        }
+
+        var area = ShellInterop.GetMonitorArea(target);
+        var work = area.Work;
+
+        // Moving to a monitor of another DPI makes Windows scale the window (WM_DPICHANGED): centre the size it will have.
+        double ratio = area.Scale / scale;
+        double width = Math.Min(rect.Width * ratio, work.Width);
+        double height = Math.Min(rect.Height * ratio, work.Height);
+        int x = (int)Math.Round(work.Left + ((work.Width - width) / 2));
+        int y = (int)Math.Round(work.Top + ((work.Height - height) / 2));
+        ShellInterop.MoveWindow(hwnd, x, y);
+        AppLog.Info($"display: {window.GetType().Name} was on no monitor ({rect.Left},{rect.Top}); moved to {x},{y}");
+    }
+
+    /// <summary>
+    /// Makes WPF build the window's render target again: after the output moved to another
+    /// adapter it may stop presenting. One frame is drawn in software. Nothing when the process
+    /// draws in software anyway.
+    /// </summary>
+    private void RefreshRendering(IntPtr hwnd)
+    {
+        if (System.Windows.Media.RenderOptions.ProcessRenderMode == RenderMode.SoftwareOnly
+            || HwndSource.FromHwnd(hwnd) is not { IsDisposed: false, CompositionTarget: { } target }
+            || target.RenderMode == RenderMode.SoftwareOnly)
+        {
+            return;
+        }
+
+        target.RenderMode = RenderMode.SoftwareOnly;
+        Dispatcher.BeginInvoke(DispatcherPriority.Render, () =>
+        {
+            if (HwndSource.FromHwnd(hwnd) is { IsDisposed: false, CompositionTarget: { } again })
+            {
+                again.RenderMode = RenderMode.Default;
+            }
+
+            InvalidateVisual();
+        });
+    }
+
+    /// <summary>
+    /// Within 2 minutes of a display change, an activation also puts the window on top of the
+    /// z-order (with its dialogs), in case Windows activated it without raising it. Only when it
+    /// really is the foreground window: nothing here takes the foreground from another program.
+    /// </summary>
+    private void OnHookActivated()
+    {
+        if (_displayChangedAt is not { } changedAt || Environment.TickCount64 - changedAt > RaiseAfterDisplayChangeMs)
+        {
+            return;
+        }
+
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero || ShellInterop.GetForegroundWindow() != hwnd)
+        {
+            return;
+        }
+
+        if (!_raiseLogged)
+        {
+            _raiseLogged = true;
+            AppLog.Info($"display: activated after a change; raised to the top; {ShellInterop.DescribeWindow(hwnd, DpiScaleOf(this))}");
+        }
+
+        ShellInterop.RaiseToTop(hwnd);
     }
 
     // ---- the address bar ------------------------------------------------------------------------
@@ -1520,8 +1691,9 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     /// <summary>
     /// Ctrl + Shift + C in the box: its text becomes the same place seen from WSL (<c>C:\temp</c> →
-    /// <c>/mnt/c/temp</c>), or back from <c>/mnt/x/…</c>, selected so that Ctrl + C copies it. The
-    /// whole text, not the selection. Text that has no other form stays, said on the message line.
+    /// <c>/mnt/c/temp</c>), or back from <c>/mnt/x/…</c>, and is copied to the clipboard (either way;
+    /// it stays selected too). The whole text, not the selection. Text that has no other form stays,
+    /// said on the message line, and the clipboard is left alone.
     /// </summary>
     private void ToggleAddressWslPath()
     {
@@ -1533,6 +1705,14 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
         AddressEdit.Text = other;
         AddressEdit.SelectAll();
+        if (ShellActions.CopyPath(other))
+        {
+            _vm.Message.Success(other.StartsWith('/') ? "WSL のパスに変換してコピーしました。" : "Windows のパスに戻してコピーしました。");
+        }
+        else
+        {
+            _vm.Message.Error("パスは変換しましたが、クリップボードにコピーできませんでした。");
+        }
     }
 
     /// <summary>Enter: goes to the typed path or runs the command. When that fails (said on the message line) the box stays, with the text selected.</summary>
@@ -1595,6 +1775,90 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         EndAddressEdit();
+    }
+
+    // ---- crumbs as cascade anchors: resting on one lists its subfolders under it -----------------
+
+    /// <summary>
+    /// A crumb was pressed: nothing opens under the pointer until it leaves a crumb. The click
+    /// navigates, and the new crumb that comes under the still pointer raises a MouseEnter.
+    /// </summary>
+    private bool _crumbQuiet;
+
+    /// <summary>The tab whose crumbs are watched (<see cref="WatchCrumbs"/>).</summary>
+    private TabViewModel? _crumbTab;
+
+    /// <summary>The crumbs last shown: when they are replaced, each is an anchor that went away.</summary>
+    private IReadOnlyList<BreadcrumbItem> _crumbs = [];
+
+    private void OnCrumbMouseEnter(object sender, MouseEventArgs e)
+    {
+        if (!_crumbQuiet && sender is FrameworkElement { DataContext: BreadcrumbItem crumb } element)
+        {
+            _cascade.AnchorMouseEnter(element, element, crumb);
+        }
+    }
+
+    /// <summary>A move without a button held: arms the crumb again after everything was closed under it.</summary>
+    private void OnCrumbMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_crumbQuiet
+            && e.LeftButton == MouseButtonState.Released
+            && e.RightButton == MouseButtonState.Released
+            && sender is FrameworkElement { DataContext: BreadcrumbItem crumb } element)
+        {
+            _cascade.AnchorMouseMove(element, element, crumb, e.GetPosition(this));
+        }
+    }
+
+    private void OnCrumbMouseLeave(object sender, MouseEventArgs e)
+    {
+        _crumbQuiet = false;
+        if (sender is FrameworkElement element)
+        {
+            _cascade.AnchorMouseLeave(element);
+        }
+    }
+
+    private void OnCrumbMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _crumbQuiet = true;
+        _cascade.CloseAll(); // the click navigates (on the last crumb it does nothing): the list goes either way
+    }
+
+    /// <summary>
+    /// Follows the crumbs of the shown tab. They are rebuilt without input (the path changes, the tab
+    /// changes), and an element that goes away raises no MouseLeave: the list under it, or a hover
+    /// waiting to open it, is called off here instead.
+    /// </summary>
+    private void WatchCrumbs(TabViewModel tab)
+    {
+        if (_crumbTab is { } old)
+        {
+            old.PropertyChanged -= OnCrumbTabChanged;
+        }
+
+        _crumbTab = tab;
+        tab.PropertyChanged += OnCrumbTabChanged;
+        DropCrumbs(tab.Breadcrumbs);
+    }
+
+    private void OnCrumbTabChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(TabViewModel.Breadcrumbs) && sender is TabViewModel tab)
+        {
+            DropCrumbs(tab.Breadcrumbs);
+        }
+    }
+
+    private void DropCrumbs(IReadOnlyList<BreadcrumbItem> next)
+    {
+        foreach (var crumb in _crumbs)
+        {
+            _cascade.AnchorRemoved(crumb);
+        }
+
+        _crumbs = next;
     }
 
     // ---- IMainView ----------------------------------------------------------------------------

@@ -131,7 +131,7 @@ public static class CardOrdering
         });
     }
 
-    /// <summary>Folders before files, then <paramref name="inner"/> inside each group (used inside folders).</summary>
+    /// <summary>Folders before files, then <paramref name="inner"/> inside each group (<see cref="InsideFolder"/> uses it for every mode but modified time).</summary>
     public static IComparer<T> FoldersFirst<T>(Func<T, bool> isFolder, IComparer<T> inner) => Comparer<T>.Create((a, b) =>
     {
         bool x = isFolder(a);
@@ -143,6 +143,14 @@ public static class CardOrdering
 
         return inner.Compare(a, b);
     });
+
+    /// <summary>
+    /// The comparer of a folder's items (not a top level): folders before files, then
+    /// <paramref name="inner"/>, except when sorting by modified time, where folders and files are
+    /// ordered together by their own last write time (equal times keep the base order, folders first).
+    /// </summary>
+    public static IComparer<T> InsideFolder<T>(CardSortMode mode, Func<T, bool> isFolder, IComparer<T> inner) =>
+        CardSortModes.IsByModified(mode) ? inner : FoldersFirst(isFolder, inner);
 
     /// <summary>Null for an unset time stamp (<c>default</c>, or at/before 1601-01-01 as the file system reports for "none").</summary>
     public static DateTime? KnownTime(DateTime utc) => utc <= FileTimeEpoch ? null : utc;

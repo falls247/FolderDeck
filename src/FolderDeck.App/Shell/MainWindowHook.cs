@@ -11,13 +11,20 @@ namespace FolderDeck.Shell;
 /// <summary>
 /// Window messages of the main window that the app reacts to: the clipboard changed
 /// (<c>WM_CLIPBOARDUPDATE</c>, for the 貼り付け state and the cut marks) and a volume arrived or went
-/// away (<c>WM_DEVICECHANGE</c>, for the PC section). Construct it once the window has its handle
+/// away (<c>WM_DEVICECHANGE</c>, for the PC section), the monitors or the work area changed
+/// (<c>WM_DISPLAYCHANGE</c>, <c>WM_SETTINGCHANGE</c> with <c>SPI_SETWORKAREA</c>) and the window was
+/// activated (<c>WM_ACTIVATE</c>, for the check after a display change). Construct it once the window has its handle
 /// (<c>SourceInitialized</c>) and dispose it when the window closes, both on the UI thread. The
 /// events are raised on the UI thread, never from inside the window procedure.
 /// </summary>
 public sealed class MainWindowHook : IDisposable
 {
+    private const int WM_ACTIVATE = 0x0006;
+    private const int WM_SETTINGCHANGE = 0x001A;
+    private const int WM_DISPLAYCHANGE = 0x007E;
     private const int WM_DEVICECHANGE = 0x0219;
+    private const long SPI_SETWORKAREA = 0x002F;
+    private const int WA_INACTIVE = 0;
     private const int WM_CLIPBOARDUPDATE = 0x031D;
     private const long DBT_DEVICEARRIVAL = 0x8000;
     private const long DBT_DEVICEREMOVECOMPLETE = 0x8004;
@@ -25,9 +32,13 @@ public sealed class MainWindowHook : IDisposable
     /// <summary>One device sends several messages (a card reader: one per slot); the list is read once, after the last.</summary>
     private static readonly TimeSpan DrivesDebounce = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>A monitor plugged in or a projection mode switched sends a burst (resolution, work area, each monitor): reported once.</summary>
+    private static readonly TimeSpan DisplayDebounce = TimeSpan.FromMilliseconds(700);
+
     private readonly Window _window;
     private readonly HwndSourceHook _hook;
     private readonly DispatcherTimer _drivesTimer;
+    private readonly DispatcherTimer _displayTimer;
     private HwndSource? _source;
     private nint _handle;
     private bool _listening;
@@ -41,6 +52,8 @@ public sealed class MainWindowHook : IDisposable
         _hook = WndProc;
         _drivesTimer = new DispatcherTimer(DispatcherPriority.Background, window.Dispatcher) { Interval = DrivesDebounce };
         _drivesTimer.Tick += OnDrivesTimer;
+        _displayTimer = new DispatcherTimer(DispatcherPriority.Background, window.Dispatcher) { Interval = DisplayDebounce };
+        _displayTimer.Tick += OnDisplayTimer;
 
         if (new WindowInteropHelper(window).Handle != IntPtr.Zero)
         {
@@ -65,6 +78,15 @@ public sealed class MainWindowHook : IDisposable
     /// </summary>
     public event Action? DrivesChanged;
 
+    /// <summary>
+    /// A monitor was added or removed, a resolution, a projection mode (Win + P) or a work area
+    /// (the taskbar) changed: 700 ms after the last such message.
+    /// </summary>
+    public event Action? DisplayChanged;
+
+    /// <summary>The window was activated (raised after the window procedure, at Input priority).</summary>
+    public event Action? Activated;
+
     public void Dispose()
     {
         if (_disposed)
@@ -76,6 +98,8 @@ public sealed class MainWindowHook : IDisposable
         _window.SourceInitialized -= OnSourceInitialized;
         _drivesTimer.Stop();
         _drivesTimer.Tick -= OnDrivesTimer;
+        _displayTimer.Stop();
+        _displayTimer.Tick -= OnDisplayTimer;
 
         if (_listening)
         {
@@ -139,6 +163,18 @@ public sealed class MainWindowHook : IDisposable
                 _drivesTimer.Stop();
                 _drivesTimer.Start();
                 break;
+
+            case WM_DISPLAYCHANGE:
+            case WM_SETTINGCHANGE when (long)wParam == SPI_SETWORKAREA:
+                _displayTimer.Stop();
+                _displayTimer.Start();
+                break;
+
+            // Posted: a handler that moves the window in the z-order must not run inside the
+            // activation (it would come before WPF's own Activated handlers).
+            case WM_ACTIVATE when ((long)wParam & 0xFFFF) != WA_INACTIVE:
+                _window.Dispatcher.BeginInvoke(DispatcherPriority.Input, () => RaiseActivated());
+                break;
         }
 
         return 0;
@@ -163,6 +199,23 @@ public sealed class MainWindowHook : IDisposable
         if (!_disposed)
         {
             ClipboardChanged?.Invoke();
+        }
+    }
+
+    private void RaiseActivated()
+    {
+        if (!_disposed)
+        {
+            Activated?.Invoke();
+        }
+    }
+
+    private void OnDisplayTimer(object? sender, EventArgs e)
+    {
+        _displayTimer.Stop();
+        if (!_disposed)
+        {
+            DisplayChanged?.Invoke();
         }
     }
 

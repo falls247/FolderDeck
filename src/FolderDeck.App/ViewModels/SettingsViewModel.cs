@@ -41,6 +41,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsItemMenuApp), nameof(IsItemMenuWindows))]
     private ItemMenuStyle _itemMenu;
 
+    /// <summary>メッセージの表示: top, bottom or off. The three switches below show and set it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsMessageTop), nameof(IsMessageBottom), nameof(IsMessageOff))]
+    private MessagePlacement _messagePlacement;
+
     /// <summary>フォルダの自動更新: on (every <see cref="AutoRefreshSecondsText"/> seconds) or off. The two switches below show and set it.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsAutoRefreshOff), nameof(IsAutoRefreshInterval))]
@@ -78,6 +83,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _openExplorerInNewTab = settings.OpenExplorerInNewTab;
         _openOnDoubleClick = settings.OpenOnDoubleClick;
         _itemMenu = ItemMenuStyles.FromSetting(settings.ItemMenu);
+        _messagePlacement = MessagePlacements.FromSetting(settings.MessagePosition);
         _autoRefresh = settings.AutoRefresh;
         _autoRefreshSecondsText = settings.AutoRefreshSeconds.ToString(CultureInfo.InvariantCulture);
         AutoRefreshSeconds = settings.AutoRefreshSeconds; // kept when the field is left invalid while off
@@ -117,6 +123,25 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         get => ItemMenu == ItemMenuStyle.Windows;
         set => SelectItemMenu(value, ItemMenuStyle.Windows);
+    }
+
+    // Same as the theme: only "checked" counts.
+    public bool IsMessageTop
+    {
+        get => MessagePlacement == MessagePlacement.Top;
+        set => SelectMessagePlacement(value, MessagePlacement.Top);
+    }
+
+    public bool IsMessageBottom
+    {
+        get => MessagePlacement == MessagePlacement.Bottom;
+        set => SelectMessagePlacement(value, MessagePlacement.Bottom);
+    }
+
+    public bool IsMessageOff
+    {
+        get => MessagePlacement == MessagePlacement.Off;
+        set => SelectMessagePlacement(value, MessagePlacement.Off);
     }
 
     // Same as the theme: only "checked" counts.
@@ -225,6 +250,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
+    private void SelectMessagePlacement(bool selected, MessagePlacement placement)
+    {
+        if (selected)
+        {
+            MessagePlacement = placement;
+        }
+    }
+
     partial void OnTextScaleChanged(int value)
     {
         foreach (var choice in TextScaleChoices)
@@ -244,6 +277,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.OpenExplorerInNewTab = OpenExplorerInNewTab;
         settings.OpenOnDoubleClick = OpenOnDoubleClick;
         settings.ItemMenu = ItemMenuStyles.ToSetting(ItemMenu);
+        settings.MessagePosition = MessagePlacements.ToSetting(MessagePlacement);
         settings.RecentLimit = RecentLimit;
         settings.FrequentLimit = FrequentLimit;
         settings.ThumbCacheMb = ThumbCacheMb;

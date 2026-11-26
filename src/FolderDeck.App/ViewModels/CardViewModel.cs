@@ -341,8 +341,16 @@ public sealed partial class CardViewModel : ObservableObject
             return null;
         }
 
+        bool realized = _realized > 0;
         var listing = await _services.Listings.GetAsync(Path, cancellationToken);
         ApplyListing(listing);
+        if (realized && _realized == 0)
+        {
+            // Unrealized meanwhile (scrolled away, tab switched): keep the counts, not the entries,
+            // which Unrealize let go of (a hidden tab's cards would hold them until shown again).
+            Listing = null;
+        }
+
         return listing;
     }
 

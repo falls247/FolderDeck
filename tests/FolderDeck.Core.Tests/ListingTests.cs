@@ -345,6 +345,53 @@ public class FolderListingCacheTests
     }
 
     [Fact]
+    public async Task ExpiredListings_AreDropped_WhenTheNextListingIsStored()
+    {
+        long ticks = 1_000;
+        var fs = new FakeFileSystem()
+            .AddFile(@"C:\a\1.txt")
+            .AddFile(@"C:\a\2.txt")
+            .AddFile(@"C:\b\1.txt");
+        var cache = new FolderListingCache(fs, () => false, tickSource: () => ticks);
+
+        await cache.GetAsync(@"C:\a", CancellationToken.None);
+        ticks += 60_001; // a has expired: it is never served again
+        await cache.GetAsync(@"C:\b", CancellationToken.None);
+
+        Assert.Equal(1, cache.CachedListings);
+        Assert.Equal(1, cache.CachedEntries);
+        Assert.True(cache.TryGetFresh(@"C:\b", out _));
+    }
+
+    [Fact]
+    public async Task EntryBudget_DropsTheOldest_KeepsTheNewest()
+    {
+        long ticks = 1_000;
+        var fs = new FakeFileSystem();
+        foreach (string folder in new[] { "a", "b", "c" })
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                fs.AddFile($@"C:\{folder}\{i}.txt");
+            }
+        }
+
+        // 5 entries count as 2 (a quarter of the budget) + 1: a + b fit, c pushes a out.
+        var cache = new FolderListingCache(fs, () => false, tickSource: () => ticks, maxTotalEntries: 8);
+        foreach (string folder in new[] { "a", "b", "c" })
+        {
+            await cache.GetAsync($@"C:\{folder}", CancellationToken.None);
+            ticks += 1;
+        }
+
+        Assert.False(cache.TryGetFresh(@"C:\a", out _));
+        Assert.True(cache.TryGetFresh(@"C:\b", out _));
+        Assert.True(cache.TryGetFresh(@"C:\c", out _));
+        Assert.Equal(2, cache.CachedListings);
+        Assert.Equal(10, cache.CachedEntries);
+    }
+
+    [Fact]
     public async Task ClearOrInvalidate_DuringAListing_StartsANewOne_AndTheOldOneIsNotCached()
     {
         using var gate = new ManualResetEventSlim(false);

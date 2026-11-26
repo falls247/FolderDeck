@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using FolderDeck.Core.Transfer;
 using FolderDeck.ViewModels;
@@ -13,8 +14,9 @@ namespace FolderDeck.Views;
 /// <summary>
 /// The tab strip (every open tab: 最近の履歴, よく使う項目 and the folder tabs): a press shows the
 /// tab, dragging it sideways moves it among the others (they swap as the pointer passes the middle
-/// of a neighbour), a middle click or × closes it, the wheel scrolls the strip when the tabs do
-/// not fit.
+/// of a neighbour), a middle click or × closes it. When the tabs do not fit, ◀ / ▶ appear on the
+/// left (next to the sidebar button) and step one tab at a time, and the wheel (vertical or
+/// horizontal) over the strip scrolls it; there is no scroll bar.
 /// </summary>
 public partial class FolderTabStrip : UserControl
 {
@@ -37,14 +39,165 @@ public partial class FolderTabStrip : UserControl
         };
         Tabs.PreviewMouseDown += OnMouseDown;
         Tabs.MouseRightButtonUp += OnRightUp;
-        Scroller.PreviewMouseWheel += (_, e) =>
+
+        // Over the whole strip (the arrows too): the wheel up / down scrolls left / right.
+        PreviewMouseWheel += (_, e) =>
         {
             if (Scroller.ScrollableWidth > 0)
             {
-                Scroller.ScrollToHorizontalOffset(Scroller.HorizontalOffset - e.Delta);
+                ScrollBy(-e.Delta);
                 e.Handled = true;
             }
         };
+        Scroller.ScrollChanged += (_, _) =>
+        {
+            _pendingOffset = null;
+            UpdateArrows();
+        };
+        LeftArrow.Click += (_, _) => Step(-1);
+        RightArrow.Click += (_, _) => Step(1);
+        Loaded += (_, _) => AttachWheelHook();
+        Unloaded += (_, _) => DetachWheelHook();
+    }
+
+    // ---- scrolling: ◀ / ▶, the wheel and the horizontal wheel ----
+
+    private const int WM_MOUSEHWHEEL = 0x020E;
+
+    /// <summary>
+    /// Where the last scroll asked to go, until the scroller has applied it (<see cref="ScrollViewer.ScrollToHorizontalOffset"/>
+    /// takes effect at the next layout, so wheel messages in between would otherwise start from the old offset and be lost).
+    /// </summary>
+    private double? _pendingOffset;
+
+    private HwndSource? _hookSource;
+
+    private double CurrentOffset => _pendingOffset ?? Scroller.HorizontalOffset;
+
+    private void ScrollTo(double offset)
+    {
+        double target = Math.Clamp(offset, 0, Scroller.ScrollableWidth);
+        _pendingOffset = target;
+        Scroller.ScrollToHorizontalOffset(target);
+    }
+
+    private void ScrollBy(double delta) => ScrollTo(CurrentOffset + delta);
+
+    /// <summary>
+    /// ◀ / ▶: brings the next tab that is cut off (or hidden) on that side fully into view, aligned
+    /// with that edge of the strip, like the sheet tabs of Excel.
+    /// </summary>
+    private void Step(int direction)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        double offset = CurrentOffset;
+        double view = Scroller.ViewportWidth;
+        if (direction > 0)
+        {
+            foreach (var tab in _vm.Tabs)
+            {
+                if (EdgesOf(tab) is { } edges && edges.Right > offset + view + 0.5)
+                {
+                    ScrollTo(edges.Right - view);
+                    return;
+                }
+            }
+
+            ScrollTo(Scroller.ScrollableWidth);
+        }
+        else
+        {
+            for (int i = _vm.Tabs.Count - 1; i >= 0; i--)
+            {
+                if (EdgesOf(_vm.Tabs[i]) is { } edges && edges.Left < offset - 0.5)
+                {
+                    ScrollTo(edges.Left);
+                    return;
+                }
+            }
+
+            ScrollTo(0);
+        }
+    }
+
+    /// <summary>Left and right edge of a tab in the scrolled content's coordinates (null: not realized).</summary>
+    private (double Left, double Right)? EdgesOf(TabViewModel tab)
+    {
+        if (Tabs.ItemContainerGenerator.ContainerFromItem(tab) is not FrameworkElement container)
+        {
+            return null;
+        }
+
+        double left = container.TranslatePoint(default, Tabs).X;
+        return (left, left + container.ActualWidth);
+    }
+
+    /// <summary>
+    /// Shows ◀ / ▶ only while the tabs do not fit, and greys out the side that is at its end. The
+    /// width the arrows take is added back before judging, so showing them never makes the tabs
+    /// fit again (and hiding them never makes them overflow): no flip-flop at the boundary.
+    /// </summary>
+    private void UpdateArrows()
+    {
+        bool shown = Arrows.Visibility == Visibility.Visible;
+        double room = Scroller.ViewportWidth + (shown ? Arrows.ActualWidth + Arrows.Margin.Left + Arrows.Margin.Right : 0);
+        bool overflow = Scroller.ExtentWidth > room + 0.5;
+        Arrows.Visibility = overflow ? Visibility.Visible : Visibility.Collapsed;
+        LeftArrow.IsEnabled = Scroller.HorizontalOffset > 0.5;
+        RightArrow.IsEnabled = Scroller.HorizontalOffset < Scroller.ScrollableWidth - 0.5;
+        if (overflow && !shown)
+        {
+            RevealSelected(); // the arrows narrowed the strip: the shown tab may now be cut off on the right
+        }
+    }
+
+    // WPF has no event for the horizontal wheel (tilt wheel, touchpad): the window procedure gets
+    // WM_MOUSEHWHEEL and the strip scrolls when the pointer is over it.
+    private void AttachWheelHook()
+    {
+        if (_hookSource is null && PresentationSource.FromVisual(this) is HwndSource source)
+        {
+            source.AddHook(OnWindowMessage);
+            _hookSource = source;
+        }
+    }
+
+    private void DetachWheelHook()
+    {
+        if (_hookSource is { } source)
+        {
+            if (!source.IsDisposed)
+            {
+                source.RemoveHook(OnWindowMessage);
+            }
+
+            _hookSource = null;
+        }
+    }
+
+    private nint OnWindowMessage(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        if (msg != WM_MOUSEHWHEEL || Scroller.ScrollableWidth <= 0 || !IsVisible)
+        {
+            return 0;
+        }
+
+        // lParam: the pointer in screen coordinates (physical pixels); wParam's high word: the
+        // distance, positive when tilted to the right (the strip moves to show what is on the right).
+        var screen = new Point((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF));
+        Point p = PointFromScreen(screen);
+        if (p.X < 0 || p.Y < 0 || p.X > ActualWidth || p.Y > ActualHeight)
+        {
+            return 0;
+        }
+
+        ScrollBy((short)((wParam >> 16) & 0xFFFF));
+        handled = true;
+        return 1; // TRUE, as browsers do: some mouse drivers keep repeating the tilt only for a window that answers TRUE
     }
 
     /// <summary>A tab is about to be shown, moved or closed (the main window closes the cascade).</summary>

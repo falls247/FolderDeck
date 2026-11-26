@@ -121,6 +121,7 @@ public sealed partial class MainViewModel : ObservableObject
         // The stores are loaded before this is created. The sidebar's shape is read here, not in
         // InitializeAsync: the window lays itself out in its constructor, before the first frame.
         var settings = services.Stores.Settings.Current;
+        Message.Placement = MessagePlacements.FromSetting(settings.MessagePosition); // before any message (startup warnings too)
         _sidebarWidth = settings.SidebarWidth;
         _isSidebarCollapsed = settings.SidebarCollapsed;
         _detailsColumns = DetailsColumnRules.Normalize(settings.DetailsColumns);
@@ -627,6 +628,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         View?.CloseCascade();
         Message.ClearPersistent();
+        AppLog.Info(_services.DescribeMemory()); // before the caches are dropped: what they held
         _services.ClearCaches();
         _services.Thumbnails.Clear();
         foreach (var tab in AllTabs)
@@ -1332,12 +1334,69 @@ public sealed partial class MainViewModel : ObservableObject
         return OpenItemAsync(card.ToItemRef());
     }
 
+    /// <summary>
+    /// Enter: opens the selection of the shown list (Explorer's rule, <see cref="OpenPlan"/>). One item
+    /// opens as a click on it (a folder moves the shown tab; a top-list folder opens its tab; a file opens
+    /// and its use is recorded). Several: every file, then every folder in a folder tab of its own.
+    /// Returns false when nothing is selected (the key is not used).
+    /// </summary>
+    public bool OpenSelection()
+    {
+        if (!HasTab)
+        {
+            return false;
+        }
+
+        var cards = SelectedTab.SelectedCards();
+        if (cards.Count == 0)
+        {
+            return false;
+        }
+
+        var plan = OpenPlan.Of(cards, c => c.IsFolderLike, c => !c.IsDisabled && !c.IsBusy);
+        if (plan.Single is { } one)
+        {
+            _ = ActivateCardAsync(one);
+        }
+        else if (!plan.IsEmpty
+            && (!plan.NeedsConfirm
+                || (View?.Confirm("まとめて開く", $"{plan.Count} 個の項目を開きます。よろしいですか？", null, "開く", danger: false) ?? false)))
+        {
+            _ = OpenManyAsync(plan.Files, plan.Folders);
+        }
+
+        return true;
+    }
+
+    private async Task OpenManyAsync(IReadOnlyList<CardViewModel> files, IReadOnlyList<CardViewModel> folders)
+    {
+        foreach (var file in files)
+        {
+            await OpenFileAsync(file.Path, file); // one at a time: one confirmation per program, messages in order
+        }
+
+        foreach (var folder in folders)
+        {
+            var item = folder.ToItemRef();
+            if (item.Target is { } target)
+            {
+                // The shown tab cannot move into two folders: each opens a folder tab (as Explorer opens windows).
+                await OpenFolderTabAsync(target, item.Context == ItemContext.Drive ? null : item.Path);
+            }
+        }
+    }
+
     public Task OpenItemAsync(ItemRef item)
     {
         if (item.IsFolder)
         {
             if (item.Target is { } target)
             {
+                if (!item.NewTab && target == SelectedTab.Location)
+                {
+                    return Task.CompletedTask; // the shown folder (the header of the list under the last crumb): as NavigateCrumb
+                }
+
                 // From the sidebar (a row, or its cascade): a folder tab of its own. Otherwise the shown tab moves.
                 // A drive row is always at hand in the PC section: opening it is not a use worth remembering.
                 string? recordPath = item.Context == ItemContext.Drive ? null : item.Path;
@@ -3297,6 +3356,7 @@ public sealed partial class MainViewModel : ObservableObject
             View?.ApplyTextScale(after.TextScale);
         }
 
+        Message.Placement = MessagePlacements.FromSetting(after.MessagePosition); // before 設定を保存しました below: it shows in the new place
         _services.ShowHidden = after.ShowHidden;
         if (before.ShowHidden != after.ShowHidden)
         {

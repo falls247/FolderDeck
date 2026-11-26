@@ -126,3 +126,10 @@ SetThreadErrorMode
 GetDoubleClickTime
 SetWindowLongPtr
 GetWindow
+RegisterClassEx
+CreateWindowEx
+DestroyWindow
+DefWindowProc
+GetModuleHandle
+WNDCLASSEXW
+GetWindowLongPtr

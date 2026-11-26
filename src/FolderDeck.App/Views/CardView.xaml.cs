@@ -86,6 +86,7 @@ public partial class CardView : UserControl
 
     private CardViewModel? _vm;
     private CardViewModel? _realized;
+    private CardViewModel? _subscribed;
     private CardGrid? _grid;
     private bool _hot;
 
@@ -109,8 +110,8 @@ public partial class CardView : UserControl
         // which handles it) starts afresh.
         AddHandler(PreviewMouseRightButtonDownEvent, new MouseButtonEventHandler((_, _) => _pointer.RightDown()), handledEventsToo: true);
         DataContextChanged += OnDataContextChanged;
-        Loaded += (_, _) => Realize();
-        Unloaded += (_, _) => Unrealize();
+        Loaded += (_, _) => OnLoaded();
+        Unloaded += (_, _) => OnUnloaded();
         ThumbArea.SizeChanged += (_, e) => UpdateClip(e.NewSize);
         SizeChanged += (_, _) => UpdateThumbSize();
     }
@@ -192,24 +193,60 @@ public partial class CardView : UserControl
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        if (_vm is not null)
-        {
-            _vm.PropertyChanged -= OnVmPropertyChanged;
-        }
-
+        Detach();
         Unrealize();
         OverlayHost.Content = null;
         _pointer.ItemChanged();
         _vm = e.NewValue as CardViewModel;
-        if (_vm is not null)
+        if (IsLoaded)
         {
-            _vm.PropertyChanged += OnVmPropertyChanged;
+            Attach();
         }
 
         UpdateAll();
         if (IsLoaded)
         {
             Realize();
+        }
+    }
+
+    private void OnLoaded()
+    {
+        // Changes made while unloaded (not listened to) are caught up here.
+        Attach();
+        UpdateAll();
+        Realize();
+    }
+
+    private void OnUnloaded()
+    {
+        Unrealize();
+        Detach();
+    }
+
+    /// <summary>
+    /// Listens to the item only while loaded: a card thrown away unloaded (CardGrid.Rebuild replaces
+    /// its rows; WPF does not clear their DataContext) would otherwise stay referenced by the
+    /// longer-lived <see cref="CardViewModel"/> through its PropertyChanged, row subtree and all.
+    /// </summary>
+    private void Attach()
+    {
+        if (_vm is null || ReferenceEquals(_subscribed, _vm))
+        {
+            return;
+        }
+
+        Detach();
+        _subscribed = _vm;
+        _vm.PropertyChanged += OnVmPropertyChanged;
+    }
+
+    private void Detach()
+    {
+        if (_subscribed is not null)
+        {
+            _subscribed.PropertyChanged -= OnVmPropertyChanged;
+            _subscribed = null;
         }
     }
 
