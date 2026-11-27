@@ -75,4 +75,32 @@ public class ItemNamesTests
         Assert.Equal("新しいフォルダー (3)", ItemNames.NextNewFolderName(["新しいフォルダー", "新しいフォルダー (2)", "新しいフォルダー (4)"]));
         Assert.Equal("New folder (2)", ItemNames.NextNewFolderName(["NEW FOLDER"], "New folder"));
     }
+
+    [Theory]
+    [InlineData("photo.jpg", "a.JPG", false, "photo")]
+    [InlineData("photo", "a.jpg", false, "photo")]
+    [InlineData("photo.png", "a.jpg", false, "photo.png")]
+    [InlineData("v1.2", "folder", true, "v1.2")]
+    [InlineData("photo .jpg", "a.jpg", false, "photo")]
+    public void BatchBaseName_DropsOnlyTheEditedFilesExtension(string name, string edited, bool isFolder, string expected)
+    {
+        Assert.Equal(expected, ItemNames.BatchBaseName(name, edited, isFolder));
+    }
+
+    [Fact]
+    public void BatchNames_NumbersInOrder_KeepsEachExtension_SkipsTakenNumbers()
+    {
+        var names = ItemNames.BatchNames("photo", [("b.jpg", false), ("資料", true), ("c.png", false), (".gitignore", false)],
+            ["PHOTO (2)", "other.txt"]);
+        Assert.Equal(["photo (1).jpg", "photo (3)", "photo (4).png", "photo (5).gitignore"], names);
+    }
+
+    [Fact]
+    public void BatchNames_AvoidsOtherSelectedNames_ButAnItemMayKeepItsOwn()
+    {
+        // "photo (1).jpg" keeps its name; x.jpg skips "photo (2).jpg", the name of another selected item,
+        // which then gets the next free number (the count only goes up).
+        var names = ItemNames.BatchNames("photo", [("photo (1).jpg", false), ("x.jpg", false), ("photo (2).jpg", false)], []);
+        Assert.Equal(["photo (1).jpg", "photo (3).jpg", "photo (4).jpg"], names);
+    }
 }

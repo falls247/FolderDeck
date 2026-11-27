@@ -2,7 +2,7 @@ using System.Text;
 
 namespace FolderDeck.Core.Paths;
 
-/// <summary>The programs of the blank area's 「… で開く」.</summary>
+/// <summary>The programs of the 「… で開く」 entries (blank area, item and selection menus).</summary>
 public enum OpenInTool
 {
     /// <summary>Windows Terminal; cmd when it is not installed.</summary>

@@ -108,6 +108,10 @@ public sealed partial class BreadcrumbItem : ObservableObject, ICascadeAnchor
     [ObservableProperty]
     private bool _isHoverHeld;
 
+    /// <summary>A drag would drop into this crumb's folder (set by MainWindow: IsMouseOver does not follow a drag).</summary>
+    [ObservableProperty]
+    private bool _isDropTarget;
+
     // The crumb's folder is its tooltip (none for a fixed tab's list or an unknown root: nothing to list).
     string ICascadeAnchor.Path => ToolTip ?? string.Empty;
 

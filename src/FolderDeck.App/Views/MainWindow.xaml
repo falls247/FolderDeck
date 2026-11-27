@@ -104,7 +104,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <Button Grid.Column="0" Style="{StaticResource Btn.Icon}" Content="&#xE74A;" ToolTip="1つ上へ（Backspace）"
+                <Button Grid.Column="0" Style="{StaticResource Btn.Icon}" Content="&#xE74A;" ToolTip="1つ上へ（Backspace / Alt+↑）"
                         Command="{Binding GoUpCommand}" />
 
                 <!--
@@ -157,6 +157,10 @@
                                                 <Setter TargetName="CrumbButton" Property="Background" Value="{DynamicResource Brush.Surface3}" />
                                                 <Setter TargetName="CrumbButton" Property="ToolTipService.IsEnabled" Value="False" />
                                             </DataTrigger>
+                                            <!-- a drag would drop into this folder (IsMouseOver does not follow a drag) -->
+                                            <DataTrigger Binding="{Binding IsDropTarget}" Value="True">
+                                                <Setter TargetName="CrumbButton" Property="Background" Value="{DynamicResource Brush.AccentSoft}" />
+                                            </DataTrigger>
                                         </DataTemplate.Triggers>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
@@ -198,7 +202,7 @@
 
                 <!-- sort mode of the selected tab -->
                 <Button Grid.Column="5" Style="{StaticResource Btn}" Margin="0,0,10,0" Padding="10,4" Click="OnSortClick"
-                        ToolTip="並べ替え（最近の履歴・よく使う項目はタブごと、フォルダのタブは共通）。一覧はドラッグで並べた順、フォルダの中は既定の順（フォルダ→ファイル、名前順）が「手動」です。ピン留めした項目は位置が固定されます。">
+                        ToolTip="並べ替え（タブごと。一覧の空いているところの右クリックからも選べます）。一覧はドラッグで並べた順、フォルダの中は既定の順（フォルダ→ファイル、名前順）が「手動」です。ピン留めした項目は位置が固定されます。">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8CB;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
                         <TextBlock Text="{Binding SelectedTab.SortModeText}" VerticalAlignment="Center" />

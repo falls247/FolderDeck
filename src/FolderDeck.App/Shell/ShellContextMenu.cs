@@ -60,9 +60,10 @@ public sealed record ShellMenuResult(ShellMenuOutcome Outcome, string? Verb, str
 /// An entry of the caller's own, put above the shell's entries. Win32 menus get the text only (no
 /// glyph). When an entry is <c>IsDefault</c>, the shell's <c>open</c> is taken out and this entry
 /// becomes the default (bold) one (top level only). A submenu is an entry with <c>IsSubmenu</c> (never
-/// picked itself) followed by its entries, whose <c>Parent</c> is its index (-1: the top level).
+/// picked itself) followed by its entries, whose <c>Parent</c> is its index (-1: the top level). An
+/// entry with <c>IsChecked</c> gets a check mark (✓, MF_CHECKED; entries without children only).
 /// </summary>
-public readonly record struct ShellMenuAppEntry(string Text, bool Enabled, bool IsSeparator, bool IsDefault, int Parent = -1, bool IsSubmenu = false);
+public readonly record struct ShellMenuAppEntry(string Text, bool Enabled, bool IsSeparator, bool IsDefault, int Parent = -1, bool IsSubmenu = false, bool IsChecked = false);
 
 /// <summary>
 /// Shows Explorer's own context menu (<c>IContextMenu</c>) for files and folders, so that entries of
@@ -735,7 +736,8 @@ public static class ShellContextMenu
                 }
                 else
                 {
-                    ok = AppendString(into, MENU_ITEM_FLAGS.MF_STRING | grayed, AppFirstId + (uint)i, text);
+                    var check = entry.IsChecked ? MENU_ITEM_FLAGS.MF_CHECKED : default;
+                    ok = AppendString(into, MENU_ITEM_FLAGS.MF_STRING | grayed | check, AppFirstId + (uint)i, text);
                 }
 
                 if (!ok)

@@ -333,7 +333,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         RefreshRegistered();
         _ = DriveList.RefreshAsync(recheck: false); // not awaited: a drive that does not answer must not delay the first tab
-        OpenInTools.Refresh(); // in the background: the blank area's 「… で開く」
+        OpenInTools.Refresh(); // in the background: the right-click menus' 「… で開く」
         SelectedTab =Tabs.Count == 0 ? NoTab : Tabs[Math.Clamp(selected, 0, Tabs.Count - 1)];
         _tabsRestored = true; // before the first await: what the user does while the first tab loads is saved too
         ApplyAutoRefreshSetting(settings);
@@ -1459,6 +1459,14 @@ public sealed partial class MainViewModel : ObservableObject
         return true;
     }
 
+    /// <summary>
+    /// Alt+↓ (Explorer): the one selected folder, to enter as a click on it (the shown tab moves into it;
+    /// a folder of the 最近の履歴 / よく使う項目 list opens its tab, <see cref="CardViewModel.ToItemRef"/>).
+    /// Null unless exactly one item is selected and it is a usable folder (a file, several items: the key does nothing).
+    /// </summary>
+    public CardViewModel? FolderToEnter() =>
+        HasTab && SelectedTab.SelectedCards() is [{ IsFolderLike: true, IsDisabled: false, IsBusy: false } one] ? one : null;
+
     private async Task OpenManyAsync(IReadOnlyList<CardViewModel> files, IReadOnlyList<CardViewModel> folders)
     {
         foreach (var file in files)
@@ -1628,7 +1636,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>
     /// 「ターミナルで開く」「PowerShell で開く」 (開く / 管理者として開く), 「Code で開く」 and 「WSL で開く」 of
-    /// the blank area: <paramref name="tool"/> in <paramref name="folder"/>, as <paramref name="programs"/>
+    /// the blank area and the item / selection menus: <paramref name="tool"/> in <paramref name="folder"/>, as <paramref name="programs"/>
     /// found it when the menu was built. Elevated (UAC) with <paramref name="elevated"/>. A SUBST drive
     /// goes as the folder it stands for and a mapped network drive as its UNC path when elevated or to WSL
     /// (neither sees the user's SUBST or mapped drives).
@@ -1787,19 +1795,39 @@ public sealed partial class MainViewModel : ObservableObject
         && !PathTools.IsRoot(item.Path);
 
     /// <summary>
-    /// F2: the one selected card, or null (nothing selected: the key does nothing; several selected:
-    /// said on the message line). Whether it can be renamed is <see cref="CanStartRename"/>'s call.
+    /// F2: the card whose edit box opens, or null (nothing selected: the key does nothing; a
+    /// selection that cannot be renamed together: said on the message line). Whether it can be
+    /// renamed is <see cref="CanStartRename"/>'s call. With several selected, <paramref name="batch"/>
+    /// is their paths in display order (Explorer's "name (1)", "name (2)"…, <see cref="RenameManyAsync"/>)
+    /// and the card is the focused one (the selection's <see cref="SelectionModel.Focus"/>: the item
+    /// clicked last, else the first); otherwise empty.
     /// </summary>
-    public CardViewModel? RenameCandidate()
+    public CardViewModel? RenameCandidate(out IReadOnlyList<string> batch)
     {
+        batch = [];
         var cards = SelectedTab.SelectedCards();
-        if (cards.Count > 1)
+        if (cards.Count <= 1)
         {
-            Message.Info("名前を変更する項目を 1 つだけ選んでください。");
+            return cards.Count == 1 ? cards[0] : null;
+        }
+
+        if (!CanRenameTogether(cards))
+        {
+            Message.Info("選択した項目には、名前を変更できないものが含まれています。");
             return null;
         }
 
-        return cards.Count == 1 ? cards[0] : null;
+        batch = cards.Select(c => c.Path).ToList();
+        string? focus = SelectedTab.Selection.Focus;
+        return cards.FirstOrDefault(c => PathTools.PathEquals(c.Path, focus)) ?? cards[0];
+    }
+
+    /// <summary>Every card can be renamed (<see cref="CanRename"/>) and all are in one folder.</summary>
+    private static bool CanRenameTogether(IReadOnlyList<CardViewModel> cards)
+    {
+        string folder = PathTools.ParentOf(cards[0].Path);
+        return folder.Length > 0
+            && cards.All(c => CanRename(c.ToItemRef()) && PathTools.PathEquals(PathTools.ParentOf(c.Path), folder));
     }
 
     /// <summary>The edit box may open for <paramref name="card"/> now; says why not on the message line.</summary>
@@ -1932,6 +1960,119 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// The edit box of <paramref name="edited"/> closed with <paramref name="typed"/> for a batch of
+    /// <paramref name="paths"/> (display order, <see cref="RenameCandidate"/>): renames them all
+    /// "base (1)", "base (2)"… in one shell operation (one undo), lists the folder again and selects
+    /// them, as Explorer does. The base is the typed name without the edited file's extension; each
+    /// file keeps its own extension, so nothing asks about extensions. Nothing happens when the name
+    /// did not change or was emptied; the edit box never opens again (each item keeps its name on a
+    /// failure).
+    /// </summary>
+    public async Task RenameManyAsync(CardViewModel edited, string typed, IReadOnlyList<string> paths)
+    {
+        string name = ItemNames.Clean(typed);
+        if (string.Equals(typed, edited.Name, StringComparison.Ordinal)
+            || string.Equals(name, edited.Name, StringComparison.Ordinal)
+            || name.Length == 0)
+        {
+            return; // unchanged, or emptied: every name stays (as in Explorer)
+        }
+
+        var problem = ItemNames.Check(name);
+        string baseName = problem == NameProblem.None ? ItemNames.BatchBaseName(name, edited.Name, edited.Kind == CardKind.Folder) : string.Empty;
+        if (problem != NameProblem.None || baseName.Length == 0)
+        {
+            Message.Info(ItemNames.MessageOf(problem == NameProblem.None ? NameProblem.Empty : problem));
+            return;
+        }
+
+        if (_fileOpBusy)
+        {
+            Message.Info("前の操作が終わってから実行してください。");
+            return;
+        }
+
+        // The cards shown now (a reload meanwhile made new instances), in display order.
+        var wanted = new HashSet<string>(paths, PathTools.Comparer);
+        var tab = SelectedTab;
+        var cards = tab.Cards.Where(c => wanted.Contains(c.Path)).ToList();
+        string folder = PathTools.ParentOf(edited.Path);
+        if (cards.Count == 0 || !CanRenameTogether(cards) || !PathTools.PathEquals(PathTools.ParentOf(cards[0].Path), folder))
+        {
+            Message.Info("選択した項目には、名前を変更できないものが含まれています。");
+            return;
+        }
+
+        var items = cards.Select(c => new BatchRenameItem(c.Path, c.Name, c.Kind == CardKind.Folder)).ToList();
+        var shownNames = tab.Cards.Select(c => c.Name).ToList();
+        _fileOpBusy = true;
+        BatchRenameResult result;
+        try
+        {
+            foreach (var c in cards)
+            {
+                c.IsBusy = true;
+            }
+
+            result = await ShellFileOps.RenameManyAsync(folder, items, baseName, shownNames, View?.WindowHandle ?? 0);
+        }
+        finally
+        {
+            foreach (var c in cards)
+            {
+                c.IsBusy = false;
+            }
+
+            _fileOpBusy = false;
+        }
+
+        foreach (var r in result.Renamed)
+        {
+            if (cards.FirstOrDefault(c => PathTools.PathEquals(c.Path, r.OldPath)) is { Kind: CardKind.Folder })
+            {
+                ApplyRename(r.OldPath, r.NewPath); // the 登録フォルダ and tabs at or below it keep up with it
+            }
+        }
+
+        if (result.Renamed.Count > 0)
+        {
+            await ReloadAfterFileChangeAsync();
+        }
+
+        // Explorer keeps the items selected, the edited one first (it stays the anchor). After the
+        // reload only items of the batch that kept their name (skipped, failed) can still be
+        // selected; anything else selected now was chosen while the rename ran (a click that
+        // committed the name): kept.
+        tab = SelectedTab;
+        if (tab.Selection.Snapshot().Keys.All(wanted.Contains) && PathTools.PathEquals(tab.TransferTargetPath, folder))
+        {
+            var newPaths = result.Renamed.ToDictionary(r => r.OldPath, r => r.NewPath, PathTools.Comparer);
+            string Now(string path) => newPaths.TryGetValue(path, out var p) ? p : path;
+            var keys = cards.Select(c => Now(c.Path)).Prepend(Now(edited.Path))
+                .Where(p => tab.Cards.Any(c => PathTools.PathEquals(c.Path, p)));
+            tab.Selection.Replace(keys);
+        }
+
+        int done = result.Renamed.Count;
+        if (result.Error is { } error)
+        {
+            // Skipped items were left as they were on purpose: not failures.
+            int failed = Math.Max(1, result.Requested - done - result.Skipped);
+            Message.Error($"{failed} 個の項目の名前を変更できませんでした：{error}");
+        }
+        else if (result.Canceled)
+        {
+            Message.Info($"名前の変更を中止しました（{done} / {result.Requested} 個を変更済み）。");
+        }
+        else
+        {
+            Message.Info(result.Skipped > 0
+                ? $"{done} 個の項目の名前を変更しました（{result.Skipped} 個はそのまま）。"
+                : $"{done} 個の項目の名前を変更しました。");
+        }
     }
 
     /// <summary>

@@ -46,6 +46,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// </summary>
     private bool _committingRename;
 
+    /// <summary>
+    /// The paths F2 renames together (several selected, display order) while the edit box is open;
+    /// null for one item. Taken when the name is committed, dropped when the box is cancelled.
+    /// </summary>
+    private IReadOnlyList<string>? _renameBatch;
+
     private readonly System.Text.StringBuilder _typeAhead = new();
 
     /// <summary>
@@ -83,13 +89,17 @@ public partial class MainWindow : Window, IMainView, ICardHost
             _cascade.SetEditing(IsAddressEditing);
             if (!committed)
             {
+                _renameBatch = null;
                 RunPendingActivation();
             }
         };
         _rename.Committed += (card, text) =>
         {
+            // Ended(true) comes first and keeps the batch: it is taken here.
+            var batch = _renameBatch;
+            _renameBatch = null;
             _committingRename = true; // before the dispatch: an activation may come before it runs
-            Dispatcher.BeginInvoke(() => _ = CommitRenameAsync(card, text));
+            Dispatcher.BeginInvoke(() => _ = CommitRenameAsync(card, text, batch));
         };
         _menus.RenameRequested = card => BeginRename(card);
         _menus.NewFolderRequested = () => _ = CreateFolderAndRenameAsync();
@@ -185,6 +195,13 @@ public partial class MainWindow : Window, IMainView, ICardHost
             {
                 _lastPointer = at;
                 NoteInput();
+
+                // After a drop on a crumb WPF may never raise MouseEnter / MouseLeave for it (the OLE
+                // drag hid the pointer from it): the first real move off the crumbs arms them again.
+                if (_crumbQuiet && !IsOverCrumb(e.OriginalSource))
+                {
+                    _crumbQuiet = false;
+                }
             }
         };
         theme.ThemeChanged += () => _theme.ApplyTitleBar(this);
@@ -397,8 +414,33 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 e.Handled = true;
                 _vm.GoForwardCommand.Execute(null);
                 break;
+            case Key.Up when !inTextBox && Keyboard.Modifiers == ModifierKeys.Alt && !IsMenuTakingKeys():
+                e.Handled = true; // like Explorer: the parent folder (as Backspace and the toolbar's ↑)
+                _vm.GoUpCommand.Execute(null);
+                break;
+            case Key.Down when !inTextBox && Keyboard.Modifiers == ModifierKeys.Alt && !IsMenuTakingKeys():
+                if (e.IsRepeat)
+                {
+                    e.Handled = true; // a held Alt+↓ enters once (the old selection is still there while the folder loads)
+                }
+                else if (_vm.FolderToEnter() is { } folder)
+                {
+                    e.Handled = true;
+                    _cascade.CloseAll(); // as Enter: OpenFolderTabAsync (a top-list folder) does not close it
+                    _ = _vm.ActivateCardAsync(folder);
+                }
+
+                break;
         }
     }
+
+    /// <summary>
+    /// A menu takes the keys: the app's menu or Explorer's (shown or being prepared), or the focus in a
+    /// ContextMenu (the toolbar's sort / filter menus). Alt+↑ ↓ then navigate nothing under it.
+    /// </summary>
+    private bool IsMenuTakingKeys() =>
+        _cascade.IsMenuOpen
+        || (Keyboard.FocusedElement is DependencyObject focused && RenameEditor.IsInContextMenu(focused));
 
     private void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
@@ -454,10 +496,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
         if (key == Key.F2 && modifiers == ModifierKeys.None)
         {
-            // The one selected item (as Delete, never the item under the pointer); nothing selected: nothing.
-            if (!e.IsRepeat && _vm.RenameCandidate() is { } card)
+            // The selected item (as Delete, never the item under the pointer); several: all of them
+            // as "name (1)", "name (2)"…, the box on the focused one; nothing selected: nothing.
+            if (!e.IsRepeat && _vm.RenameCandidate(out var batch) is { } card)
             {
-                BeginRename(card);
+                BeginRename(card, batch: batch);
             }
 
             return true;
@@ -789,8 +832,9 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     // Folders dropped from Explorer on the window are registered (the hint shows at the top of the
     // sidebar; no hint while the sidebar is hidden). Over a folder (a folder card or row, a
-    // 登録フォルダ or drive row) a drop is a move or copy into it instead, also for the app's own
-    // drags (FolderDropOf); refused there, it is no registration either. Drags the app started itself
+    // 登録フォルダ or drive row, a folder name of the address bar) a drop is a move or copy into it
+    // instead, also for the app's own drags (FolderDropOf); refused there, it is no registration
+    // either, and nowhere in the address bar is (IsInAddressBar). Drags the app started itself
     // (cards, rows, previews, sidebar rows) carry a file drop too, for other apps: released elsewhere
     // over the window they are never a registration.
     private static bool CanDrop(DragEventArgs e) =>
@@ -798,7 +842,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private static bool IsOwnDrag(IDataObject data) => FileDragOut.IsDragging || FileDrag.IsFromThisApp(data.GetDataPresent);
 
-    /// <summary>The folder under the pointer during a drag, and what to highlight (a <see cref="CardViewModel"/> or <see cref="SidebarItemViewModel"/>).</summary>
+    /// <summary>The folder under the pointer during a drag, and what to highlight (a <see cref="CardViewModel"/>, <see cref="SidebarItemViewModel"/> or <see cref="BreadcrumbItem"/>).</summary>
     private readonly record struct FolderTarget(string Folder, object Mark);
 
     /// <summary>A drag over a folder: the folder, the dragged paths, and the effect a release would have there.</summary>
@@ -843,7 +887,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         SetDropMark(null);
-        bool ok = CanDrop(e);
+        bool ok = CanDrop(e) && !IsInAddressBar(e.OriginalSource);
         e.Effects = ok ? DragDropEffects.Copy : DragDropEffects.None;
         ShowDropHint(ok ? "ドロップして登録" : null);
         e.Handled = true;
@@ -858,6 +902,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
         if (drop is { } d)
         {
             e.Handled = true;
+            if (d.Target.Mark is BreadcrumbItem)
+            {
+                _crumbQuiet = true; // the pointer rests on the crumb after the drop: no list under it until it leaves (OnCrumbMouseLeave)
+            }
+
             if (d.Effect is not (DropEffects.Move or DropEffects.Copy))
             {
                 e.Effects = DragDropEffects.None;
@@ -882,7 +931,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
             return;
         }
 
-        if (!CanDrop(e) || e.Data.GetData(DataFormats.FileDrop) is not string[] dropped)
+        if (!CanDrop(e) || IsInAddressBar(e.OriginalSource) || e.Data.GetData(DataFormats.FileDrop) is not string[] dropped)
         {
             return;
         }
@@ -892,8 +941,26 @@ public partial class MainWindow : Window, IMainView, ICardHost
     }
 
     /// <summary>
+    /// The element under the pointer is in the address bar. Its folder names take drops
+    /// (<see cref="FolderTargetAt"/>); the rest of it (separators, 「…」, the room after the crumbs,
+    /// the edit box) is no registration either, or the hint would flicker while a drag crosses the crumbs.
+    /// </summary>
+    private bool IsInAddressBar(object? originalSource)
+    {
+        for (var node = originalSource as DependencyObject; node is not null; node = ParentOf(node))
+        {
+            if (ReferenceEquals(node, AddressBar))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// The folder a drag is over and the effect a release would have, or null when it is not over a
-    /// folder (then the drop is a registration, or nothing for the app's own drags). A 登録フォルダ
+    /// folder (then the drop is a registration outside the address bar, or nothing for the app's own drags). A 登録フォルダ
     /// row dragged for reordering never drops into a folder. Strings only: DragOver runs it often.
     /// </summary>
     private FolderDrop? FolderDropOf(DragEventArgs e)
@@ -910,7 +977,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
             return null;
         }
 
-        var effect = _vm.IsFileOperationRunning || IsNameBusy
+        // the last crumb is the shown folder: the items are there already (no import into it either)
+        var effect = _vm.IsFileOperationRunning || IsNameBusy || target.Mark is BreadcrumbItem { IsLast: true }
             ? DropEffects.None
             : FileDrag.DropEffectFor(sources, target.Folder, KeysOf(e.KeyStates), FromWpf(e.AllowedEffects));
         return new FolderDrop(target, sources, effect);
@@ -918,8 +986,9 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     /// <summary>
     /// The usable folder item the element under the pointer belongs to: a folder card or details
-    /// row (not busy), a 登録フォルダ or drive row. Null for files, missing folders, headers, クイック
-    /// アクセス and everything else. While a tab loads its items do not hit test, so they are not found.
+    /// row (not busy), a 登録フォルダ or drive row, a folder name of the address bar (its path, not
+    /// checked here: the transfer does). Null for files, missing folders, headers, クイック
+    /// アクセス, the crumbs' separators and everything else. While a tab loads its items do not hit test, so they are not found.
     /// </summary>
     private FolderTarget? FolderTargetAt(object? originalSource)
     {
@@ -931,6 +1000,9 @@ public partial class MainWindow : Window, IMainView, ICardHost
                     return FolderCard(card);
                 case DetailsRowView { ViewModel: { } row }:
                     return FolderCard(row);
+                case Button { DataContext: BreadcrumbItem crumb }:
+                    // a folder of the address bar (not a fixed tab's list or （不明）); the last one is the shown folder (FolderDropOf)
+                    return crumb.ToolTip is { } path && PathTools.IsFullyQualified(path) ? new FolderTarget(path, crumb) : null;
                 case FrameworkElement { DataContext: SidebarItemViewModel item }:
                     return _vm.PasteFolderOf(item.ToItemRef()) is { } folder ? new FolderTarget(folder, item) : null;
             }
@@ -985,6 +1057,9 @@ public partial class MainWindow : Window, IMainView, ICardHost
                     break;
                 case SidebarItemViewModel item:
                     item.IsDropTarget = on;
+                    break;
+                case BreadcrumbItem crumb:
+                    crumb.IsDropTarget = on;
                     break;
             }
         }
@@ -1113,9 +1188,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// <summary>
     /// Opens the edit box over <paramref name="card"/>'s name (scrolled into view first), with
     /// <paramref name="text"/> or its name. Nothing opens for a card that cannot be renamed now
-    /// (said on the message line) or that the shown view does not have.
+    /// (said on the message line) or that the shown view does not have. With a <paramref name="batch"/>
+    /// of several paths (F2 on a selection) the committed name renames all of them.
     /// </summary>
-    private void BeginRename(CardViewModel card, string? text = null, string? typeAhead = null)
+    private void BeginRename(CardViewModel card, string? text = null, string? typeAhead = null, IReadOnlyList<string>? batch = null)
     {
         // The card shown now for the same item: a card held since a menu opened, or from before a
         // reload, has been replaced by an equal one.
@@ -1135,20 +1211,30 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
         if (_rename.Begin(view, card, text ?? card.Name, typeAhead))
         {
+            _renameBatch = batch is { Count: > 1 } ? batch : null;
             _cascade.SetEditing(true);
+            if (_renameBatch is { } many)
+            {
+                _vm.Message.Info($"選択した {many.Count} 個の項目の名前を「名前 (1)」「名前 (2)」…に変更します。");
+            }
         }
     }
 
     /// <summary>
     /// The edit box closed with a commit: renames, and opens the box again when the name has to
     /// change (taken, extension declined) and the item is still shown (if not, the message of the
-    /// rename stays and the typed name is dropped).
+    /// rename stays and the typed name is dropped). A <paramref name="batch"/> is renamed together
+    /// and never opens the box again.
     /// </summary>
-    private async Task CommitRenameAsync(CardViewModel card, string text)
+    private async Task CommitRenameAsync(CardViewModel card, string text, IReadOnlyList<string>? batch = null)
     {
         try
         {
-            if (await _vm.RenameAsync(card, text) && _vm.ShownCard(card.Path) is not null)
+            if (batch is { Count: > 1 })
+            {
+                await _vm.RenameManyAsync(card, text, batch);
+            }
+            else if (await _vm.RenameAsync(card, text) && _vm.ShownCard(card.Path) is not null)
             {
                 BeginRename(card, text);
             }
@@ -1825,6 +1911,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
             _cascade.AnchorMouseLeave(element);
         }
     }
+
+    /// <summary>The element under the pointer belongs to a crumb (its template inherits the crumb as DataContext).</summary>
+    private static bool IsOverCrumb(object? source) =>
+        source is FrameworkElement { DataContext: BreadcrumbItem } or FrameworkContentElement { DataContext: BreadcrumbItem };
 
     private void OnCrumbMouseDown(object sender, MouseButtonEventArgs e)
     {
