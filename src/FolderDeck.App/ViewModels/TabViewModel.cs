@@ -1,6 +1,7 @@
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Layout;
 using FolderDeck.Core.Listing;
 using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
@@ -10,6 +11,7 @@ using FolderDeck.Core.Stores;
 using FolderDeck.Core.Text;
 using FolderDeck.Services;
 using FolderDeck.Shell;
+using FolderDeck.Views;
 
 namespace FolderDeck.ViewModels;
 
@@ -28,7 +30,7 @@ public enum LoadOutcome
 /// 登録フォルダ sidebar and always shows a folder. The placeholder (<see cref="TabKind.None"/>) is
 /// what is selected while no tab is open: it has no title, no crumb, no cards and no commands.
 /// </summary>
-public sealed partial class TabViewModel : ObservableObject
+public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
 {
     private static readonly TimeSpan RecentCheckTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan SlowAfter = TimeSpan.FromSeconds(5);
@@ -105,7 +107,10 @@ public sealed partial class TabViewModel : ObservableObject
     [ObservableProperty]
     private string? _selectionText;
 
-    /// <summary>This tab's sort mode (top level and every folder opened in it). Folder tabs share one.</summary>
+    /// <summary>
+    /// This tab's sort mode (top level and every folder opened in it). Kept per tab and saved in its
+    /// open_tabs entry; a tab that is opened (not restored) starts with the one of the tab used last.
+    /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SortModeText))]
     private CardSortMode _sortMode;
@@ -234,6 +239,33 @@ public sealed partial class TabViewModel : ObservableObject
     /// <summary>The folder a tab shows, whatever its kind (null at a top level: the title says it all).</summary>
     public string? ToolTipText => CurrentFolderPath;
 
+    // ---- cascade anchor: the header of a tab that is not shown (FolderTabStrip → CascadeController) ----
+
+    /// <summary>Set by the cascade while the list under this tab's header is showing (the header stays highlighted, its tooltip off).</summary>
+    [ObservableProperty]
+    private bool _isHoverHeld;
+
+    string ICascadeAnchor.Path => CurrentFolderPath ?? string.Empty;
+
+    NavLocation? ICascadeAnchor.Target => CurrentFolderPath is null ? null : Location;
+
+    /// <summary>
+    /// Nothing to list: the shown tab (its content is on screen), the top list of 最近の履歴 / よく使う項目,
+    /// an unknown root, or a tab whose last load failed (its banner says why; it is read again when shown).
+    /// </summary>
+    bool ICascadeAnchor.IsDisabled => IsSelected || CurrentFolderPath is null || BannerText is not null;
+
+    /// <summary>
+    /// Outside the shown tab, as a sidebar row: picked folders open in a folder tab (an open tab of that
+    /// folder is selected), and the list outlives the shown tab's content (<see cref="ICascadeAnchor.OutlivesContent"/>).
+    /// </summary>
+    bool ICascadeAnchor.OpensInNewTab => true;
+
+    bool ICascadeAnchor.YieldsToModifiers => false;
+
+    /// <summary>The strip is at the top: the list goes under the header (files too: a look into the tab).</summary>
+    bool ICascadeAnchor.OpensBelow => true;
+
     public bool IsTop => Location.IsTop;
 
     public bool ShowClearHistory => Kind == TabKind.Recent && IsTop;
@@ -244,6 +276,22 @@ public sealed partial class TabViewModel : ObservableObject
     public string FilterText => FilterLabels.Short(Filter);
 
     public string SortModeText => SortModeLabels.Short(SortMode);
+
+    /// <summary>
+    /// How this tab shows its items (cards of a shape, or the details list); kept per tab and saved in its
+    /// open_tabs entry. <see cref="MainViewModel.CardShape"/> mirrors the shown tab's.
+    /// </summary>
+    public CardShape CardShape { get; set; } = CardShape.Portrait;
+
+    /// <summary>
+    /// The view a tab starts with (saved, or inherited from the tab used last). Only for a tab without cards
+    /// (new, restored, or a fixed tab reset by <see cref="ResetToTop"/> when closed), so nothing needs re-ordering.
+    /// </summary>
+    public void SetViewState(CardShape shape, CardSortMode sort)
+    {
+        CardShape = shape;
+        SortMode = sort;
+    }
 
     /// <summary>
     /// 「1つ上へ」: inside a folder of a fixed tab (its root goes back to the list), anywhere in a folder

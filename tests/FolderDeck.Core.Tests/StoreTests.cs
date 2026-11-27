@@ -614,6 +614,50 @@ public class SettingsStoreTests
     }
 
     [Fact]
+    public void OpenTabs_WithoutViewState_TakeTheSharedShapeAndTheirKindsSort()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        File.WriteAllText(file, """
+            {"version":2,"card_shape":"details","sort_modes":{"recent":"name_asc","folder":"modified_desc"},
+             "open_tabs":[{"kind":"recent","root":"","path":""},{"kind":"folder","root":"E:\\仕事","path":""}],
+             "selected_tab":1}
+            """);
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        var s = store.Current;
+        Assert.Equal(["details", "details"], s.OpenTabs!.Select(t => t.CardShape));
+        Assert.Equal(["name_asc", "modified_desc"], s.OpenTabs!.Select(t => t.SortMode));
+        Assert.Equal("modified_desc", s.LastSortMode); // the selected tab's
+    }
+
+    [Fact]
+    public void OpenTabs_ViewState_IsKeptPerTab_AndNormalized()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        store.Update(s =>
+        {
+            s.CardShape = "square";
+            s.OpenTabs =
+            [
+                new OpenTabSetting { Kind = AppSettings.TabRecent, CardShape = "DETAILS", SortMode = "size_desc" },
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\写真", CardShape = "bogus", SortMode = "bogus" },
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\仕事", CardShape = " " },
+            ];
+        });
+        store.Flush();
+
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        var tabs = reloaded.Current.Clone().OpenTabs!; // Clone keeps them too
+        Assert.Equal(["details", "portrait", "square"], tabs.Select(t => t.CardShape));
+        Assert.Equal(["size_desc", "manual", "manual"], tabs.Select(t => t.SortMode));
+    }
+
+    [Fact]
     public void OpenTabs_AreNormalized_SelectionFollowsItsEntry()
     {
         AppSettings Make(int selected) => new()

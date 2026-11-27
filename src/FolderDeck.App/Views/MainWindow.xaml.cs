@@ -141,6 +141,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
         };
         TabStrip.Interacted += () => _cascade.CloseAll();
 
+        // A tab that is not shown is an anchor too: resting on its header lists its folder under it (TabViewModel as ICascadeAnchor).
+        TabStrip.TabEntered += (element, tab) => _cascade.AnchorMouseEnter(element, element, tab);
+        TabStrip.TabMoved += (element, tab, position) => _cascade.AnchorMouseMove(element, element, tab, position);
+        TabStrip.TabLeft += element => _cascade.AnchorMouseLeave(element);
+        TabStrip.TabsShifted += () => _cascade.AnchorsMoved<TabViewModel>();
+
         // §9.6 rule 5: these close every flyout at once (Popups are topmost windows).
         Deactivated += (_, _) => _cascade.CloseAll();
         LocationChanged += (_, _) => _cascade.CloseAll();
@@ -1072,7 +1078,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// A click with Ctrl and / or Shift selects (Ctrl flips the item, Shift takes the range, both add
     /// the range); a plain click clears the selection and opens the item. With the setting
     /// ダブルクリックで開く a plain click selects the item alone and a double click opens it (the
-    /// item stays selected, as in Explorer).
+    /// item stays selected, as in Explorer, and a program runs without 実行形式の確認).
     /// </summary>
     public void ItemClick(CardViewModel vm, FrameworkElement element, ModifierKeys modifiers, bool doubleClick)
     {
@@ -1086,7 +1092,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             if (doubleClick)
             {
-                _ = _vm.ActivateCardAsync(vm);
+                _ = _vm.ActivateCardAsync(vm, askBeforeProgram: false); // a double click is deliberate: no 実行形式の確認
             }
             else
             {

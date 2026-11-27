@@ -244,16 +244,62 @@ public sealed class ContextMenuFactory
         Open(menu);
     }
 
-    /// <summary>The WPF menu of <paramref name="entries"/> (IsDefault is not shown there).</summary>
+    /// <summary>The WPF menu of <paramref name="entries"/> (IsDefault is not shown there), submenus included.</summary>
     private static ContextMenu Render(IReadOnlyList<MenuEntry> entries, FrameworkElement target)
     {
         var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
         foreach (var entry in entries)
         {
-            menu.Items.Add(entry.IsSeparator ? new Separator() : Item(entry.Header!, entry.Glyph, entry.Enabled, entry.Action!));
+            menu.Items.Add(RenderEntry(entry));
         }
 
         return menu;
+    }
+
+    private static object RenderEntry(MenuEntry entry)
+    {
+        if (entry.IsSeparator)
+        {
+            return new Separator();
+        }
+
+        if (!entry.IsSubmenu)
+        {
+            return Item(entry.Header!, entry.Glyph, entry.Enabled, entry.Action!);
+        }
+
+        // No Click here: Click bubbles, a child's would run it too. The template shows ▶ and the submenu.
+        var parent = new MenuItem { Header = entry.Header, Tag = entry.Glyph, IsEnabled = entry.Enabled };
+        foreach (var child in entry.Children!)
+        {
+            parent.Items.Add(RenderEntry(child));
+        }
+
+        return parent;
+    }
+
+    /// <summary>
+    /// The entries depth first for Explorer's menu, each with the index of the submenu entry it is in
+    /// (-1: the top). <see cref="ShellMenuResult.AppIndex"/> counts in this list.
+    /// </summary>
+    private static List<(MenuEntry Entry, int Parent)> Flatten(IReadOnlyList<MenuEntry> entries)
+    {
+        var flat = new List<(MenuEntry Entry, int Parent)>();
+        void Add(IReadOnlyList<MenuEntry> list, int parent)
+        {
+            foreach (var entry in list)
+            {
+                int index = flat.Count;
+                flat.Add((entry, parent));
+                if (entry.IsSubmenu)
+                {
+                    Add(entry.Children!, index);
+                }
+            }
+        }
+
+        Add(entries, -1);
+        return flat;
     }
 
     /// <summary>
@@ -307,11 +353,44 @@ public sealed class ContextMenuFactory
             {
                 entries.Add(new("登録フォルダに追加", AddGlyph, true, () => _ = _vm.AddToRegisteredAsync(shown)));
             }
+
+            AddOpenInEntries(entries, shown.Path);
         }
 
         nativePaths = shown is null ? null : [shown.Path];
         return entries;
     }
+
+    /// <summary>
+    /// 「ターミナルで開く」 (Windows Terminal, else cmd) and 「PowerShell で開く」 (pwsh, else Windows
+    /// PowerShell), each with 開く / 管理者として開く, then 「Code で開く」 and 「WSL で開く」 when installed,
+    /// for <paramref name="folder"/>. What is installed is the last look of <see cref="OpenInTools"/>,
+    /// kept in the actions (RunEntry may run them after the menu closed).
+    /// </summary>
+    private void AddOpenInEntries(List<MenuEntry> entries, string folder)
+    {
+        var programs = OpenInTools.Current;
+        OpenInTools.Refresh(); // the next right click sees an install / uninstall
+        entries.Add(MenuEntry.Separator);
+        entries.Add(Elevatable("ターミナルで開く", TerminalGlyph, OpenInTool.Terminal, folder, programs));
+        entries.Add(Elevatable("PowerShell で開く", TerminalGlyph, OpenInTool.PowerShell, folder, programs));
+        if (programs.Code is not null)
+        {
+            entries.Add(new("Code で開く", CodeGlyph, true, () => _ = _vm.OpenInAsync(OpenInTool.Code, elevated: false, folder, programs)));
+        }
+
+        if (programs.Wsl)
+        {
+            entries.Add(new("WSL で開く", TerminalGlyph, true, () => _ = _vm.OpenInAsync(OpenInTool.Wsl, elevated: false, folder, programs)));
+        }
+    }
+
+    private MenuEntry Elevatable(string header, string glyph, OpenInTool tool, string folder, OpenInPrograms programs) =>
+        new(header, glyph, true, null, Children:
+        [
+            new("開く", OpenGlyph, true, () => _ = _vm.OpenInAsync(tool, elevated: false, folder, programs)),
+            new("管理者として開く", AdminGlyph, true, () => _ = _vm.OpenInAsync(tool, elevated: true, folder, programs)),
+        ]);
 
     /// <summary>The menu of the PC section header: エクスプローラーで開く (This PC).</summary>
     public void ShowPcSection(FrameworkElement target)
@@ -354,10 +433,11 @@ public sealed class ContextMenuFactory
             NativeMenuChanged?.Invoke(true);
         }
 
+        var flat = app is null ? null : Flatten(app); // submenus as entries with a Parent: AppIndex counts in it
         ShellMenuResult result;
         try
         {
-            var appEntries = app?.Select(e => new ShellMenuAppEntry(e.Header ?? "", e.Enabled, e.IsSeparator, e.IsDefault)).ToArray();
+            var appEntries = flat?.Select(f => new ShellMenuAppEntry(f.Entry.Header ?? "", f.Entry.Enabled, f.Entry.IsSeparator, f.Entry.IsDefault, f.Parent, f.Entry.IsSubmenu)).ToArray();
             nint mainWindow = _vm.View?.WindowHandle ?? 0;
             result = await (background
                 ? ShellContextMenu.ShowBackgroundAsync(paths[0], at.X, at.Y, at.Extended, mainWindow, appEntries)
@@ -380,8 +460,8 @@ public sealed class ContextMenuFactory
             // After the unfreeze, as a WPF entry's Click: its BeforeNavigate closes the cascade.
             if (result.Outcome == ShellMenuOutcome.AppCommand)
             {
-                if (result.AppIndex >= 0 && result.AppIndex < app.Count
-                    && app[result.AppIndex] is { IsSeparator: false, Enabled: true, Action: not null } entry)
+                if (result.AppIndex >= 0 && result.AppIndex < flat!.Count
+                    && flat[result.AppIndex].Entry is { IsSeparator: false, Enabled: true, Action: not null } entry)
                 {
                     RunEntry(entry);
                 }
@@ -548,17 +628,24 @@ public sealed class ContextMenuFactory
     private const string NewFolderGlyph = "\uE8F4"; // NewFolder
     private const string ExplorerGlyph = "\uEC50"; // File Explorer
     private const string NativeMenuGlyph = "\uE712"; // More (…)
+    private const string TerminalGlyph = "\uE756"; // CommandPrompt
+    private const string CodeGlyph = "\uE943"; // Code
+    private const string AdminGlyph = "\uEA18"; // Shield
 
     /// <summary>
     /// One entry of an item's menu, rendered as a WPF <see cref="MenuItem"/> or handed to Explorer's
     /// menu (text only). A null <see cref="Header"/> is a separator. <see cref="IsDefault"/> is the
-    /// default (bold) entry of Explorer's menu.
+    /// default (bold) entry of Explorer's menu (top level only). With <see cref="Children"/> it is a
+    /// submenu (▶): <see cref="Action"/> is null, the children run.
     /// </summary>
-    private sealed record MenuEntry(string? Header, string Glyph, bool Enabled, Action? Action, bool IsDefault = false)
+    private sealed record MenuEntry(
+        string? Header, string Glyph, bool Enabled, Action? Action, bool IsDefault = false, IReadOnlyList<MenuEntry>? Children = null)
     {
         public static MenuEntry Separator { get; } = new(null, "", false, null);
 
         public bool IsSeparator => Header is null;
+
+        public bool IsSubmenu => Children is { Count: > 0 };
     }
 
     /// <summary>The pointer in screen pixels and the Shift state when the app's menu was asked for.</summary>

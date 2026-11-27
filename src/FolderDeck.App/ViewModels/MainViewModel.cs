@@ -83,6 +83,15 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     private bool _tabsRestored;
 
+    /// <summary>CardShape is being set to the shown tab's (tab switch, startup): not the user's choice, nothing is saved.</summary>
+    private bool _syncingView;
+
+    /// <summary>
+    /// Sort mode of the tab used last (the shown one; kept while no tab is open). A tab that joins the
+    /// strip starts with it (<see cref="InheritViewState"/>); saved as <c>last_sort_mode</c>.
+    /// </summary>
+    private CardSortMode _lastSortMode;
+
     /// <summary>The shown tab; <see cref="NoTab"/> (never null) while no tab is open.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanGoBack), nameof(CanGoForward), nameof(HasTab))]
@@ -93,8 +102,9 @@ public sealed partial class MainViewModel : ObservableObject
     private int _cardSize = AppSettings.CardSizeDefault;
 
     /// <summary>
-    /// How every tab shows its items (toolbar, right of the sort button): cards of one of two
-    /// shapes, or the details list.
+    /// How the shown tab shows its items (toolbar, right of the sort button): cards of one of two
+    /// shapes, or the details list. Mirrors <see cref="TabViewModel.CardShape"/> of <see cref="SelectedTab"/>
+    /// (<see cref="OnSelectedTabChanged"/>); kept while no tab is open: what a new tab starts with.
     /// </summary>
     [ObservableProperty]
     private CardShape _cardShape = CardShape.Portrait;
@@ -221,7 +231,46 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         newValue.IsSelected = true;
+        if (newValue.IsPlaceholder)
+        {
+            return; // no tab: the toolbar is hidden; the last tab's view stays, new tabs start with it
+        }
+
+        // Runs before SelectedTab is announced (generated setter), so the view swaps with the new tab and
+        // ActiveList is already its view for the scroll position ShowTabAsync restores.
+        _lastSortMode = newValue.SortMode;
+        if (CardShape != newValue.CardShape)
+        {
+            View?.CloseCardCascade(); // the overlay was sized for the other shape
+            SyncCardShape(newValue.CardShape);
+        }
     }
+
+    /// <summary>Sets <see cref="CardShape"/> to the shown tab's without saving it or dropping scroll positions.</summary>
+    private void SyncCardShape(CardShape shape)
+    {
+        _syncingView = true;
+        try
+        {
+            CardShape = shape;
+        }
+        finally
+        {
+            _syncingView = false;
+        }
+    }
+
+    /// <summary>A tab restored from open_tabs comes back with its own view (Normalize filled older entries).</summary>
+    private static void RestoreViewState(TabViewModel tab, OpenTabSetting entry) =>
+        tab.SetViewState(CardShapes.FromSetting(entry.CardShape), CardSortModes.FromSetting(entry.SortMode));
+
+    /// <summary>
+    /// A tab that joins the strip now (not restored) starts with the view of the tab used last: the shown
+    /// one, or while no tab is open the last shown (across a restart too: card_shape / last_sort_mode).
+    /// Call before the tab is shown. The three callers: OpenFolderTabAsync, OpenQuickTabAsync, NavigateAsync.
+    /// </summary>
+    private void InheritViewState(TabViewModel tab) =>
+        tab.SetViewState(HasTab ? SelectedTab.CardShape : CardShape, HasTab ? SelectedTab.SortMode : _lastSortMode);
 
     // ---- startup / shutdown -----------------------------------------------------------------
 
@@ -233,7 +282,8 @@ public sealed partial class MainViewModel : ObservableObject
     {
         var settings = Settings;
         CardSize = settings.CardSize;
-        CardShape = CardShapes.FromSetting(settings.CardShape);
+        SyncCardShape(CardShapes.FromSetting(settings.CardShape)); // the selected tab's follows below
+        _lastSortMode = CardSortModes.FromSetting(settings.LastSortMode);
         SidebarWidth = settings.SidebarWidth;
 
         // A folder tab whose folder is gone stays, with its error banner: the user closes it. A fixed
@@ -256,7 +306,9 @@ public sealed partial class MainViewModel : ObservableObject
                 if (located)
                 {
                     var location = new NavLocation(TabKind.Folder, entry.Root, entry.Path);
-                    AddFolderTab(location).SetIdentity(location, entry.FileId);
+                    var restored = AddFolderTab(location);
+                    restored.SetIdentity(location, entry.FileId);
+                    RestoreViewState(restored, entry);
                 }
 
                 continue;
@@ -275,12 +327,14 @@ public sealed partial class MainViewModel : ObservableObject
                 _restoring.Add(tab);
             }
 
+            RestoreViewState(tab, entry);
             AddToStrip(tab);
         }
 
         RefreshRegistered();
         _ = DriveList.RefreshAsync(recheck: false); // not awaited: a drive that does not answer must not delay the first tab
-        SelectedTab = Tabs.Count == 0 ? NoTab : Tabs[Math.Clamp(selected, 0, Tabs.Count - 1)];
+        OpenInTools.Refresh(); // in the background: the blank area's 「… で開く」
+        SelectedTab =Tabs.Count == 0 ? NoTab : Tabs[Math.Clamp(selected, 0, Tabs.Count - 1)];
         _tabsRestored = true; // before the first await: what the user does while the first tab loads is saved too
         ApplyAutoRefreshSetting(settings);
         if (HasTab)
@@ -294,8 +348,18 @@ public sealed partial class MainViewModel : ObservableObject
         bool tabs = _tabsRestored;
         int selectedTab = Tabs.IndexOf(SelectedTab); // -1: no tab is open
         var openTabs = Tabs
-            .Select(t => new OpenTabSetting { Kind = TabKinds.ToSetting(t.Kind), Root = t.Location.Root, Path = t.Location.Rel, FileId = t.Identity })
+            .Select(t => new OpenTabSetting
+            {
+                Kind = TabKinds.ToSetting(t.Kind),
+                Root = t.Location.Root,
+                Path = t.Location.Rel,
+                FileId = t.Identity,
+                CardShape = CardShapes.ToSetting(t.CardShape),
+                SortMode = CardSortModes.ToSetting(t.SortMode),
+            })
             .ToList();
+        string lastShape = CardShapes.ToSetting(HasTab ? SelectedTab.CardShape : CardShape);
+        string lastSort = CardSortModes.ToSetting(HasTab ? SelectedTab.SortMode : _lastSortMode);
         _services.Stores.Settings.Update(s =>
         {
             if (window is not null)
@@ -307,11 +371,14 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 s.OpenTabs = openTabs;
                 s.SelectedTab = selectedTab;
+
+                // The view of the tab used last: before the tabs are restored it is not known yet (defaults).
+                s.CardShape = lastShape;
+                s.LastSortMode = lastSort;
             }
 
             s.SidebarWidth = SidebarWidth;
             s.CardSize = CardSize;
-            s.CardShape = CardShapes.ToSetting(CardShape);
         });
     }
 
@@ -410,6 +477,7 @@ public sealed partial class MainViewModel : ObservableObject
         Message.ClearPersistent();
         if (!tab.IsOpen)
         {
+            InheritViewState(tab); // SelectedTab is still the tab used last
             AddToStrip(tab);
         }
 
@@ -436,6 +504,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (tab is null)
         {
             tab = AddFolderTab(target with { Tab = TabKind.Folder });
+            InheritViewState(tab); // SelectedTab is still the tab used last
         }
 
         await ShowTabAsync(tab);
@@ -683,6 +752,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             if (!tab.IsOpen)
             {
+                InheritViewState(tab); // SelectedTab is still the tab used last
                 AddToStrip(tab);
             }
 
@@ -1082,20 +1152,34 @@ public sealed partial class MainViewModel : ObservableObject
     public void StepCardSize(int direction) =>
         CardSize = AppSettings.ClampCardSize(CardSize + (Math.Sign(direction) * AppSettings.CardSizeStep));
 
+    /// <summary>
+    /// The user changed the view mode (toolbar, UI Automation): it is the shown tab's from now on, saved in
+    /// its open_tabs entry and as card_shape (the tab used last). Not while <see cref="SyncCardShape"/> runs.
+    /// </summary>
     partial void OnCardShapeChanged(CardShape oldValue, CardShape newValue)
     {
+        if (_syncingView)
+        {
+            return; // the shown tab brought its own view: nothing to save, its scroll positions fit it
+        }
+
         View?.CloseCascade(); // the overlay covers the thumbnail, whose height changes; a row's list hangs on a row
-        _services.Stores.Settings.Update(s => s.CardShape = CardShapes.ToSetting(newValue));
+        if (!HasTab)
+        {
+            SaveLocations(); // no tab (toolbar hidden, UI Automation): what a new tab starts with (card_shape)
+            return;
+        }
+
+        var tab = SelectedTab;
+        tab.CardShape = newValue;
+        SaveLocations(); // this tab's card_shape in open_tabs, and card_shape (the tab used last)
         if (CardShapes.IsCards(oldValue) != CardShapes.IsCards(newValue))
         {
-            // Another view takes over (card grid ↔ details list). A scroll position is an offset of
-            // the view it was read from, so every remembered one is dropped rather than applied to
-            // the wrong view; the view that shows the items from now on starts at the top.
-            foreach (var tab in AllTabs)
-            {
-                tab.ResetScrollOffsets();
-            }
-
+            // Another view takes over this tab (card grid ↔ details list). A scroll position is an
+            // offset of the view it was read from, so this tab's remembered ones (saved, back / forward)
+            // are dropped rather than applied to the wrong view. Other tabs keep theirs: each is shown
+            // in its own view. Runs before CardShape is announced, so ScrollTo(0) reaches the new view.
+            tab.ResetScrollOffsets();
             View?.ScrollTo(0);
         }
     }
@@ -1167,8 +1251,8 @@ public sealed partial class MainViewModel : ObservableObject
     // ---- card order: sort modes, filter and drag & drop -------------------------------------
 
     /// <summary>
-    /// Changes the selected tab's sort mode (saved per tab; the folder tabs share one, so all of
-    /// them follow) and re-orders the cards in place.
+    /// Changes the selected tab's sort mode (saved per tab: the other tabs keep theirs) and re-orders
+    /// the cards in place.
     /// </summary>
     public void SetSortMode(CardSortMode mode)
     {
@@ -1181,15 +1265,6 @@ public sealed partial class MainViewModel : ObservableObject
 
         SaveSortMode(tab, mode);
         tab.ApplyOrder();
-        if (tab.IsFolderTab)
-        {
-            foreach (var other in Tabs.Where(t => t.IsFolderTab && !ReferenceEquals(t, tab)))
-            {
-                other.SortMode = mode;
-                other.ApplyOrder();
-            }
-        }
-
         View?.ScrollTo(0);
     }
 
@@ -1255,11 +1330,21 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Saves a tab's new sort mode: in its open_tabs entry, as last_sort_mode when it is the shown tab,
+    /// and per kind in sort_modes (only an earlier exe reads that).
+    /// </summary>
     private void SaveSortMode(TabViewModel tab, CardSortMode mode)
     {
+        tab.SortMode = mode; // first: SaveLocations reads it
+        if (ReferenceEquals(tab, SelectedTab))
+        {
+            _lastSortMode = mode;
+        }
+
         string key = TabKinds.ToSetting(tab.Kind);
         _services.Stores.Settings.Update(s => s.SetSortMode(key, mode));
-        tab.SortMode = mode;
+        SaveLocations();
     }
 
     /// <summary>
@@ -1324,14 +1409,20 @@ public sealed partial class MainViewModel : ObservableObject
 
     // ---- opening items (§6.8, §9.7, §12) ----------------------------------------------------
 
-    public Task ActivateCardAsync(CardViewModel card)
+    /// <param name="card">The card or details row to open.</param>
+    /// <param name="askBeforeProgram">
+    /// false only for the double click of ダブルクリックで開く (on a card / details row): already
+    /// deliberate, so a program runs without 実行形式の確認. Every other path (Enter, cascade rows and
+    /// headers, previews, menus, the address bar, several items) keeps the default true.
+    /// </param>
+    public Task ActivateCardAsync(CardViewModel card, bool askBeforeProgram = true)
     {
         if (card.IsDisabled || card.IsBusy)
         {
             return Task.CompletedTask;
         }
 
-        return OpenItemAsync(card.ToItemRef());
+        return OpenItemAsync(card.ToItemRef(), askBeforeProgram);
     }
 
     /// <summary>
@@ -1386,7 +1477,9 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    public Task OpenItemAsync(ItemRef item)
+    /// <param name="item">The item to open.</param>
+    /// <param name="askBeforeProgram">Passed to <see cref="OpenFileAsync"/> for a file (see <see cref="ActivateCardAsync"/>).</param>
+    public Task OpenItemAsync(ItemRef item, bool askBeforeProgram = true)
     {
         if (item.IsFolder)
         {
@@ -1408,15 +1501,21 @@ public sealed partial class MainViewModel : ObservableObject
             return Task.CompletedTask;
         }
 
-        return OpenFileAsync(item.Path, item.Card);
+        return OpenFileAsync(item.Path, item.Card, askBeforeProgram);
     }
 
-    public async Task OpenFileAsync(string path, CardViewModel? card)
+    /// <param name="path">The file to open.</param>
+    /// <param name="card">Its card, if any (busy while it opens).</param>
+    /// <param name="askBeforeProgram">
+    /// false skips 実行形式の確認 (<see cref="Settings"/>.ConfirmExecutables): only the double click of
+    /// ダブルクリックで開く passes it (see <see cref="ActivateCardAsync"/>).
+    /// </param>
+    public async Task OpenFileAsync(string path, CardViewModel? card, bool askBeforeProgram = true)
     {
         Message.ClearPersistent();
         string name = PathTools.DisplayName(path);
         var settings = Settings;
-        if (settings.ConfirmExecutables && ShellActions.IsExecutable(path))
+        if (askBeforeProgram && settings.ConfirmExecutables && ShellActions.IsExecutable(path))
         {
             bool run = View?.Confirm("プログラムの実行", $"プログラムを実行しようとしています。{name} を実行しますか？", path, "実行", danger: true) ?? false;
             if (!run)
@@ -1524,6 +1623,54 @@ public sealed partial class MainViewModel : ObservableObject
         if (!result.Success)
         {
             Message.Error(result.Error!);
+        }
+    }
+
+    /// <summary>
+    /// 「ターミナルで開く」「PowerShell で開く」 (開く / 管理者として開く), 「Code で開く」 and 「WSL で開く」 of
+    /// the blank area: <paramref name="tool"/> in <paramref name="folder"/>, as <paramref name="programs"/>
+    /// found it when the menu was built. Elevated (UAC) with <paramref name="elevated"/>. A SUBST drive
+    /// goes as the folder it stands for and a mapped network drive as its UNC path when elevated or to WSL
+    /// (neither sees the user's SUBST or mapped drives).
+    /// Declining the UAC prompt says nothing; a failure says why on the message line; a start that
+    /// worked says nothing (the window is the answer, as in Explorer). Not recorded as a use.
+    /// </summary>
+    public async Task OpenInAsync(OpenInTool tool, bool elevated, string folder, OpenInPrograms programs)
+    {
+        string target = elevated || tool == OpenInTool.Wsl
+            ? await Task.Run(() =>
+            {
+                string real = DriveCatalog.SubstTargetOf(folder) ?? folder;
+                return DriveCatalog.UncOf(real) ?? real;
+            })
+            : folder;
+        if (OpenInCommand.Build(tool, elevated, target, programs, Environment.SystemDirectory) is not { } spec)
+        {
+            return; // not installed (the menu offers only what was found)
+        }
+
+        if (spec.Refusal is not null)
+        {
+            Message.Error(spec.Refusal);
+            return;
+        }
+
+        // Off the UI thread: with runas ShellExecuteEx returns only once the UAC prompt is answered.
+        var result = await Task.Run(() => ShellActions.Launch(spec, elevated));
+        if (result.Cancelled)
+        {
+            return; // the UAC prompt was declined
+        }
+
+        if (!result.Success)
+        {
+            Message.Error(result.Error ?? "起動できませんでした。");
+            return;
+        }
+
+        if (spec.Note is not null)
+        {
+            Message.Info(spec.Note); // WSL on another share: opened in the home directory
         }
     }
 

@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using FolderDeck.Core.Drives;
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Paths;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.NetworkManagement.WNet;
@@ -199,6 +200,74 @@ public static class DriveCatalog
         }
 
         return found;
+    }
+
+    /// <summary>
+    /// <c>Z:\a</c> on a connected network drive as <c>\\server\share\a</c>, else null (a local drive, a
+    /// drive not connected). For a process that does not see the user's mapped drives (an elevated one,
+    /// WSL). Blocking (network): off the UI thread.
+    /// </summary>
+    public static string? UncOf(string path)
+    {
+        if (path.Length < 2 || path[1] != ':' || !char.IsAsciiLetter(path[0]) || ConnectionOf(path[0]) is not { } remote)
+        {
+            return null;
+        }
+
+        return PathTools.TrimTrailingSeparators(remote.TrimEnd('\\') + path[2..]);
+    }
+
+    /// <summary>
+    /// <c>S:\a</c> on a drive made by SUBST as the folder it stands for (<c>E:\work\a</c>), else null (a
+    /// volume, a network drive, no such drive). A SUBST drive belongs to the logon session that made it, so
+    /// an elevated process does not see it. Resolve before <see cref="UncOf"/> (the folder may be on a
+    /// mapped drive).
+    /// </summary>
+    public static unsafe string? SubstTargetOf(string path)
+    {
+        if (path.Length < 2 || path[1] != ':' || !char.IsAsciiLetter(path[0]))
+        {
+            return null;
+        }
+
+        try
+        {
+            string device = $"{path[0]}:";
+            char[] buffer = new char[1024];
+            uint written;
+            fixed (char* name = device)
+            fixed (char* target = buffer)
+            {
+                written = PInvoke.QueryDosDevice(new PCWSTR(name), new PWSTR(target), (uint)buffer.Length);
+            }
+
+            if (written == 0)
+            {
+                return null;
+            }
+
+            int end = Array.IndexOf(buffer, '\0');
+            string first = new(buffer, 0, end >= 0 ? end : (int)Math.Min(written, (uint)buffer.Length));
+            const string Prefix = @"\??\";
+            if (!first.StartsWith(Prefix, StringComparison.Ordinal))
+            {
+                return null; // \Device\HarddiskVolume3, \Device\LanmanRedirector\…: not SUBST
+            }
+
+            string mapped = first[Prefix.Length..];
+            if (mapped.StartsWith(@"UNC\", StringComparison.OrdinalIgnoreCase))
+            {
+                mapped = @"\\" + mapped[4..];
+            }
+
+            return PathTools.IsFullyQualified(mapped)
+                ? PathTools.TrimTrailingSeparators(mapped.TrimEnd('\\') + path[2..])
+                : null;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The path a connected network drive is mapped to (<c>\\server\share</c>), or null.</summary>

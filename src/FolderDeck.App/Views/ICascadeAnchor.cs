@@ -9,7 +9,8 @@ namespace FolderDeck.Views;
 /// What a cascade that does not hang on a card is opened from (<see cref="CascadeController.AnchorMouseEnter"/>):
 /// a folder whose list opens in a flyout beside an element of the window. A sidebar row (登録フォルダ,
 /// drive) is one, a folder row of the details list (<see cref="CardAnchor"/>) another, a crumb of the
-/// address bar (<see cref="BreadcrumbItem"/>, its list under it) a third; the element
+/// address bar (<see cref="BreadcrumbItem"/>, its list under it) a third, the header of a tab that is
+/// not shown (<see cref="TabViewModel"/>, its list under it) a fourth; the element
 /// itself is passed separately, so one item can be shown by any view.
 /// </summary>
 public interface ICascadeAnchor
@@ -39,7 +40,7 @@ public interface ICascadeAnchor
     bool IsHoverHeld { get; set; }
 
     /// <summary>
-    /// True when the item is outside the shown tab (a sidebar row): folders picked in its cascade
+    /// True when the item is outside the shown tab (a sidebar row, a tab that is not shown): folders picked in its cascade
     /// open in a folder tab of their own, and the cascade outlives changes of the tab's content.
     /// False when it is an item of the tab: folders navigate inside the tab and the cascade closes
     /// with the content (<see cref="CascadeController.CloseCardCascade"/>).
@@ -53,7 +54,7 @@ public interface ICascadeAnchor
     bool YieldsToModifiers { get; }
 
     /// <summary>
-    /// True when the first list opens under the element (a crumb of the address bar) instead of
+    /// True when the first list opens under the element (a crumb of the address bar, a tab header) instead of
     /// beside it. Deeper lists still open beside their parent list.
     /// </summary>
     bool OpensBelow => false;
@@ -66,8 +67,8 @@ public interface ICascadeAnchor
 
     /// <summary>
     /// True when the cascade does not hang on the tab's content, so changes of that content
-    /// (<see cref="CascadeController.CloseCardCascade"/>) leave it open: a sidebar row
-    /// (<see cref="OpensInNewTab"/>) and a crumb of the address bar, whose folders open inside the tab.
+    /// (<see cref="CascadeController.CloseCardCascade"/>) leave it open: a sidebar row and a tab that is
+    /// not shown (<see cref="OpensInNewTab"/>), and a crumb of the address bar, whose folders open inside the tab.
     /// </summary>
     bool OutlivesContent => OpensInNewTab;
 }

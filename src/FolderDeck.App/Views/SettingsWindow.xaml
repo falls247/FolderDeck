@@ -128,6 +128,8 @@
                     <TextBlock Text="オンにすると、カード・詳細表示の行は 1 回のクリックでその項目だけを選び、ダブルクリックで開きます（サイドバーと一覧の行は 1 回のクリックのまま）。"
                                Style="{StaticResource Help}" Margin="20,0,0,0" />
                     <CheckBox Content="実行形式を開く前に確認する" IsChecked="{Binding ConfirmExecutables}" />
+                    <TextBlock Text="「ダブルクリックで開く」がオンのときは、カード・詳細表示の行のダブルクリックでは確認しません（Enter、右クリックの「開く」、中身の一覧・プレビューのクリック、アドレス欄では確認します）。"
+                               Style="{StaticResource Help}" Margin="20,0,0,0" />
 
                     <TextBlock Text="右クリックのメニュー" Style="{StaticResource Section}" />
                     <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3" Background="{DynamicResource Brush.Surface2}"

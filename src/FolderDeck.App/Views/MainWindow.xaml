@@ -208,7 +208,8 @@
                 </Button>
 
                 <!--
-                  View mode (every tab): tall cards, square cards, or the details list. A click runs the
+                  View mode of the shown tab (each tab keeps its own: TabViewModel.CardShape; MainViewModel.CardShape
+                  mirrors it): tall cards, square cards, or the details list. A click runs the
                   command; Checked covers the choices made without a click (UI Automation selects a radio
                   button by checking it), see OnViewModeChecked.
                 -->
