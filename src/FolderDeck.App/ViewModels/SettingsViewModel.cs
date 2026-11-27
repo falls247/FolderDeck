@@ -22,6 +22,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool _showHidden;
 
     [ObservableProperty]
+    private bool _showDotItems;
+
+    [ObservableProperty]
     private bool _confirmExecutables;
 
     [ObservableProperty]
@@ -77,6 +80,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             .Select(i => new TextScaleChoice(this, AppSettings.TextScaleMin + (i * AppSettings.TextScaleStep)))
             .ToList();
         _showHidden = settings.ShowHidden;
+        _showDotItems = settings.ShowDotItems;
         _confirmExecutables = settings.ConfirmExecutables;
         _includeWindowsRecent = settings.IncludeWindowsRecent;
         _addToWindowsRecent = settings.AddToWindowsRecent;
@@ -271,6 +275,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.Theme = AppThemes.ToSetting(Theme);
         settings.TextScale = TextScale;
         settings.ShowHidden = ShowHidden;
+        settings.ShowDotItems = ShowDotItems;
         settings.ConfirmExecutables = ConfirmExecutables;
         settings.IncludeWindowsRecent = IncludeWindowsRecent;
         settings.AddToWindowsRecent = AddToWindowsRecent;

@@ -9,9 +9,10 @@ public sealed class RealFileSystem : IFileSystem
 
     private const FileAttributes HiddenOrSystem = FileAttributes.Hidden | FileAttributes.System;
 
-    public IReadOnlyList<FsEntry> EnumerateDirectory(string path, bool includeHidden, CancellationToken cancellationToken)
+    public IReadOnlyList<FsEntry> EnumerateDirectory(string path, ListingFilter filter, CancellationToken cancellationToken)
     {
-        FileAttributes skip = includeHidden ? 0 : HiddenOrSystem;
+        FileAttributes skip = (filter & ListingFilter.Hidden) != 0 ? 0 : HiddenOrSystem;
+        bool skipDotNames = (filter & ListingFilter.DotNames) == 0;
         var options = new EnumerationOptions
         {
             // Non-recursive: IgnoreInaccessible would only hide an error on the folder itself,
@@ -36,7 +37,7 @@ public sealed class RealFileSystem : IFileSystem
             options)
         {
             ShouldIncludePredicate = (ref FileSystemEntry e) =>
-                !e.FileName.StartsWith('.') && (e.Attributes & skip) == 0,
+                !(skipDotNames && e.FileName.StartsWith('.')) && (e.Attributes & skip) == 0,
         };
 
         var result = new List<FsEntry>();

@@ -16,7 +16,8 @@ namespace FolderDeck.Views;
 /// tab, dragging it sideways moves it among the others (they swap as the pointer passes the middle
 /// of a neighbour), a middle click or × closes it. When the tabs do not fit, ◀ / ▶ appear on the
 /// left (next to the sidebar button) and step one tab at a time, and the wheel (vertical or
-/// horizontal) over the strip scrolls it; there is no scroll bar.
+/// horizontal) over the strip scrolls it; there is no scroll bar. Resting on a tab that is not shown
+/// lists its folder under it: the hover events go to the main window's cascade (<see cref="TabEntered"/>).
 /// </summary>
 public partial class FolderTabStrip : UserControl
 {
@@ -53,6 +54,7 @@ public partial class FolderTabStrip : UserControl
         {
             _pendingOffset = null;
             UpdateArrows();
+            TabsShifted?.Invoke(); // scrolled, or a title got wider or narrower: the tabs moved under the pointer
         };
         LeftArrow.Click += (_, _) => Step(-1);
         RightArrow.Click += (_, _) => Step(1);
@@ -227,7 +229,11 @@ public partial class FolderTabStrip : UserControl
         }
     }
 
-    private void OnTabsChanged(object? sender, NotifyCollectionChangedEventArgs e) => RevealSelected();
+    private void OnTabsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        RevealSelected();
+        TabsShifted?.Invoke(); // a tab was added, closed or moved
+    }
 
     /// <summary>Scrolls the strip so the shown tab is in view (after layout: a new tab has no element yet).</summary>
     private void RevealSelected()
@@ -242,6 +248,74 @@ public partial class FolderTabStrip : UserControl
         });
     }
 
+    // ---- hover: a tab that is not shown is a cascade anchor (MainWindow) ----
+
+    /// <summary>
+    /// Where a press (left, middle, right, × too) on the strip left the pointer: until it moves the drag
+    /// distance away, nothing opens. Closing or moving a tab slides another one under the still pointer
+    /// (WPF raises MouseEnter on layout), and that tab's list must not pop up (as MainWindow._crumbQuiet).
+    /// </summary>
+    private Point? _quietAt;
+
+    public event Action<FrameworkElement, TabViewModel>? TabEntered;
+
+    /// <summary>A move with no button held; the position is in the strip's coordinates (they do not scroll with the tabs).</summary>
+    public event Action<FrameworkElement, TabViewModel, Point>? TabMoved;
+
+    public event Action<FrameworkElement>? TabLeft;
+
+    /// <summary>The tabs moved under the pointer without it moving (scrolled; a tab added, closed or moved; a title changed width).</summary>
+    public event Action? TabsShifted;
+
+    private bool HoverAllowed(MouseEventArgs e)
+    {
+        if (_pressed is not null && !_moving && e.LeftButton == MouseButtonState.Released)
+        {
+            _pressed = null; // released outside the strip: no button up / lost capture reached Tabs
+        }
+
+        if (_quietAt is { } at)
+        {
+            Point p = e.GetPosition(this);
+            if (Math.Abs(p.X - at.X) < SystemParameters.MinimumHorizontalDragDistance
+                && Math.Abs(p.Y - at.Y) < SystemParameters.MinimumVerticalDragDistance)
+            {
+                return false;
+            }
+
+            _quietAt = null;
+        }
+
+        return _pressed is null && !_moving
+            && e.LeftButton == MouseButtonState.Released
+            && e.RightButton == MouseButtonState.Released
+            && e.MiddleButton == MouseButtonState.Released;
+    }
+
+    private void OnTabEnter(object sender, MouseEventArgs e)
+    {
+        if (HoverAllowed(e) && sender is FrameworkElement { DataContext: TabViewModel tab } element)
+        {
+            TabEntered?.Invoke(element, tab);
+        }
+    }
+
+    private void OnTabMove(object sender, MouseEventArgs e)
+    {
+        if (HoverAllowed(e) && sender is FrameworkElement { DataContext: TabViewModel tab } element)
+        {
+            TabMoved?.Invoke(element, tab, e.GetPosition(this));
+        }
+    }
+
+    private void OnTabLeave(object sender, MouseEventArgs e)
+    {
+        if (sender is FrameworkElement element)
+        {
+            TabLeft?.Invoke(element);
+        }
+    }
+
     private static TabViewModel? TabAt(object? source) =>
         CardView.FindAncestor<ButtonBase>(source as DependencyObject) is null
             ? (source as FrameworkElement)?.DataContext as TabViewModel
@@ -249,6 +323,7 @@ public partial class FolderTabStrip : UserControl
 
     private void OnLeftDown(object sender, MouseButtonEventArgs e)
     {
+        _quietAt = e.GetPosition(this); // before TabAt: a press on × too
         if (TabAt(e.OriginalSource) is not { } tab || _vm is null)
         {
             return;
@@ -345,6 +420,7 @@ public partial class FolderTabStrip : UserControl
     /// <summary>Middle click closes the tab under the pointer.</summary>
     private void OnMouseDown(object sender, MouseButtonEventArgs e)
     {
+        _quietAt = e.GetPosition(this);
         if (e.ChangedButton == MouseButton.Middle && TabAt(e.OriginalSource) is { } tab && _vm is not null)
         {
             e.Handled = true;
@@ -355,6 +431,7 @@ public partial class FolderTabStrip : UserControl
 
     private void OnRightUp(object sender, MouseButtonEventArgs e)
     {
+        _quietAt = e.GetPosition(this);
         if (TabAt(e.OriginalSource) is not { } tab || _vm is not { } vm || e.OriginalSource is not UIElement target)
         {
             return;

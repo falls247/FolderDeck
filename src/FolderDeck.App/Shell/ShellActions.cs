@@ -7,7 +7,8 @@ using FolderDeck.Core.Paths;
 
 namespace FolderDeck.Shell;
 
-public sealed record OpenResult(bool Success, string? Error);
+/// <summary>The outcome of opening or starting something. <see cref="Cancelled"/>: the user declined (the elevation prompt).</summary>
+public sealed record OpenResult(bool Success, string? Error, bool Cancelled = false);
 
 /// <summary>Opening files and folders through the shell (§11, §12).</summary>
 public static class ShellActions
@@ -78,9 +79,11 @@ public static class ShellActions
     /// <summary>
     /// Starts a program typed in the address bar (a terminal, <c>code .</c>, …) through the shell, as
     /// Explorer's address bar and the Run dialog do, in <see cref="LaunchSpec.WorkingDirectory"/>.
-    /// Blocking: run off the UI thread.
+    /// With <paramref name="elevated"/> as administrator (runas: the UAC prompt; the process then starts
+    /// in System32 whatever the working directory). Blocking (until the prompt is answered): run off the
+    /// UI thread.
     /// </summary>
-    public static OpenResult Launch(LaunchSpec spec)
+    public static OpenResult Launch(LaunchSpec spec, bool elevated = false)
     {
         try
         {
@@ -90,6 +93,11 @@ public static class ShellActions
                 UseShellExecute = true,
                 WorkingDirectory = spec.WorkingDirectory,
             };
+            if (elevated)
+            {
+                info.Verb = "runas";
+            }
+
             using var process = Process.Start(info);
             return new OpenResult(true, null);
         }
@@ -99,7 +107,7 @@ public static class ShellActions
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled)
         {
-            return new OpenResult(false, $"「{spec.FileName}」の実行を取り消しました。"); // e.g. the elevation prompt was declined
+            return new OpenResult(false, $"「{spec.FileName}」の実行を取り消しました。", Cancelled: true); // e.g. the elevation prompt was declined
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException or PlatformNotSupportedException)
         {

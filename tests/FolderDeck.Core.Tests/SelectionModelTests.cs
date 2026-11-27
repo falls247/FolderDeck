@@ -58,6 +58,25 @@ public class SelectionModelTests
     }
 
     [Fact]
+    public void Focus_IsTheItemClickedLast_TheAnchorOtherwise()
+    {
+        var selection = new SelectionModel();
+        selection.Toggle(A);
+        selection.SelectRange(Displayed, E, additive: false);
+        Assert.Equal(A, selection.Anchor); // a range keeps its start…
+        Assert.Equal(E, selection.Focus); // …but F2 goes to the item clicked last
+
+        selection.Toggle(E); // Ctrl+click it off: the focus is no longer selected
+        Assert.Equal(E, selection.Anchor);
+        selection.Toggle(C);
+        Assert.Equal(C, selection.Focus);
+
+        selection.Clear();
+        selection.Replace([B, D]);
+        Assert.Equal(B, selection.Focus); // no click since: the anchor
+    }
+
+    [Fact]
     public void SelectRange_Additive_KeepsTheRestOfTheSelection()
     {
         var selection = new SelectionModel();

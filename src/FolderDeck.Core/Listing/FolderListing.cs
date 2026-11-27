@@ -84,11 +84,11 @@ public static class FolderLister
     public static void Sort(List<FsEntry> entries) => entries.Sort(EntryComparer);
 
     /// <summary>Lists and sorts <paramref name="path"/>. Errors become a failed listing; cancellation throws.</summary>
-    public static FolderListing List(IFileSystem fs, string path, bool includeHidden, CancellationToken cancellationToken)
+    public static FolderListing List(IFileSystem fs, string path, ListingFilter filter, CancellationToken cancellationToken)
     {
         try
         {
-            var raw = fs.EnumerateDirectory(path, includeHidden, cancellationToken);
+            var raw = fs.EnumerateDirectory(path, filter, cancellationToken);
             var list = raw as List<FsEntry> ?? new List<FsEntry>(raw);
             Sort(list);
             cancellationToken.ThrowIfCancellationRequested();

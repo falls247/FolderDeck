@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
 using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
@@ -68,7 +69,8 @@ public sealed class ContextMenuFactory
     /// <summary>
     /// The menu of one item, or with <paramref name="group"/> (more than one item: the selection the
     /// clicked item is part of, in display order) the short menu of the whole group: 切り取り,
-    /// コピー, パスをコピー and 削除. The caller decides the group (cascade rows and headers have none).
+    /// コピー, パスをコピー, 「…で開く」 (for the folder they are in) and 削除. The caller decides the
+    /// group (cascade rows and headers have none).
     /// With the setting 「Windows のメニュー」 an item Explorer's menu can be shown for gets that menu
     /// with these entries on top (built off the UI thread; the cascade is frozen meanwhile).
     /// </summary>
@@ -112,6 +114,16 @@ public sealed class ContextMenuFactory
         entries.Add(new("エクスプローラーで表示", ExplorerGlyph, !disabled || drive, () => _ = _vm.ShowInExplorerAsync(item)));
         entries.Add(new("パスをコピー", CopyGlyph, !disabled || drive, () => _vm.CopyPath(item)));
         AddClipboardEntries(entries, [item], item);
+
+        // 「…で開く」 as on the blank area (in the details view nearly every right click lands on a
+        // row): a folder (also a drive row, a registered folder, a flyout header) opens in itself, a
+        // file in the folder it is in. Not for an item that cannot be used now (missing, no answer, a
+        // drive that is not connected): the program would only fail.
+        string openInFolder = item.IsFolder ? item.Path : PathTools.ParentOf(item.Path);
+        if (!disabled && openInFolder.Length > 0)
+        {
+            AddOpenInEntries(entries, openInFolder);
+        }
 
         bool pinned = _vm.IsPinned(item.Path);
         bool canRegister = item.IsFolder && item.Context != ItemContext.Sidebar && !_vm.IsRegistered(item.Path);
@@ -186,13 +198,23 @@ public sealed class ContextMenuFactory
 
     /// <summary>
     /// Several selected items: only what applies to all of them at once (切り取り, コピー, パスをコピー,
-    /// 削除). No default entry: Explorer's menu keeps the shell's open (the app cannot open several).
+    /// 「…で開く」 for the one folder they are in, 削除). No default entry: Explorer's menu keeps the
+    /// shell's open (the app cannot open several).
     /// </summary>
     private List<MenuEntry> GroupEntries(IReadOnlyList<ItemRef> group, out IReadOnlyList<string>? nativePaths, out bool nativeEnabled)
     {
         var entries = new List<MenuEntry>();
         AddClipboardEntries(entries, group, pasteItem: null, separator: false);
         entries.Add(new("パスをコピー", CopyGlyph, true, () => _vm.CopyPaths(group)));
+
+        // 「…で開く」 for the folder the selection is in (always one inside a folder tab; the cards
+        // of 最近の履歴 / よく使う項目 may be in several, then there is none to offer), as for one
+        // file. Not when an item of it cannot be used now (as for one item).
+        if (OneParentOf(group) is { } parent)
+        {
+            AddOpenInEntries(entries, parent);
+        }
+
         if (group.All(MainViewModel.CanDelete))
         {
             // One confirmation and one Recycle Bin operation for the whole selection.
@@ -209,6 +231,32 @@ public sealed class ContextMenuFactory
         nativePaths = group.Select(i => i.Path).ToList();
         nativeEnabled = group.All(MainViewModel.CanCopy);
         return entries;
+    }
+
+    /// <summary>
+    /// The one folder every item of <paramref name="group"/> is in, or null when they are in several,
+    /// one is at a root (no folder above it) or one cannot be used now (missing, no answer).
+    /// </summary>
+    private static string? OneParentOf(IReadOnlyList<ItemRef> group)
+    {
+        string? parent = null;
+        foreach (var item in group)
+        {
+            if (item.IsDisabled || item.Card?.IsDisabled == true)
+            {
+                return null;
+            }
+
+            string folder = PathTools.ParentOf(item.Path);
+            if (folder.Length == 0 || (parent is not null && !PathTools.PathEquals(parent, folder)))
+            {
+                return null;
+            }
+
+            parent ??= folder;
+        }
+
+        return parent;
     }
 
     /// <summary>
@@ -244,25 +292,80 @@ public sealed class ContextMenuFactory
         Open(menu);
     }
 
-    /// <summary>The WPF menu of <paramref name="entries"/> (IsDefault is not shown there).</summary>
+    /// <summary>The WPF menu of <paramref name="entries"/> (IsDefault is not shown there), submenus included.</summary>
     private static ContextMenu Render(IReadOnlyList<MenuEntry> entries, FrameworkElement target)
     {
         var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
         foreach (var entry in entries)
         {
-            menu.Items.Add(entry.IsSeparator ? new Separator() : Item(entry.Header!, entry.Glyph, entry.Enabled, entry.Action!));
+            menu.Items.Add(RenderEntry(entry));
         }
 
         return menu;
     }
 
+    private static object RenderEntry(MenuEntry entry)
+    {
+        if (entry.IsSeparator)
+        {
+            return new Separator();
+        }
+
+        if (!entry.IsSubmenu)
+        {
+            var item = Item(entry.Header!, entry.Glyph, entry.Enabled, entry.Action!);
+            if (entry.Checked is { } isChecked)
+            {
+                item.IsCheckable = true; // UI Automation: Toggle (as the toolbar's sort menu)
+                item.IsChecked = isChecked;
+            }
+
+            return item;
+        }
+
+        // No Click here: Click bubbles, a child's would run it too. The template shows ▶ and the submenu.
+        var parent = new MenuItem { Header = entry.Header, Tag = entry.Glyph, IsEnabled = entry.Enabled };
+        foreach (var child in entry.Children!)
+        {
+            parent.Items.Add(RenderEntry(child));
+        }
+
+        return parent;
+    }
+
+    /// <summary>
+    /// The entries depth first for Explorer's menu, each with the index of the submenu entry it is in
+    /// (-1: the top). <see cref="ShellMenuResult.AppIndex"/> counts in this list.
+    /// </summary>
+    private static List<(MenuEntry Entry, int Parent)> Flatten(IReadOnlyList<MenuEntry> entries)
+    {
+        var flat = new List<(MenuEntry Entry, int Parent)>();
+        void Add(IReadOnlyList<MenuEntry> list, int parent)
+        {
+            foreach (var entry in list)
+            {
+                int index = flat.Count;
+                flat.Add((entry, parent));
+                if (entry.IsSubmenu)
+                {
+                    Add(entry.Children!, index);
+                }
+            }
+        }
+
+        Add(entries, -1);
+        return flat;
+    }
+
     /// <summary>
     /// The menu of the blank area of the item list: the menu of the folder shown, as Explorer's
-    /// blank area. 貼り付け (into that folder) and 最新の情報に更新, then エクスプローラーで表示,
+    /// blank area. 貼り付け (into that folder), 新しいフォルダー, 元に戻す（…） / やり直し（…） (the app's
+    /// own history, Ctrl+Z / Ctrl+Y; only when there is something to undo / redo, also without a
+    /// folder on screen), 並べ替え ▶ (the shown tab's sort mode) and 最新の情報に更新, then エクスプローラーで表示,
     /// パスをコピー and 登録フォルダに追加 for the folder itself, and Explorer's background menu of it
     /// (新規作成, プロパティ…): last as 「その他のメニュー（Windows）」, or with the setting
     /// 「Windows のメニュー」 below these entries. Without a folder on screen (the top lists, while it
-    /// loads, a failed load) only 貼り付け (off) and 最新の情報に更新, in the WPF menu.
+    /// loads, a failed load) only 貼り付け (off), 並べ替え and 最新の情報に更新, in the WPF menu.
     /// </summary>
     public void ShowBlank(FrameworkElement target)
     {
@@ -286,8 +389,6 @@ public sealed class ContextMenuFactory
                 BeforeNavigate?.Invoke(); // the transfer reloads the list
                 _ = _vm.PasteAsync(folder!);
             }),
-            MenuEntry.Separator,
-            new("最新の情報に更新", RefreshGlyph, true, () => _vm.RefreshCommand.Execute(null)),
         };
 
         var shown = _vm.ShownFolderItem();
@@ -295,11 +396,40 @@ public sealed class ContextMenuFactory
         {
             // Explorer's Ctrl+Shift+N: the new folder opens its edit box (the shell's 新規作成 cannot,
             // without a view of its own to edit in).
-            entries.Insert(1, new("新しいフォルダー", NewFolderGlyph, !_vm.IsFileOperationRunning, () =>
+            entries.Add(new("新しいフォルダー", NewFolderGlyph, !_vm.IsFileOperationRunning, () =>
             {
                 BeforeNavigate?.Invoke(); // the reload replaces the cascade
                 NewFolderRequested?.Invoke();
             }));
+        }
+
+        // Ctrl+Z / Ctrl+Y: the app's own history (app-wide, so also beside a top list); absent when empty.
+        // The step named in the label is kept: RunEntry may run the action later (Explorer's menu
+        // takes a while), and a step recorded meanwhile must not be the one reversed.
+        if (_vm.NextUndoStep is { } undo)
+        {
+            entries.Add(new($"元に戻す（{undo.Label}）", UndoGlyph, !_vm.IsFileOperationRunning, () =>
+            {
+                BeforeNavigate?.Invoke(); // the reload replaces the cascade
+                _ = _vm.UndoAsync(undo);
+            }));
+        }
+
+        if (_vm.NextRedoStep is { } redo)
+        {
+            entries.Add(new($"やり直し（{redo.Label}）", RedoGlyph, !_vm.IsFileOperationRunning, () =>
+            {
+                BeforeNavigate?.Invoke();
+                _ = _vm.RedoAsync(redo);
+            }));
+        }
+
+        entries.Add(MenuEntry.Separator);
+        entries.Add(SortEntry());
+        entries.Add(new("最新の情報に更新", RefreshGlyph, true, () => _vm.RefreshCommand.Execute(null)));
+
+        if (shown is not null)
+        {
             entries.Add(MenuEntry.Separator);
             entries.Add(new("エクスプローラーで表示", ExplorerGlyph, true, () => _ = _vm.ShowInExplorerAsync(shown)));
             entries.Add(new("パスをコピー", CopyGlyph, true, () => _vm.CopyPath(shown)));
@@ -307,10 +437,81 @@ public sealed class ContextMenuFactory
             {
                 entries.Add(new("登録フォルダに追加", AddGlyph, true, () => _ = _vm.AddToRegisteredAsync(shown)));
             }
+
+            AddOpenInEntries(entries, shown.Path);
         }
 
         nativePaths = shown is null ? null : [shown.Path];
         return entries;
+    }
+
+    /// <summary>
+    /// 「ターミナルで開く」 (Windows Terminal, else cmd) and 「PowerShell で開く」 (pwsh, else Windows
+    /// PowerShell), each with 開く / 管理者として開く, then 「Code で開く」 and 「WSL で開く」 when installed,
+    /// for <paramref name="folder"/> (the folder shown, an item's folder, a file's parent). What is
+    /// installed is the last look of <see cref="OpenInTools"/>, kept in the actions (RunEntry may run
+    /// them after the menu closed).
+    /// </summary>
+    private void AddOpenInEntries(List<MenuEntry> entries, string folder)
+    {
+        var programs = OpenInTools.Current;
+        OpenInTools.Refresh(); // the next right click sees an install / uninstall
+        entries.Add(MenuEntry.Separator);
+        entries.Add(Elevatable("ターミナルで開く", TerminalGlyph, OpenInTool.Terminal, folder, programs));
+        entries.Add(Elevatable("PowerShell で開く", TerminalGlyph, OpenInTool.PowerShell, folder, programs));
+        if (programs.Code is not null)
+        {
+            entries.Add(new("Code で開く", CodeGlyph, true, () => _ = _vm.OpenInAsync(OpenInTool.Code, elevated: false, folder, programs)));
+        }
+
+        if (programs.Wsl)
+        {
+            entries.Add(new("WSL で開く", TerminalGlyph, true, () => _ = _vm.OpenInAsync(OpenInTool.Wsl, elevated: false, folder, programs)));
+        }
+    }
+
+    private MenuEntry Elevatable(string header, string glyph, OpenInTool tool, string folder, OpenInPrograms programs) =>
+        new(header, glyph, true, null, Children:
+        [
+            new("開く", OpenGlyph, true, () => _ = _vm.OpenInAsync(tool, elevated: false, folder, programs)),
+            new("管理者として開く", AdminGlyph, true, () => _ = _vm.OpenInAsync(tool, elevated: true, folder, programs)),
+        ]);
+
+    /// <summary>
+    /// 「並べ替え」 ▶ of the blank area: the modes of the toolbar's sort menu (<see cref="CardSortModes.All"/>),
+    /// the shown tab's one checked, and on 最近の履歴 / よく使う項目 「手動の並びをリセット」. For the tab of
+    /// the right click only (RunEntry may run the action after the menu closed; a tab switch meanwhile drops it).
+    /// </summary>
+    private MenuEntry SortEntry()
+    {
+        var tab = _vm.SelectedTab;
+        var current = tab.SortMode;
+        var children = new List<MenuEntry>();
+        foreach (var mode in CardSortModes.All)
+        {
+            bool selected = mode == current;
+            children.Add(new(SortModeLabels.Long(mode), selected ? CheckGlyph : string.Empty, true, () =>
+            {
+                if (ReferenceEquals(tab, _vm.SelectedTab))
+                {
+                    _vm.SetSortMode(mode);
+                }
+            }, Checked: selected));
+        }
+
+        if (_vm.ShowResetManualOrder)
+        {
+            children.Add(MenuEntry.Separator);
+            children.Add(new(SortModeLabels.ResetManual, UndoGlyph, _vm.CanResetManualOrder, () =>
+            {
+                if (ReferenceEquals(tab, _vm.SelectedTab))
+                {
+                    _ = _vm.ResetManualOrderAsync();
+                }
+            }));
+        }
+
+        return new("並べ替え", SortGlyph, _vm.HasTab, null, Children: children);
     }
 
     /// <summary>The menu of the PC section header: エクスプローラーで開く (This PC).</summary>
@@ -354,10 +555,11 @@ public sealed class ContextMenuFactory
             NativeMenuChanged?.Invoke(true);
         }
 
+        var flat = app is null ? null : Flatten(app); // submenus as entries with a Parent: AppIndex counts in it
         ShellMenuResult result;
         try
         {
-            var appEntries = app?.Select(e => new ShellMenuAppEntry(e.Header ?? "", e.Enabled, e.IsSeparator, e.IsDefault)).ToArray();
+            var appEntries = flat?.Select(f => new ShellMenuAppEntry(f.Entry.Header ?? "", f.Entry.Enabled, f.Entry.IsSeparator, f.Entry.IsDefault, f.Parent, f.Entry.IsSubmenu, f.Entry.Checked == true)).ToArray();
             nint mainWindow = _vm.View?.WindowHandle ?? 0;
             result = await (background
                 ? ShellContextMenu.ShowBackgroundAsync(paths[0], at.X, at.Y, at.Extended, mainWindow, appEntries)
@@ -380,8 +582,8 @@ public sealed class ContextMenuFactory
             // After the unfreeze, as a WPF entry's Click: its BeforeNavigate closes the cascade.
             if (result.Outcome == ShellMenuOutcome.AppCommand)
             {
-                if (result.AppIndex >= 0 && result.AppIndex < app.Count
-                    && app[result.AppIndex] is { IsSeparator: false, Enabled: true, Action: not null } entry)
+                if (result.AppIndex >= 0 && result.AppIndex < flat!.Count
+                    && flat[result.AppIndex].Entry is { IsSeparator: false, Enabled: true, Action: not null } entry)
                 {
                     RunEntry(entry);
                 }
@@ -548,17 +750,31 @@ public sealed class ContextMenuFactory
     private const string NewFolderGlyph = "\uE8F4"; // NewFolder
     private const string ExplorerGlyph = "\uEC50"; // File Explorer
     private const string NativeMenuGlyph = "\uE712"; // More (…)
+    private const string TerminalGlyph = "\uE756"; // CommandPrompt
+    private const string CodeGlyph = "\uE943"; // Code
+    private const string AdminGlyph = "\uEA18"; // Shield
+    private const string SortGlyph = "\uE8CB"; // Sort (as the toolbar's sort button)
+    private const string CheckGlyph = "\uE73E"; // CheckMark
+    private const string UndoGlyph = "\uE7A7"; // Undo (\u5143\u306B\u623B\u3059; the reset of the manual order, as the toolbar)
+    private const string RedoGlyph = "\uE7A6"; // Redo (\u3084\u308A\u76F4\u3057)
 
     /// <summary>
     /// One entry of an item's menu, rendered as a WPF <see cref="MenuItem"/> or handed to Explorer's
     /// menu (text only). A null <see cref="Header"/> is a separator. <see cref="IsDefault"/> is the
-    /// default (bold) entry of Explorer's menu.
+    /// default (bold) entry of Explorer's menu (top level only). With <see cref="Children"/> it is a
+    /// submenu (▶): <see cref="Action"/> is null, the children run. <see cref="Checked"/> (not null) is
+    /// a checkable entry, checked when true: in WPF shown by a check glyph in <see cref="Glyph"/>, in
+    /// Explorer's menu by MF_CHECKED.
     /// </summary>
-    private sealed record MenuEntry(string? Header, string Glyph, bool Enabled, Action? Action, bool IsDefault = false)
+    private sealed record MenuEntry(
+        string? Header, string Glyph, bool Enabled, Action? Action, bool IsDefault = false, IReadOnlyList<MenuEntry>? Children = null,
+        bool? Checked = null)
     {
         public static MenuEntry Separator { get; } = new(null, "", false, null);
 
         public bool IsSeparator => Header is null;
+
+        public bool IsSubmenu => Children is { Count: > 0 };
     }
 
     /// <summary>The pointer in screen pixels and the Shift state when the app's menu was asked for.</summary>

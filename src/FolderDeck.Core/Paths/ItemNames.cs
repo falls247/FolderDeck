@@ -151,6 +151,73 @@ public static class ItemNames
         }
     }
 
+    /// <summary>
+    /// The base of Explorer's batch rename ("photo" for "photo (1).jpg"…): <paramref name="name"/>
+    /// (already cleaned) without the edited file's own extension when it ends with it (without case);
+    /// else the whole name (a folder, or the extension removed or changed). Empty when nothing is left.
+    /// </summary>
+    public static string BatchBaseName(string name, string editedName, bool editedIsFolder)
+    {
+        if (!editedIsFolder)
+        {
+            string ext = ExtensionPart(editedName);
+            if (ext.Length > 0 && name.Length > ext.Length && name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+            {
+                return Clean(name[..^ext.Length]);
+            }
+        }
+
+        return Clean(name);
+    }
+
+    /// <summary>
+    /// Explorer's batch rename: the new name of each of <paramref name="items"/> (display order) is
+    /// "<paramref name="baseName"/> (n)" plus the item's own extension (files only, as
+    /// <see cref="ExtensionChanged"/> takes it), n counting from 1 for all of them. A number whose name
+    /// is taken (without case) by <paramref name="existingNames"/>, by another of the items or by an
+    /// earlier result is skipped; an item may get its own name back. So the items never collide with
+    /// each other whatever order the shell renames them in (no temporary names). Null for an item whose
+    /// name would be longer than <see cref="MaxLength"/> (it keeps its name and uses no number).
+    /// </summary>
+    public static IReadOnlyList<string?> BatchNames(string baseName, IReadOnlyList<(string Name, bool IsFolder)> items, IEnumerable<string> existingNames)
+    {
+        var taken = new HashSet<string>(existingNames.Where(n => !string.IsNullOrEmpty(n)), StringComparer.OrdinalIgnoreCase);
+        foreach (var item in items)
+        {
+            taken.Add(item.Name);
+        }
+
+        var result = new string?[items.Count];
+        int n = 1;
+        for (int i = 0; i < items.Count; i++)
+        {
+            string ext = items[i].IsFolder ? string.Empty : ExtensionPart(items[i].Name);
+            if (baseName.Length + ext.Length + 4 > MaxLength) // " (1)" is the shortest suffix
+            {
+                continue;
+            }
+
+            for (; ; n++)
+            {
+                string candidate = $"{baseName} ({n}){ext}";
+                if (candidate.Length > MaxLength)
+                {
+                    break; // longer numbers only get longer
+                }
+
+                if (!taken.Contains(candidate) || string.Equals(candidate, items[i].Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    result[i] = candidate;
+                    taken.Add(candidate);
+                    n++;
+                    break;
+                }
+            }
+        }
+
+        return result;
+    }
+
     private static string ExtensionPart(string name)
     {
         int dot = name.LastIndexOf('.');

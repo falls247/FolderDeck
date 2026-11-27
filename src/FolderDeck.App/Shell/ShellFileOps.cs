@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using FolderDeck.Core.Infrastructure;
 using FolderDeck.Core.Paths;
+using FolderDeck.Core.Transfer;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Storage.FileSystem;
@@ -28,6 +29,23 @@ public enum ShellOpOutcome
 /// <param name="Error">Text for the message line when it failed.</param>
 public sealed record ShellOpResult(ShellOpOutcome Outcome, string? NewPath, string? Error = null);
 
+/// <summary>One item of <see cref="ShellFileOps.RenameManyAsync"/>.</summary>
+/// <param name="Path">The item.</param>
+/// <param name="Name">Its name as listed.</param>
+/// <param name="IsFolder">A folder: its new name gets no extension.</param>
+public sealed record BatchRenameItem(string Path, string Name, bool IsFolder);
+
+/// <summary>An item <see cref="ShellFileOps.RenameManyAsync"/> renamed.</summary>
+public sealed record RenamedItem(string OldPath, string NewPath);
+
+/// <summary>What <see cref="ShellFileOps.RenameManyAsync"/> did.</summary>
+/// <param name="Requested">Items asked for.</param>
+/// <param name="Renamed">Items renamed (old and new path).</param>
+/// <param name="Skipped">Items left as they were on purpose (the name already, a name too long, not found).</param>
+/// <param name="Canceled">The user cancelled one of the shell's dialogs, or the shell stopped (later items keep their names).</param>
+/// <param name="Error">The first failure's text, when an item failed.</param>
+public sealed record BatchRenameResult(int Requested, IReadOnlyList<RenamedItem> Renamed, int Skipped, bool Canceled, string? Error);
+
 /// <summary>
 /// Renames one item and creates new folders with <c>IFileOperation</c>, like Explorer's edit box and
 /// Ctrl+Shift+N. Each call runs on its own STA thread (<see cref="StaThread.Run{T}"/>): the shell may
@@ -49,6 +67,14 @@ public static class ShellFileOps
         | FILEOPERATION_FLAGS.FOF_NO_CONNECTED_ELEMENTS;
 
     /// <summary>
+    /// The flags of the app's own undo / redo (<see cref="RenameBackAsync"/>,
+    /// <see cref="FileTransfer.MoveBackAsync"/>, <see cref="RecycleBin.RestoreAsync"/>): no
+    /// <c>FOF_ALLOWUNDO</c> / <c>FOFX_ADDUNDORECORD</c>, so a reversal never lands on Explorer's
+    /// undo stack, and no flag answers a question for the user.
+    /// </summary>
+    internal const FILEOPERATION_FLAGS UndoFlags = FILEOPERATION_FLAGS.FOF_NO_CONNECTED_ELEMENTS;
+
+    /// <summary>
     /// Renames <paramref name="path"/> to <paramref name="newName"/> (a name, not a path) in the same
     /// folder. A name that only changes the case of letters is a rename too. Another item with the
     /// name (any case) gives <see cref="ShellOpOutcome.NameTaken"/> without asking the shell: for a
@@ -63,6 +89,39 @@ public static class ShellFileOps
             "FolderDeck rename",
             () => Log($"Rename {path} -> {newName}", Rename(path, newName, owner)),
             ex => Log($"Rename {path} -> {newName}", new ShellOpResult(ShellOpOutcome.Failed, null, ex.Message), ex));
+    }
+
+    /// <summary>
+    /// Explorer's batch rename of <paramref name="items"/> (all in <paramref name="folder"/>, display
+    /// order) to "<paramref name="baseName"/> (1)", " (2)"…: the names come from
+    /// <see cref="ItemNames.BatchNames"/> against the folder's names on disk (hidden items too) and
+    /// <paramref name="shownNames"/>, so no new name is taken and no NameTaken check is needed. One
+    /// operation for all of them, as in <see cref="RecycleBin"/>: one progress, one undo record. The
+    /// shell asks about each failure itself (try again / skip / cancel). The task never faults.
+    /// </summary>
+    public static Task<BatchRenameResult> RenameManyAsync(string folder, IReadOnlyList<BatchRenameItem> items, string baseName, IReadOnlyCollection<string> shownNames, nint owner)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(folder);
+        ArgumentException.ThrowIfNullOrEmpty(baseName);
+        return StaThread.Run(
+            "FolderDeck batch rename",
+            () => LogMany(folder, baseName, RenameMany(folder, items, baseName, shownNames, owner)),
+            ex => LogMany(folder, baseName, new BatchRenameResult(items.Count, [], 0, false, ex.Message), ex));
+    }
+
+    /// <summary>
+    /// The app's undo / redo of renames: each item at <c>Path</c> gets the name of its <c>Target</c>
+    /// (same folder) in one operation with <see cref="UndoFlags"/> (not on Explorer's undo stack).
+    /// Checked again here: the item is there and the name is free (a change of case only is the same
+    /// item); an item that fails a check is left as it is. The task never faults.
+    /// </summary>
+    public static Task<MoveBackResult> RenameBackAsync(IReadOnlyList<PathMove> renames, nint owner)
+    {
+        var batch = renames.ToArray();
+        return StaThread.Run(
+            "FolderDeck rename back",
+            () => LogBack(batch, RenameBack(batch, owner)),
+            ex => LogBack(batch, new MoveBackResult(batch.Length, [], false, ex.Message), ex));
     }
 
     /// <summary>
@@ -139,6 +198,183 @@ public static class ShellFileOps
         }
     }
 
+    private static unsafe BatchRenameResult RenameMany(string folder, IReadOnlyList<BatchRenameItem> items, string baseName, IReadOnlyCollection<string> shownNames, nint owner)
+    {
+        // The numbers avoid every name in the folder, also hidden ones the list does not show: the
+        // copy engine answers a collision with "unexpected error 0x80070057", not with its question.
+        var existing = new List<string>(shownNames);
+        try
+        {
+            existing.AddRange(Directory.EnumerateFileSystemEntries(folder).Select(Path.GetFileName).OfType<string>());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            AppLog.Warn($"Batch rename: could not list {folder}; only the shown names are avoided", ex);
+        }
+
+        var names = ItemNames.BatchNames(baseName, items.Select(i => (i.Name, i.IsFolder)).ToList(), existing);
+        var queued = new List<(BatchRenameItem Item, string Name)>();
+        int skipped = 0;
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (names[i] is not { } name || string.Equals(name, items[i].Name, StringComparison.Ordinal) || !Exists(items[i].Path))
+            {
+                skipped++;
+                continue;
+            }
+
+            queued.Add((items[i], name));
+        }
+
+        if (queued.Count == 0)
+        {
+            return new BatchRenameResult(items.Count, [], skipped, false, null);
+        }
+
+        var run = RunRenames(queued.Select(q => (q.Item.Path, q.Name, q.Item.Name)).ToList(), Flags, owner, folder, reportedOnly: false);
+        return new BatchRenameResult(items.Count, run.Renamed, skipped + run.Skipped, run.Canceled, run.Error);
+    }
+
+    private static MoveBackResult RenameBack(PathMove[] renames, nint owner)
+    {
+        // Checked again on this thread: the item is there, in the folder of its name, and the name
+        // is free (a change of case only is the same item).
+        var queued = new List<(string Path, string Name, string OldName)>();
+        foreach (var m in renames)
+        {
+            string name = Path.GetFileName(PathTools.TrimTrailingSeparators(m.Target));
+            bool sameItem = string.Equals(m.Path, m.Target, StringComparison.OrdinalIgnoreCase);
+            if (name.Length == 0
+                || !Exists(m.Path)
+                || !PathTools.PathEquals(PathTools.ParentOf(m.Path), PathTools.ParentOf(m.Target))
+                || (!sameItem && Exists(m.Target)))
+            {
+                continue;
+            }
+
+            queued.Add((m.Path, name, PathTools.DisplayName(m.Path)));
+        }
+
+        if (queued.Count == 0)
+        {
+            return new MoveBackResult(renames.Length, [], false, "項目が見つからないか、同じ名前の項目があります");
+        }
+
+        // Only what the shell reported at the requested name counts (a folder renamed onto one that
+        // appeared meanwhile gets the shell's merge question): recorded there, a redo would move the
+        // other folder's contents.
+        var run = RunRenames(queued, UndoFlags, owner, PathTools.ParentOf(renames[0].Path), reportedOnly: true);
+        var done = run.Renamed.Select(r => new PathMove(r.OldPath, r.NewPath)).ToList();
+        string? error = run.Error ?? (done.Count < renames.Length && !run.Canceled ? "名前を戻せなかった項目があります" : null);
+        return new MoveBackResult(renames.Length, done, run.Canceled, error);
+    }
+
+    /// <summary>What <see cref="RunRenames"/> did: the items renamed, those it could not queue, a cancel, the first error.</summary>
+    private sealed record RenameRun(IReadOnlyList<RenamedItem> Renamed, int Skipped, bool Canceled, string? Error);
+
+    /// <summary>
+    /// Renames each queued item (its path, the new name, its name as listed) in its own folder with
+    /// one operation and <paramref name="flags"/>, then settles what was done from the sink's reports
+    /// and the disk. <paramref name="reportedOnly"/> (the app's undo / redo): an item counts only
+    /// when the shell reported it under its new name, that name was free when the rename began
+    /// (<see cref="ManySink"/>) and the disk agrees; never from the disk alone.
+    /// <paramref name="where"/> is for the log. Never throws.
+    /// </summary>
+    private static unsafe RenameRun RunRenames(IReadOnlyList<(string Path, string Name, string OldName)> queued, FILEOPERATION_FLAGS flags, nint owner, string where, bool reportedOnly)
+    {
+        int skipped = 0;
+        var itemObjects = new List<object>();
+        var buffers = new List<nint>(); // the names stay allocated until the operation has run
+        object? operationObject = null;
+        var sink = new ManySink();
+        try
+        {
+            var operation = (IFileOperation)new FileOperation();
+            operationObject = operation;
+            operation.SetOperationFlags(flags);
+            if (owner != 0)
+            {
+                operation.SetOwnerWindow(new HWND(owner));
+            }
+
+            var running = new List<(string Path, string Name, string OldName)>();
+            foreach (var item in queued)
+            {
+                HRESULT hr = PInvoke.SHCreateItemFromParsingName(ShellActions.ShellPath(item.Path), null, out IShellItem shellItem);
+                if (hr.Failed || shellItem is null)
+                {
+                    skipped++;
+                    continue;
+                }
+
+                itemObjects.Add(shellItem);
+                nint buffer = Marshal.StringToHGlobalUni(item.Name);
+                buffers.Add(buffer);
+                operation.RenameItem(shellItem, new PCWSTR((char*)buffer), sink);
+                running.Add(item);
+            }
+
+            bool canceled = false;
+            string? performError = null;
+            if (running.Count > 0)
+            {
+                try
+                {
+                    canceled = Perform(operation);
+                }
+                catch (Exception ex) when (ex is COMException or ArgumentException or UnauthorizedAccessException or IOException)
+                {
+                    // Some items may be renamed already: they are settled below, so the list is read
+                    // again and renamed folders followed.
+                    AppLog.Warn($"Batch rename: PerformOperations failed in {where}", ex);
+                    performError = ex.Message;
+                }
+            }
+
+            var renamed = new List<RenamedItem>();
+            foreach (var (path, name, oldName) in running)
+            {
+                // The sink's report first (by the item's path), the disk second: the new name was free
+                // before. A change of case only has no proof on disk (both names are found): counted
+                // as done unless the sink reported a failure.
+                string target = Path.Join(PathTools.ParentOf(path), name);
+                bool caseOnly = string.Equals(oldName, name, StringComparison.OrdinalIgnoreCase);
+                string? reported = sink.NewPathOf(path);
+                bool onDisk = !sink.FailedFor(path) && Exists(target) && (caseOnly || !Exists(path));
+                bool done = reportedOnly
+                    ? reported is not null && PathTools.PathEquals(PathTools.TrimTrailingSeparators(reported), target) && !sink.CollidedFor(path) && onDisk
+                    : reported is not null || onDisk;
+                if (done)
+                {
+                    renamed.Add(new RenamedItem(path, reported ?? target));
+                }
+            }
+
+            string? error = sink.FirstError is { } e && !FileTransfer.IsCancel(e.Value)
+                ? Marshal.GetExceptionForHR(e.Value)?.Message ?? "操作できませんでした。"
+                : performError;
+            return new RenameRun(renamed, skipped, canceled || sink.Canceled, error);
+        }
+        catch (Exception ex) when (ex is COMException or InvalidCastException or ArgumentException or UnauthorizedAccessException or IOException)
+        {
+            AppLog.Warn($"Batch rename failed: {where}", ex);
+            return new RenameRun([], skipped, false, ex.Message);
+        }
+        finally
+        {
+            FileTransfer.Release(operationObject);
+            foreach (object o in itemObjects)
+            {
+                FileTransfer.Release(o);
+            }
+
+            foreach (nint b in buffers)
+            {
+                Marshal.FreeHGlobal(b);
+            }
+        }
+    }
+
     private static unsafe ShellOpResult NewFolder(string folder, string name, nint owner)
     {
         if (!Directory.Exists(folder))
@@ -190,8 +426,8 @@ public static class ShellFileOps
         }
     }
 
-    /// <summary>Runs the queued operation. True when it was cancelled or aborted.</summary>
-    private static unsafe bool Perform(IFileOperation operation)
+    /// <summary>Runs the queued operation. True when it was cancelled or aborted (also for <see cref="FileTransfer"/> and <see cref="RecycleBin"/>).</summary>
+    internal static unsafe bool Perform(IFileOperation operation)
     {
         bool canceled = false;
         try
@@ -246,6 +482,43 @@ public static class ShellFileOps
         else
         {
             AppLog.Warn($"{what}: {result.Outcome}{detail}", ex);
+        }
+
+        return result;
+    }
+
+    /// <summary>One line per undo / redo of renames: the counts and the first item; never a file's contents.</summary>
+    private static MoveBackResult LogBack(PathMove[] renames, MoveBackResult result, Exception? ex = null)
+    {
+        string first = renames.Length == 0 ? string.Empty : $" {renames[0].Path} -> {renames[0].Target}";
+        string canceled = result.Canceled ? ", canceled" : string.Empty;
+        string detail = result.Error is null ? string.Empty : $" ({result.Error})";
+        string text = $"Rename back{first}: {result.Done.Count} of {result.Requested} renamed{canceled}{detail}";
+        if (ex is null)
+        {
+            AppLog.Info(text);
+        }
+        else
+        {
+            AppLog.Warn(text, ex);
+        }
+
+        return result;
+    }
+
+    /// <summary>One line per batch: the folder, the base name and the counts; never a file's contents.</summary>
+    private static BatchRenameResult LogMany(string folder, string baseName, BatchRenameResult result, Exception? ex = null)
+    {
+        string canceled = result.Canceled ? ", canceled" : string.Empty;
+        string detail = result.Error is null ? string.Empty : $" ({result.Error})";
+        string text = $"Batch rename in {folder} to '{baseName} (n)': {result.Renamed.Count} of {result.Requested} renamed, {result.Skipped} skipped{canceled}{detail}";
+        if (ex is null)
+        {
+            AppLog.Info(text);
+        }
+        else
+        {
+            AppLog.Warn(text, ex);
         }
 
         return result;
@@ -333,6 +606,143 @@ public static class ShellFileOps
         }
 
         public void PreNewItem(uint dwFlags, IShellItem psiDestinationFolder, PCWSTR pszNewName)
+        {
+        }
+
+        public void UpdateProgress(uint iWorkTotal, uint iWorkSoFar)
+        {
+        }
+
+        public void ResetTimer()
+        {
+        }
+
+        public void PauseTimer()
+        {
+        }
+
+        public void ResumeTimer()
+        {
+        }
+    }
+
+    /// <summary>
+    /// Keeps what the shell reported for each item of a batch rename (all calls on its STA thread),
+    /// by the item's path. As in <see cref="Sink"/>: <c>COPYENGINE_S_PENDING</c> is ignored, and a
+    /// rename that worked is any code that is not a failure (<c>COPYENGINE_S_DONT_PROCESS_CHILDREN</c>).
+    /// </summary>
+    private sealed class ManySink : IFileOperationProgressSink
+    {
+        private const int CopyEnginePending = 0x0027000B;
+
+        private readonly Dictionary<string, string?> _done = new(PathTools.Comparer);
+        private readonly HashSet<string> _failed = new(PathTools.Comparer);
+        private readonly HashSet<string> _collided = new(PathTools.Comparer);
+
+        /// <summary>The first failure reported for an item.</summary>
+        public HRESULT? FirstError { get; private set; }
+
+        /// <summary>An item was cancelled (by the user in a shell dialog, or the operation stopped).</summary>
+        public bool Canceled { get; private set; }
+
+        /// <summary>The new path the shell reported for the item at <paramref name="path"/>, or null.</summary>
+        public string? NewPathOf(string path) => _done.TryGetValue(path, out var p) ? p : null;
+
+        /// <summary>True when the shell reported a failure for the item at <paramref name="path"/>.</summary>
+        public bool FailedFor(string path) => _failed.Contains(path);
+
+        /// <summary>True when another item had the new name of the item at <paramref name="path"/> when its rename began.</summary>
+        public bool CollidedFor(string path) => _collided.Contains(path);
+
+        public void PostRenameItem(uint dwFlags, IShellItem psiItem, PCWSTR pszNewName, HRESULT hrRename, IShellItem psiNewlyCreated)
+        {
+            if (hrRename.Value == CopyEnginePending)
+            {
+                return;
+            }
+
+            // An exception here would go back to the copy engine as a failure of its own.
+            try
+            {
+                string? path = FileTransfer.FileSystemPath(psiItem);
+                if (hrRename.Failed)
+                {
+                    FirstError ??= hrRename;
+                    Canceled |= FileTransfer.IsCancel(hrRename.Value);
+                    if (path is not null)
+                    {
+                        _failed.Add(path);
+                        _done.Remove(path);
+                    }
+                }
+                else if (path is not null)
+                {
+                    _done[path] = FileTransfer.FileSystemPath(psiNewlyCreated);
+                    _failed.Remove(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn("Batch rename: the progress callback failed.", ex);
+            }
+        }
+
+        public void StartOperations()
+        {
+        }
+
+        public void FinishOperations(HRESULT hrResult)
+        {
+        }
+
+        public void PreRenameItem(uint dwFlags, IShellItem psiItem, PCWSTR pszNewName)
+        {
+            // Another item under the new name (a change of case only is the item itself): the shell
+            // asks to merge two folders. An exception here would go back to the copy engine.
+            try
+            {
+                if (FileTransfer.FileSystemPath(psiItem) is { } path && pszNewName.ToString() is { Length: > 0 } name
+                    && !string.Equals(PathTools.DisplayName(path), name, StringComparison.OrdinalIgnoreCase)
+                    && Exists(Path.Join(PathTools.ParentOf(path), name)))
+                {
+                    _collided.Add(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn("Batch rename: the progress callback failed.", ex);
+            }
+        }
+
+        public void PreMoveItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, PCWSTR pszNewName)
+        {
+        }
+
+        public void PostMoveItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, PCWSTR pszNewName, HRESULT hrMove, IShellItem psiNewlyCreated)
+        {
+        }
+
+        public void PreCopyItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, PCWSTR pszNewName)
+        {
+        }
+
+        public void PostCopyItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, PCWSTR pszNewName, HRESULT hrCopy, IShellItem psiNewlyCreated)
+        {
+        }
+
+        public void PreDeleteItem(uint dwFlags, IShellItem psiItem)
+        {
+        }
+
+        public void PostDeleteItem(uint dwFlags, IShellItem psiItem, HRESULT hrDelete, IShellItem psiNewlyCreated)
+        {
+        }
+
+        public void PreNewItem(uint dwFlags, IShellItem psiDestinationFolder, PCWSTR pszNewName)
+        {
+        }
+
+        public void PostNewItem(uint dwFlags, IShellItem psiDestinationFolder, PCWSTR pszNewName, PCWSTR pszTemplateName, uint dwFileAttributes, HRESULT hrNew, IShellItem psiNewItem)
         {
         }
 

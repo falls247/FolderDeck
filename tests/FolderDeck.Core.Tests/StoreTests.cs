@@ -555,6 +555,7 @@ public class SettingsStoreTests
         Assert.True(s.ConfirmExecutables);
         Assert.True(s.IncludeWindowsRecent);
         Assert.False(s.ShowHidden);
+        Assert.False(s.ShowDotItems);
         Assert.False(s.AddToWindowsRecent);
         Assert.Equal(100, s.RecentLimit);
         Assert.Equal(50, s.FrequentLimit);
@@ -611,6 +612,50 @@ public class SettingsStoreTests
         Assert.Equal(["v1:x", null], reloaded.Current.OpenTabs!.Select(t => t.FileId));
         Assert.Equal("v1:x", reloaded.Current.Clone().OpenTabs![0].FileId);
         Assert.Single(Regex.Matches(File.ReadAllText(file), "file_id"));
+    }
+
+    [Fact]
+    public void OpenTabs_WithoutViewState_TakeTheSharedShapeAndTheirKindsSort()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        File.WriteAllText(file, """
+            {"version":2,"card_shape":"details","sort_modes":{"recent":"name_asc","folder":"modified_desc"},
+             "open_tabs":[{"kind":"recent","root":"","path":""},{"kind":"folder","root":"E:\\仕事","path":""}],
+             "selected_tab":1}
+            """);
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        var s = store.Current;
+        Assert.Equal(["details", "details"], s.OpenTabs!.Select(t => t.CardShape));
+        Assert.Equal(["name_asc", "modified_desc"], s.OpenTabs!.Select(t => t.SortMode));
+        Assert.Equal("modified_desc", s.LastSortMode); // the selected tab's
+    }
+
+    [Fact]
+    public void OpenTabs_ViewState_IsKeptPerTab_AndNormalized()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        store.Update(s =>
+        {
+            s.CardShape = "square";
+            s.OpenTabs =
+            [
+                new OpenTabSetting { Kind = AppSettings.TabRecent, CardShape = "DETAILS", SortMode = "size_desc" },
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\写真", CardShape = "bogus", SortMode = "bogus" },
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\仕事", CardShape = " " },
+            ];
+        });
+        store.Flush();
+
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        var tabs = reloaded.Current.Clone().OpenTabs!; // Clone keeps them too
+        Assert.Equal(["details", "portrait", "square"], tabs.Select(t => t.CardShape));
+        Assert.Equal(["size_desc", "manual", "manual"], tabs.Select(t => t.SortMode));
     }
 
     [Fact]
@@ -815,6 +860,7 @@ public class SettingsStoreTests
             s.Window = new WindowPlacementSetting { Left = 10, Top = 20, Width = 900, Height = 700, Maximized = true };
             s.RecentClearedAt = FakeClock.Default;
             s.ShowHidden = true;
+            s.ShowDotItems = true;
             s.DetailsColumns = new Dictionary<string, double> { [DetailsColumns.Size] = 120 };
         });
         store.Flush();
@@ -828,6 +874,7 @@ public class SettingsStoreTests
         Assert.Contains("\"sidebar_width\": 300", text);
         Assert.Contains("\"recent_cleared_at\": \"2026-11-21T01:23:45+00:00\"", text);
         Assert.Contains("\"show_hidden\": true", text);
+        Assert.Contains("\"show_dot_items\": true", text);
 
         var reloaded = new SettingsStore(file, FakeClock.Fixed());
         reloaded.Load();

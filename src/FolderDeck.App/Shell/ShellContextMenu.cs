@@ -59,9 +59,11 @@ public sealed record ShellMenuResult(ShellMenuOutcome Outcome, string? Verb, str
 /// <summary>
 /// An entry of the caller's own, put above the shell's entries. Win32 menus get the text only (no
 /// glyph). When an entry is <c>IsDefault</c>, the shell's <c>open</c> is taken out and this entry
-/// becomes the default (bold) one.
+/// becomes the default (bold) one (top level only). A submenu is an entry with <c>IsSubmenu</c> (never
+/// picked itself) followed by its entries, whose <c>Parent</c> is its index (-1: the top level). An
+/// entry with <c>IsChecked</c> gets a check mark (✓, MF_CHECKED; entries without children only).
 /// </summary>
-public readonly record struct ShellMenuAppEntry(string Text, bool Enabled, bool IsSeparator, bool IsDefault);
+public readonly record struct ShellMenuAppEntry(string Text, bool Enabled, bool IsSeparator, bool IsDefault, int Parent = -1, bool IsSubmenu = false, bool IsChecked = false);
 
 /// <summary>
 /// Shows Explorer's own context menu (<c>IContextMenu</c>) for files and folders, so that entries of
@@ -266,6 +268,16 @@ public static class ShellContextMenu
         if (app.Length > AppIdLimit - AppFirstId)
         {
             throw new ArgumentException("Too many menu entries.", nameof(appEntries));
+        }
+
+        // A submenu's entries follow it: InsertAppEntries fills each submenu before its entries come.
+        for (int i = 0; i < app.Length; i++)
+        {
+            int parent = app[i].Parent;
+            if (parent != -1 && (parent < 0 || parent >= i || !app[parent].IsSubmenu))
+            {
+                throw new ArgumentException("A menu entry is in no submenu before it.", nameof(appEntries));
+            }
         }
 
         return app;
@@ -498,6 +510,9 @@ public static class ShellContextMenu
         /// <summary>The caller's entries, at the top of the menu (may be empty).</summary>
         private readonly ShellMenuAppEntry[] _app;
 
+        /// <summary>The submenus of <see cref="_app"/> (menu thread only): their WM_INITMENUPOPUP is not the handlers'.</summary>
+        private readonly HashSet<nuint> _appPopups = new();
+
         /// <summary>The background menu of the one folder in <see cref="_paths"/>, not the menu of items.</summary>
         private readonly bool _background;
         private readonly TaskCompletionSource<ShellMenuResult> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -687,21 +702,44 @@ public static class ShellContextMenu
         /// <summary>
         /// Appends the caller's entries (and a separator after them) to the still empty menu.
         /// <paramref name="shellIndex"/> is where the shell's entries go. False when the menu
-        /// could not be filled.
+        /// could not be filled. A submenu is created when its entry comes and attached to it at once
+        /// (the DestroyMenu of <paramref name="menu"/> then destroys it too); its entries follow it.
         /// </summary>
-        private bool InsertAppEntries(HMENU menu, out uint shellIndex)
+        private unsafe bool InsertAppEntries(HMENU menu, out uint shellIndex)
         {
             shellIndex = 0;
+            var popups = new HMENU[_app.Length];
             for (int i = 0; i < _app.Length; i++)
             {
                 var entry = _app[i];
-                bool ok = entry.IsSeparator
-                    ? PInvoke.AppendMenu(menu, MENU_ITEM_FLAGS.MF_SEPARATOR, 0, null)
-                    : AppendString(
-                        menu,
-                        MENU_ITEM_FLAGS.MF_STRING | (entry.Enabled ? default : MENU_ITEM_FLAGS.MF_GRAYED),
-                        AppFirstId + (uint)i,
-                        entry.Text.Replace("&", "&&", StringComparison.Ordinal)); // no mnemonics
+                HMENU into = entry.Parent < 0 ? menu : popups[entry.Parent];
+                var grayed = entry.Enabled ? default : MENU_ITEM_FLAGS.MF_GRAYED;
+                string text = entry.Text.Replace("&", "&&", StringComparison.Ordinal); // no mnemonics
+                bool ok;
+                if (entry.IsSeparator)
+                {
+                    ok = PInvoke.AppendMenu(into, MENU_ITEM_FLAGS.MF_SEPARATOR, 0, null);
+                }
+                else if (entry.IsSubmenu)
+                {
+                    HMENU popup = PInvoke.CreatePopupMenu();
+                    ok = !popup.IsNull && AppendString(into, MENU_ITEM_FLAGS.MF_STRING | MENU_ITEM_FLAGS.MF_POPUP | grayed, (nuint)popup.Value, text);
+                    if (ok)
+                    {
+                        popups[i] = popup;
+                        _appPopups.Add((nuint)popup.Value);
+                    }
+                    else if (!popup.IsNull)
+                    {
+                        PInvoke.DestroyMenu(popup); // not attached: not destroyed with the menu
+                    }
+                }
+                else
+                {
+                    var check = entry.IsChecked ? MENU_ITEM_FLAGS.MF_CHECKED : default;
+                    ok = AppendString(into, MENU_ITEM_FLAGS.MF_STRING | grayed | check, AppFirstId + (uint)i, text);
+                }
+
                 if (!ok)
                 {
                     return false;
@@ -723,7 +761,8 @@ public static class ShellContextMenu
             return true;
         }
 
-        private static unsafe bool AppendString(HMENU menu, MENU_ITEM_FLAGS flags, uint id, string text)
+        /// <summary><paramref name="id"/>: the command id, or the submenu's handle with MF_POPUP.</summary>
+        private static unsafe bool AppendString(HMENU menu, MENU_ITEM_FLAGS flags, nuint id, string text)
         {
             fixed (char* chars = text)
             {
@@ -815,7 +854,7 @@ public static class ShellContextMenu
                 CollapseSeparators(menu);
 
                 // After the handlers and the removals: replaces the default the shell set.
-                int defaultEntry = Array.FindIndex(_app, e => e.IsDefault && e.Enabled && !e.IsSeparator);
+                int defaultEntry = Array.FindIndex(_app, e => e.IsDefault && e.Enabled && !e.IsSeparator && !e.IsSubmenu && e.Parent < 0); // the top menu only
                 if (defaultEntry >= 0)
                 {
                     PInvoke.SetMenuDefaultItem(menu, AppFirstId + (uint)defaultEntry, SetDefaultByCommand);
@@ -869,7 +908,7 @@ public static class ShellContextMenu
                 // Before the range check and the verb lookup: GetCommandString on an app id would
                 // hand the handler an offset it never gave out.
                 long appIndex = (long)picked - AppFirstId;
-                if (appIndex >= 0 && appIndex < _app.Length && !_app[appIndex].IsSeparator)
+                if (appIndex >= 0 && appIndex < _app.Length && !_app[appIndex].IsSeparator && !_app[appIndex].IsSubmenu)
                 {
                     // The foreground first: the caller's command may show a confirmation.
                     GiveForegroundBack(owner);
@@ -1184,6 +1223,11 @@ public static class ShellContextMenu
             if (msg != WM_INITMENUPOPUP && msg != WM_DRAWITEM && msg != WM_MEASUREITEM && msg != WM_MENUCHAR)
             {
                 return false;
+            }
+
+            if (msg == WM_INITMENUPOPUP && _appPopups.Contains(w.Value))
+            {
+                return false; // a submenu of the caller's entries: no handler filled it
             }
 
             try

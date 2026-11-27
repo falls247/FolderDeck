@@ -482,6 +482,26 @@ public sealed class CascadeController
         }
     }
 
+    /// <summary>
+    /// The elements of every anchor of type <typeparamref name="T"/> may have moved or gone without input
+    /// (the tab strip scrolled, a tab was added, closed or moved): as <see cref="AnchorRemoved"/> for whichever
+    /// of them the list hangs on or is waiting to switch to. Lists of other anchors (a sidebar row, a crumb) stay.
+    /// </summary>
+    public void AnchorsMoved<T>() where T : ICascadeAnchor
+    {
+        if (_pendingAnchorItem is T)
+        {
+            ClearPendingAnchor();
+            _overlayTimer.Stop();
+        }
+
+        if (_anchorItem is T)
+        {
+            _rearmFrom = null;
+            CloseAll();
+        }
+    }
+
     private void ClearPendingAnchor()
     {
         _pendingAnchor = null;

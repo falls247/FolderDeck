@@ -133,6 +133,46 @@ public class TerminalCommandTests
         Assert.Equal(expected, TerminalCommand.Quote(argument));
 }
 
+public class OpenInCommandTests
+{
+    private const string System32 = @"C:\Windows\System32";
+    private const string Pwsh = @"C:\Program Files\PowerShell\7\pwsh.exe";
+
+    // An elevated process starts in System32 whatever the working directory: the folder is on the command line.
+    [Theory]
+    [InlineData(null, false, @"E:\it's a b", @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", @"-NoExit -Command ""Set-Location -LiteralPath 'E:\it''s a b'""")]
+    [InlineData(Pwsh, true, @"E:\it's a b", Pwsh, @"-NoExit -Command ""Set-Location -LiteralPath 'E:\it''s a b'""")]
+    [InlineData(Pwsh, false, "E:\\a\u2019b$x", Pwsh, "-NoExit -Command \"Set-Location -LiteralPath 'E:\\a\u2019\u2019b$x'\"")]
+    public void Build_PowerShell_PassesTheFolderOnTheCommandLine(string? pwsh, bool elevated, string folder, string exe, string arguments)
+    {
+        var spec = OpenInCommand.Build(OpenInTool.PowerShell, elevated, folder, OpenInPrograms.None with { Pwsh = pwsh }, System32);
+        Assert.Equal((exe, arguments, System32), (spec!.FileName, spec.Arguments, spec.WorkingDirectory));
+    }
+
+    [Fact]
+    public void Build_TerminalCodeWsl_TheProgramsFound_ElseCmdOrNothing()
+    {
+        var none = OpenInPrograms.None;
+        Assert.Null(OpenInCommand.Build(OpenInTool.Code, false, @"E:\a", none, System32));
+        Assert.Null(OpenInCommand.Build(OpenInTool.Wsl, false, @"E:\a", none, System32));
+
+        var all = new OpenInPrograms(@"C:\Users\me\AppData\Local\Microsoft\WindowsApps\wt.exe", null, @"C:\VS Code\Code.exe", Wsl: true);
+        var wt = OpenInCommand.Build(OpenInTool.Terminal, true, @"E:\a;b c\", all, System32)!;
+        Assert.Equal((all.WindowsTerminal, @"-d ""E:\a\;b c\\""", System32), (wt.FileName, wt.Arguments, wt.WorkingDirectory));
+        var code = OpenInCommand.Build(OpenInTool.Code, false, @"E:\仕事\a b", all, System32)!;
+        Assert.Equal((all.Code, @"""E:\仕事\a b""", System32), (code.FileName, code.Arguments, code.WorkingDirectory));
+        var wsl = OpenInCommand.Build(OpenInTool.Wsl, false, @"\\wsl.localhost\Ubuntu\home\me", all, System32)!;
+        Assert.Equal((@"C:\Windows\System32\wsl.exe", "-d Ubuntu --cd /home/me"), (wsl.FileName, wsl.Arguments));
+
+        // Without Windows Terminal: cmd, in the folder; elevated through pushd (it would start in System32).
+        var cmd = OpenInCommand.Build(OpenInTool.Terminal, false, @"E:\a b", none, System32)!;
+        Assert.Equal((@"C:\Windows\System32\cmd.exe", "", @"E:\a b"), (cmd.FileName, cmd.Arguments, cmd.WorkingDirectory));
+        var admin = OpenInCommand.Build(OpenInTool.Terminal, true, @"\\nas\share\R&D", none, System32)!;
+        Assert.Equal((@"C:\Windows\System32\cmd.exe", @"/k pushd ""\\nas\share\R&D""", System32), (admin.FileName, admin.Arguments, admin.WorkingDirectory));
+        Assert.Equal(OpenInCommand.CmdPercentRefusal, OpenInCommand.Build(OpenInTool.Terminal, true, @"E:\100%", none, System32)!.Refusal);
+    }
+}
+
 public class PathRebaseTests
 {
     [Theory]

@@ -12,7 +12,8 @@ namespace FolderDeck.Shell;
 /// What one transfer did. <c>Requested</c> / <c>Done</c> count the top-level items handed to
 /// <see cref="FileTransfer.RunAsync"/> (never the contents of a folder); <c>MovesRequested</c> /
 /// <c>MovesDone</c> are the part of them that were moves. <c>NewPaths</c> holds the items created in
-/// the destination for the top-level items that were done, in the order of the request.
+/// the destination for the top-level items that were done, in the order of the request;
+/// <c>Items</c> says for each of them where it came from and how (the app's undo history).
 /// </summary>
 public sealed record TransferResult(
     TransferOutcome Outcome,
@@ -21,7 +22,38 @@ public sealed record TransferResult(
     int MovesRequested,
     int MovesDone,
     IReadOnlyList<string> NewPaths,
-    string? Error);
+    string? Error,
+    IReadOnlyList<TransferredItem> Items)
+{
+    /// <summary>
+    /// Items that were already in the destination under the name a request went to (a merge or a
+    /// replace was offered), whether or not that request ended done: a merge stopped part-way (a
+    /// skip, a locked file, a cancel) has still moved part of its content into them. The app's undo
+    /// history forgets every step that touches them.
+    /// </summary>
+    public IReadOnlyList<string> TakenTargets { get; init; } = [];
+}
+
+/// <summary>A top-level item a transfer did.</summary>
+/// <param name="Source">The requested item.</param>
+/// <param name="NewPath">The item it made in the destination.</param>
+/// <param name="Kind">Copied or moved.</param>
+/// <param name="Fresh">
+/// The result is a new item: false when it went into an item that was there before under its own
+/// name (a folder merged, a file replaced), which the app's undo never moves or recycles (it would
+/// take what was there before with it). A "keep both" copy under a new name is fresh.
+/// </param>
+public sealed record TransferredItem(string Source, string NewPath, TransferKind Kind, bool Fresh);
+
+/// <summary>What an undo / redo of moves or renames did (<see cref="FileTransfer.MoveBackAsync"/>, <see cref="ShellFileOps.RenameBackAsync"/>).</summary>
+/// <param name="Requested">Items asked for.</param>
+/// <param name="Done">The items moved or renamed (from, to): reported by the shell at their requested target, and so on disk.</param>
+/// <param name="Canceled">The user cancelled one of the shell's dialogs, or the shell stopped.</param>
+/// <param name="Error">Text for the message line (without the final 「。」) when items were not done.</param>
+public sealed record MoveBackResult(int Requested, IReadOnlyList<PathMove> Done, bool Canceled, string? Error)
+{
+    public static MoveBackResult None { get; } = new(0, [], false, null);
+}
 
 /// <summary>
 /// Copies or moves files and folders into a folder with <c>IFileOperation</c>, like Explorer's paste
@@ -71,7 +103,7 @@ public static class FileTransfer
         TransferItem[] batch = items.ToArray();
         if (batch.Length == 0)
         {
-            return Task.FromResult(new TransferResult(TransferOutcome.Completed, 0, 0, 0, 0, [], null));
+            return Task.FromResult(new TransferResult(TransferOutcome.Completed, 0, 0, 0, 0, [], null, []));
         }
 
         // Shared with onError, so what was already done is still reported after an unexpected failure.
@@ -106,6 +138,10 @@ public static class FileTransfer
             }
 
             destinationObject = destination;
+
+            // Which results will go into an item that is there now (a merge, a replace): the undo
+            // history leaves those alone.
+            sink.NoteTargets(destinationFolder);
 
             aborted = RunGroup(items, renameOnCollision: false, destination, owner, sink);
             if (!aborted)
@@ -236,7 +272,7 @@ public static class FileTransfer
     /// <summary>The destination is unusable: nothing ran.</summary>
     private static TransferResult Refuse(Sink sink, string destinationFolder, string error)
     {
-        var result = new TransferResult(TransferOutcome.Failed, sink.Requested, 0, sink.MovesRequested, 0, [], error);
+        var result = new TransferResult(TransferOutcome.Failed, sink.Requested, 0, sink.MovesRequested, 0, [], error, []);
         Log(result, destinationFolder);
         return result;
     }
@@ -246,7 +282,10 @@ public static class FileTransfer
         error ??= sink.FirstError();
         int done = sink.Done;
         TransferOutcome outcome = TransferOutcomes.Classify(sink.Requested, done, aborted || sink.Canceled, error);
-        var result = new TransferResult(outcome, sink.Requested, done, sink.MovesRequested, sink.MovesDone, sink.NewPaths(), error);
+        var result = new TransferResult(outcome, sink.Requested, done, sink.MovesRequested, sink.MovesDone, sink.NewPaths(), error, sink.Items())
+        {
+            TakenTargets = sink.TakenTargets(),
+        };
         Log(result, destinationFolder);
         return result;
     }
@@ -258,6 +297,138 @@ public static class FileTransfer
         AppLog.Info(
             $"Transfer {result.Outcome}: {result.Done}/{result.Requested} done, moves {result.MovesDone}/{result.MovesRequested} -> {destinationFolder}{error}");
     }
+
+    /// <summary>
+    /// The app's undo / redo of moves: each item at <c>Path</c> goes to <c>Target</c> (its folder and
+    /// its name there; the folders may differ per item) in one operation with
+    /// <see cref="ShellFileOps.UndoFlags"/>, so it is not on Explorer's undo stack. Checked again on
+    /// the STA thread: the item is there, the target name is free and its folder exists; an item that
+    /// fails a check is left as it is. An item is done only when the shell reported it at its
+    /// target and the disk agrees (<see cref="MoveBackSink"/>: never one resolved in the shell's
+    /// collision dialog). The task never faults.
+    /// </summary>
+    public static Task<MoveBackResult> MoveBackAsync(IReadOnlyList<PathMove> moves, nint owner)
+    {
+        PathMove[] batch = moves.ToArray();
+        if (batch.Length == 0)
+        {
+            return Task.FromResult(MoveBackResult.None);
+        }
+
+        return StaThread.Run(
+            "FolderDeck move back",
+            () => LogBack(MoveBack(batch, owner)),
+            ex =>
+            {
+                AppLog.Warn($"Move back failed: {batch[0].Path} (+{batch.Length - 1})", ex);
+                return new MoveBackResult(batch.Length, [], false, ex.Message);
+            });
+    }
+
+    private static unsafe MoveBackResult MoveBack(PathMove[] moves, nint owner)
+    {
+        var comObjects = new List<object>();
+        var buffers = new List<nint>(); // the names stay allocated until the operation has run
+        object? operationObject = null;
+        var queued = new List<(PathMove Move, int Index)>();
+        var sink = new MoveBackSink();
+        try
+        {
+            var operation = (IFileOperation)new FileOperation();
+            operationObject = operation;
+            operation.SetOperationFlags(ShellFileOps.UndoFlags);
+            if (owner != 0)
+            {
+                operation.SetOwnerWindow(new HWND(owner));
+            }
+
+            foreach (var m in moves)
+            {
+                string folder = PathTools.ParentOf(m.Target);
+                string name = Path.GetFileName(PathTools.TrimTrailingSeparators(m.Target));
+                if (name.Length == 0 || !Exists(m.Path) || Exists(m.Target) || !Directory.Exists(folder))
+                {
+                    continue;
+                }
+
+                HRESULT hr = PInvoke.SHCreateItemFromParsingName(ShellActions.ShellPath(m.Path), null, out IShellItem source);
+                if (hr.Failed || source is null)
+                {
+                    continue;
+                }
+
+                comObjects.Add(source);
+                hr = PInvoke.SHCreateItemFromParsingName(ShellActions.ShellPath(folder), null, out IShellItem destination);
+                if (hr.Failed || destination is null)
+                {
+                    continue;
+                }
+
+                comObjects.Add(destination);
+                nint buffer = Marshal.StringToHGlobalUni(name);
+                buffers.Add(buffer);
+                int index = sink.Add(m.Target, m.Path, ShellActions.ShellPath(m.Path), FileSystemPath(source));
+                operation.MoveItem(source, destination, new PCWSTR((char*)buffer), sink);
+                queued.Add((m, index));
+            }
+
+            bool canceled = queued.Count > 0 && ShellFileOps.Perform(operation);
+            return Settled(moves.Length, queued, sink, canceled, error: null);
+        }
+        catch (Exception ex) when (ex is COMException or InvalidCastException or ArgumentException or UnauthorizedAccessException or IOException)
+        {
+            AppLog.Warn($"Move back failed: {moves[0].Path} (+{moves.Length - 1})", ex);
+            return Settled(moves.Length, queued, sink, canceled: false, error: ex.Message);
+        }
+        finally
+        {
+            Release(operationObject);
+            foreach (object o in comObjects)
+            {
+                Release(o);
+            }
+
+            foreach (nint b in buffers)
+            {
+                Marshal.FreeHGlobal(b);
+            }
+        }
+
+        // Done: the shell reported the item at its requested target (not "keep both", not into an
+        // item that appeared there: MoveBackSink) and the disk agrees (source gone, target there).
+        static MoveBackResult Settled(int requested, List<(PathMove Move, int Index)> queued, MoveBackSink sink, bool canceled, string? error)
+        {
+            var done = queued
+                .Where(q => sink.Landed(q.Index) && !Exists(q.Move.Path) && Exists(q.Move.Target))
+                .Select(q => q.Move)
+                .ToList();
+            canceled |= sink.Canceled;
+            if (error is null && sink.FirstError is { } hr && !IsCancel(hr.Value))
+            {
+                error = Marshal.GetExceptionForHR(hr.Value)?.Message?.TrimEnd('。', '.') ?? "移動できなかった項目があります";
+            }
+
+            if (error is null && !canceled && done.Count < requested)
+            {
+                error = queued.Count == 0 ? "項目が見つからないか、移動先に同じ名前の項目があります"
+                    : sink.AnyCollided ? "途中で移動先に同じ名前の項目ができた項目は、履歴に残していません"
+                    : "元に戻せなかった項目があります";
+            }
+
+            return new MoveBackResult(requested, done, canceled, error);
+        }
+    }
+
+    private static MoveBackResult LogBack(MoveBackResult result)
+    {
+        string canceled = result.Canceled ? ", canceled" : string.Empty;
+        string error = result.Error is null ? string.Empty : $" ({result.Error})";
+        string first = result.Done.Count > 0 ? $" {result.Done[0].Path} -> {result.Done[0].Target}" : string.Empty;
+        AppLog.Info($"Move back: {result.Done.Count}/{result.Requested} done{first}{canceled}{error}");
+        return result;
+    }
+
+    private static bool Exists(string path) => File.Exists(path) || Directory.Exists(path);
 
     /// <summary>File-system path of a shell item, or null when it has none or cannot be read.</summary>
     internal static unsafe string? FileSystemPath(IShellItem? item)
@@ -296,6 +467,177 @@ public static class FileTransfer
         if (comObject is not null && Marshal.IsComObject(comObject))
         {
             Marshal.ReleaseComObject(comObject);
+        }
+    }
+
+    /// <summary>
+    /// The reports of an undo / redo's moves (<see cref="MoveBack"/>, <see cref="RecycleBin.RestoreAsync"/>),
+    /// per queued item: the path the shell says it made (<c>PostMoveItem</c> with a success code other
+    /// than <c>COPYENGINE_S_USER_IGNORED</c>), and whether its target was taken when the move began
+    /// (<c>PreMoveItem</c>). These operations run without <c>FOF_NOCONFIRMATION</c>, so an item that
+    /// appeared at the target meanwhile gets the shell's collision dialog: "keep both" lands under
+    /// another name, a merge or a replace lands in or over that other item. Such an item never counts
+    /// as done (<see cref="Landed"/>): recorded at the requested target, a later redo would move or
+    /// recycle the other item. All calls arrive on the operation's STA thread.
+    /// </summary>
+    internal sealed class MoveBackSink : IFileOperationProgressSink
+    {
+        private readonly List<string> _targets = [];
+        private readonly Dictionary<string, int> _indexByPath = new(PathTools.Comparer);
+        private readonly Dictionary<int, string?> _reported = [];
+        private readonly HashSet<int> _collided = [];
+
+        /// <summary>The first failure reported for an item.</summary>
+        public HRESULT? FirstError { get; private set; }
+
+        /// <summary>An item was cancelled (by the user in a shell dialog, or the operation stopped).</summary>
+        public bool Canceled { get; private set; }
+
+        /// <summary>An item whose target was taken when its move began.</summary>
+        public bool AnyCollided => _collided.Count > 0;
+
+        /// <summary>A queued item going to <paramref name="target"/>; <paramref name="spellings"/> are the ways the shell may report its source.</summary>
+        public int Add(string target, params string?[] spellings)
+        {
+            int index = _targets.Count;
+            _targets.Add(target);
+            foreach (string? s in spellings)
+            {
+                if (!string.IsNullOrEmpty(s))
+                {
+                    _indexByPath.TryAdd(s, index);
+                    _indexByPath.TryAdd(PathTools.TrimTrailingSeparators(s), index);
+                }
+            }
+
+            return index;
+        }
+
+        /// <summary>
+        /// The item reached its requested target: the shell reported it there (as given or in the
+        /// form handed to the shell), its target was free when the move began, and no failure came
+        /// after. The caller checks the disk as well.
+        /// </summary>
+        public bool Landed(int index)
+        {
+            if (_collided.Contains(index) || !_reported.TryGetValue(index, out var made) || made is null)
+            {
+                return false;
+            }
+
+            string target = _targets[index];
+            string trimmed = PathTools.TrimTrailingSeparators(made);
+            return PathTools.PathEquals(trimmed, PathTools.TrimTrailingSeparators(target))
+                || PathTools.PathEquals(trimmed, PathTools.TrimTrailingSeparators(ShellActions.ShellPath(target)));
+        }
+
+        private bool TryIndex(IShellItem? item, out int index)
+        {
+            index = -1;
+            return FileSystemPath(item) is { } path
+                && (_indexByPath.TryGetValue(path, out index) || _indexByPath.TryGetValue(PathTools.TrimTrailingSeparators(path), out index));
+        }
+
+        public void PreMoveItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, PCWSTR pszNewName)
+        {
+            // An exception here would go back to the copy engine as a failure of its own.
+            try
+            {
+                if (TryIndex(psiItem, out int index) && Exists(_targets[index]))
+                {
+                    _collided.Add(index);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn("Move back: the progress callback failed.", ex);
+            }
+        }
+
+        public void PostMoveItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, PCWSTR pszNewName, HRESULT hrMove, IShellItem psiNewlyCreated)
+        {
+            try
+            {
+                if (!TryIndex(psiItem, out int index))
+                {
+                    return; // something inside a moved folder: the disk check covers it
+                }
+
+                if (hrMove.Failed)
+                {
+                    FirstError ??= hrMove;
+                    Canceled |= IsCancel(hrMove.Value);
+                    _reported.Remove(index);
+                }
+                else if (hrMove.Value == CopyEngineUserIgnored || psiNewlyCreated is null)
+                {
+                    _reported.Remove(index); // skipped in a dialog, or no resulting item
+                }
+                else
+                {
+                    _reported[index] = FileSystemPath(psiNewlyCreated);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn("Move back: the progress callback failed.", ex);
+            }
+        }
+
+        public void StartOperations()
+        {
+        }
+
+        public void FinishOperations(HRESULT hrResult)
+        {
+        }
+
+        public void PreRenameItem(uint dwFlags, IShellItem psiItem, PCWSTR pszNewName)
+        {
+        }
+
+        public void PostRenameItem(uint dwFlags, IShellItem psiItem, PCWSTR pszNewName, HRESULT hrRename, IShellItem psiNewlyCreated)
+        {
+        }
+
+        public void PreCopyItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, PCWSTR pszNewName)
+        {
+        }
+
+        public void PostCopyItem(uint dwFlags, IShellItem psiItem, IShellItem psiDestinationFolder, PCWSTR pszNewName, HRESULT hrCopy, IShellItem psiNewlyCreated)
+        {
+        }
+
+        public void PreDeleteItem(uint dwFlags, IShellItem psiItem)
+        {
+        }
+
+        public void PostDeleteItem(uint dwFlags, IShellItem psiItem, HRESULT hrDelete, IShellItem psiNewlyCreated)
+        {
+        }
+
+        public void PreNewItem(uint dwFlags, IShellItem psiDestinationFolder, PCWSTR pszNewName)
+        {
+        }
+
+        public void PostNewItem(uint dwFlags, IShellItem psiDestinationFolder, PCWSTR pszNewName, PCWSTR pszTemplateName, uint dwFileAttributes, HRESULT hrNew, IShellItem psiNewItem)
+        {
+        }
+
+        public void UpdateProgress(uint iWorkTotal, uint iWorkSoFar)
+        {
+        }
+
+        public void ResetTimer()
+        {
+        }
+
+        public void PauseTimer()
+        {
+        }
+
+        public void ResumeTimer()
+        {
         }
     }
 
@@ -342,9 +684,17 @@ public static class FileTransfer
         private readonly string?[] _newPaths;
         private readonly string?[] _errors;
 
+        /// <summary>The path under the item's own name in the destination (<see cref="NoteTargets"/>).</summary>
+        private readonly string?[] _expected;
+
+        /// <summary>An item was at <see cref="_expected"/> before the transfer (never set for "keep both" copies).</summary>
+        private readonly bool[] _takenBefore;
+
         public Sink(TransferItem[] items)
         {
             _items = items;
+            _expected = new string?[items.Length];
+            _takenBefore = new bool[items.Length];
             _done = new bool[items.Length];
             _reported = new bool[items.Length];
             _failedInside = new HashSet<string>?[items.Length];
@@ -431,6 +781,75 @@ public static class FileTransfer
             }
 
             return paths;
+        }
+
+        /// <summary>
+        /// Before anything runs: the path each item would get under its own name in
+        /// <paramref name="destinationFolder"/>, and whether an item is there already (a merge or a
+        /// replace if the result lands there). Touches the file system; never throws.
+        /// </summary>
+        public void NoteTargets(string destinationFolder)
+        {
+            for (int i = 0; i < _items.Length; i++)
+            {
+                try
+                {
+                    string name = Path.GetFileName(PathTools.TrimTrailingSeparators(_items[i].Path));
+                    if (name.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    _expected[i] = Path.Join(destinationFolder, name);
+                    _takenBefore[i] = !_items[i].RenameOnCollision && Exists(_expected[i]!);
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Warn($"Transfer: could not check the destination of {_items[i].Path}", ex);
+                }
+            }
+        }
+
+        /// <summary>The items that were done, in the order of the request: where each came from, how, and whether its result is new (see <see cref="TransferredItem.Fresh"/>).</summary>
+        /// <summary>The destinations that were taken before the transfer (see <see cref="TransferResult.TakenTargets"/>).</summary>
+        public IReadOnlyList<string> TakenTargets()
+        {
+            var taken = new List<string>();
+            for (int i = 0; i < _items.Length; i++)
+            {
+                if (_takenBefore[i] && _expected[i] is { Length: > 0 } path)
+                {
+                    taken.Add(path);
+                }
+            }
+
+            return taken;
+        }
+
+        public IReadOnlyList<TransferredItem> Items()
+        {
+            // Two sources of one name (search results) can end in one path: the second merged into or
+            // replaced the first. Neither result is new then (undoing one would take the other along).
+            var arrivals = new Dictionary<string, int>(PathTools.Comparer);
+            for (int i = 0; i < _items.Length; i++)
+            {
+                if (_done[i] && _newPaths[i] is { Length: > 0 } p)
+                {
+                    arrivals[p] = arrivals.GetValueOrDefault(p) + 1;
+                }
+            }
+
+            var items = new List<TransferredItem>();
+            for (int i = 0; i < _items.Length; i++)
+            {
+                if (_done[i] && _newPaths[i] is { Length: > 0 } path)
+                {
+                    bool fresh = arrivals[path] == 1 && !(_takenBefore[i] && PathTools.PathEquals(path, _expected[i]));
+                    items.Add(new TransferredItem(_items[i].Path, path, _items[i].Kind, fresh));
+                }
+            }
+
+            return items;
         }
 
         /// <summary>

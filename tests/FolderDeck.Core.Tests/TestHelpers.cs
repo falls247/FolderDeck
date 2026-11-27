@@ -64,7 +64,7 @@ public sealed class FakeFileSystem : IFileSystem
         return this;
     }
 
-    public IReadOnlyList<FsEntry> EnumerateDirectory(string path, bool includeHidden, CancellationToken cancellationToken)
+    public IReadOnlyList<FsEntry> EnumerateDirectory(string path, ListingFilter filter, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref EnumerateCalls);
         Gate?.Wait(cancellationToken);
@@ -80,8 +80,8 @@ public sealed class FakeFileSystem : IFileSystem
 
         const FileAttributes skip = FileAttributes.Hidden | FileAttributes.System;
         return list
-            .Where(e => !e.Name.StartsWith('.'))
-            .Where(e => includeHidden || (e.Attributes & skip) == 0)
+            .Where(e => (filter & ListingFilter.DotNames) != 0 || !e.Name.StartsWith('.'))
+            .Where(e => (filter & ListingFilter.Hidden) != 0 || (e.Attributes & skip) == 0)
             .ToList();
     }
 

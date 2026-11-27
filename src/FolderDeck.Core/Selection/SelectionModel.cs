@@ -27,6 +27,16 @@ public sealed class SelectionModel
     /// </summary>
     public string? Anchor { get; private set; }
 
+    /// <summary>The key clicked last (Ctrl+click, Shift+click), kept only while it is selected.</summary>
+    private string? _focus;
+
+    /// <summary>
+    /// The item the user acted on last, as Explorer's focus (where F2 puts the name box): the key of
+    /// the last Ctrl+click or Shift+click while it is still selected, else <see cref="Anchor"/>. A
+    /// Shift+click moves it to the end of the range; the anchor stays at the start.
+    /// </summary>
+    public string? Focus => _focus is not null && _keys.Contains(_focus) ? _focus : Anchor;
+
     public bool Contains(string key) => !string.IsNullOrEmpty(key) && _keys.Contains(key);
 
     /// <summary>
@@ -67,6 +77,7 @@ public sealed class SelectionModel
         }
 
         Anchor = key;
+        _focus = key;
         Changed?.Invoke();
         return true;
     }
@@ -86,6 +97,7 @@ public sealed class SelectionModel
             return false;
         }
 
+        _focus = key;
         int start = IndexOf(displayed, Anchor);
         if (start < 0)
         {
@@ -168,6 +180,7 @@ public sealed class SelectionModel
             }
         }
 
+        _focus = null; // a marquee has no last click: the focus is the anchor
         if (baseline.Anchor is { } anchor && next.Contains(anchor))
         {
             Anchor = anchor;
@@ -185,6 +198,7 @@ public sealed class SelectionModel
     {
         ArgumentNullException.ThrowIfNull(baseline);
         Anchor = baseline.Anchor;
+        _focus = null;
         return SetKeys(new HashSet<string>(baseline.Keys, PathTools.Comparer));
     }
 
@@ -192,6 +206,7 @@ public sealed class SelectionModel
     public bool Clear()
     {
         Anchor = null;
+        _focus = null;
         if (_keys.Count == 0)
         {
             return false;

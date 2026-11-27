@@ -1,4 +1,5 @@
 SHCreateItemFromParsingName
+SHCreateItemFromRelativeName
 IShellItem
 IShellItemImageFactory
 SIIGBF
@@ -93,6 +94,7 @@ WM_DRAWITEM
 WM_MEASUREITEM
 WM_MENUCHAR
 WNetGetConnection
+QueryDosDevice
 WNetOpenEnum
 WNetEnumResource
 WNetCloseEnum

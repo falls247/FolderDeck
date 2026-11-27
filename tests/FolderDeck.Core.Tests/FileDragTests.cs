@@ -169,6 +169,7 @@ public class FileDragTests
     [InlineData(@"\\srv\s\a\x", @"\\srv\t\b", DropEffects.Copy)]
     [InlineData(@"E:\a\x", @"\\srv\s\b", DropEffects.Copy)]
     [InlineData(@"E:\a\x|F:\y", @"E:\b", DropEffects.Copy)]
+    [InlineData(@"E:\a\b\x.txt", @"E:\", DropEffects.Move)]  // up to the drive's root (a crumb of the address bar)
     public void DropEffectFor_NoKeys_MovesWithinAVolume_CopiesAcrossVolumesAndShares(string sources, string target, DropEffects expected)
     {
         Assert.Equal(expected, FileDrag.DropEffectFor(sources.Split('|'), target, DropKeys.None, All));

@@ -16,7 +16,7 @@ public sealed class FolderListingCache
     public const int DefaultMaxTotalEntries = 200_000;
 
     private readonly IFileSystem _fs;
-    private readonly Func<bool> _includeHidden;
+    private readonly Func<ListingFilter> _filter;
     private readonly Func<long> _ticks;
     private readonly long _ttlMs;
     private readonly int _maxEntries;
@@ -32,7 +32,7 @@ public sealed class FolderListingCache
 
     public FolderListingCache(
         IFileSystem fs,
-        Func<bool> includeHidden,
+        Func<ListingFilter> filter,
         TimeSpan? ttl = null,
         int maxEntries = 1500,
         VolumeThrottle? throttle = null,
@@ -40,7 +40,7 @@ public sealed class FolderListingCache
         int maxTotalEntries = DefaultMaxTotalEntries)
     {
         _fs = fs;
-        _includeHidden = includeHidden;
+        _filter = filter;
         _ttlMs = (long)(ttl ?? DefaultTtl).TotalMilliseconds;
         _maxEntries = Math.Max(16, maxEntries);
         _throttle = throttle ?? new VolumeThrottle();
@@ -51,7 +51,7 @@ public sealed class FolderListingCache
 
     public IFileSystem FileSystem => _fs;
 
-    public bool IncludeHidden => _includeHidden();
+    public ListingFilter Filter => _filter();
 
     /// <summary>How many listings are cached (diagnostics, tests).</summary>
     public int CachedListings
@@ -108,10 +108,10 @@ public sealed class FolderListingCache
                 Drop(path);
             }
 
-            bool hidden = _includeHidden();
-            if (!_inFlight.TryGetValue(path, out flight!) || flight.IncludeHidden != hidden)
+            var filter = _filter();
+            if (!_inFlight.TryGetValue(path, out flight!) || flight.Filter != filter)
             {
-                flight = new InFlight(path, hidden, _generation);
+                flight = new InFlight(path, filter, _generation);
                 _inFlight[path] = flight;
                 flight.Task = Task.Run(() => RunAsync(flight), CancellationToken.None);
                 _ = flight.Task.ContinueWith(t => Complete(flight, t), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
@@ -124,7 +124,7 @@ public sealed class FolderListingCache
     }
 
     /// <summary>
-    /// Drops every cached listing (F5, a file operation, or the hidden-files setting changed). A
+    /// Drops every cached listing (F5, a file operation, or a setting of what listings show changed). A
     /// listing still running was started before: it finishes for those already waiting, but a
     /// later <see cref="GetAsync"/> starts a new one instead of joining it, and it is not cached.
     /// </summary>
@@ -164,7 +164,7 @@ public sealed class FolderListingCache
         using (await _throttle.EnterAsync(flight.Path, token).ConfigureAwait(false))
         {
             token.ThrowIfCancellationRequested();
-            return FolderLister.List(_fs, flight.Path, flight.IncludeHidden, token);
+            return FolderLister.List(_fs, flight.Path, flight.Filter, token);
         }
     }
 
@@ -203,7 +203,7 @@ public sealed class FolderListingCache
             if (task.Status == TaskStatus.RanToCompletion
                 && !flight.Detached
                 && flight.Generation == _generation
-                && flight.IncludeHidden == _includeHidden())
+                && flight.Filter == _filter())
             {
                 long now = _ticks();
                 Put(flight.Path, task.Result, now);
@@ -279,11 +279,11 @@ public sealed class FolderListingCache
 
     private sealed record CacheEntry(FolderListing Listing, long Ticks);
 
-    private sealed class InFlight(string path, bool includeHidden, long generation)
+    private sealed class InFlight(string path, ListingFilter filter, long generation)
     {
         public string Path { get; } = path;
 
-        public bool IncludeHidden { get; } = includeHidden;
+        public ListingFilter Filter { get; } = filter;
 
         public long Generation { get; } = generation;
 

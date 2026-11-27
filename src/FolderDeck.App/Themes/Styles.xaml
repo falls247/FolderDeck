@@ -577,18 +577,40 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="{x:Type MenuItem}">
-                    <Border x:Name="Bd" Background="Transparent" CornerRadius="5" Padding="{TemplateBinding Padding}">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="24" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="{TemplateBinding Tag}" FontFamily="{StaticResource Font.Icons}" FontSize="13"
-                                       VerticalAlignment="Center" Foreground="{TemplateBinding Foreground}" />
-                            <ContentPresenter Grid.Column="1" ContentSource="Header" VerticalAlignment="Center" RecognizesAccessKey="True" />
-                        </Grid>
-                    </Border>
+                    <Grid>
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="5" Padding="{TemplateBinding Padding}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="24" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{TemplateBinding Tag}" FontFamily="{StaticResource Font.Icons}" FontSize="13"
+                                           VerticalAlignment="Center" Foreground="{TemplateBinding Foreground}" />
+                                <ContentPresenter Grid.Column="1" ContentSource="Header" VerticalAlignment="Center" RecognizesAccessKey="True" />
+                                <!-- ▶: this entry has a submenu (ContextMenuFactory's 「ターミナルで開く」…) -->
+                                <TextBlock x:Name="Arrow" Grid.Column="2" Text="&#x25B6;" FontSize="9" Margin="16,0,0,0" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource Brush.Muted}" Visibility="Collapsed" />
+                            </Grid>
+                        </Border>
+                        <!-- The submenu. MenuItem finds it by this name (hover, capture): keep the name. -->
+                        <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="4" VerticalOffset="-5" AllowsTransparency="True"
+                               Focusable="False" PopupAnimation="None"
+                               IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}">
+                            <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderStrong}"
+                                    BorderThickness="1" CornerRadius="8" Padding="4" MinWidth="180"
+                                    TextElement.FontFamily="{StaticResource Font.UI}" TextElement.FontSize="13">
+                                <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
+                            </Border>
+                        </Popup>
+                    </Grid>
                     <ControlTemplate.Triggers>
+                        <Trigger Property="Role" Value="SubmenuHeader">
+                            <Setter TargetName="Arrow" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="IsSubmenuOpen" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Surface3}" />
+                        </Trigger>
                         <Trigger Property="IsHighlighted" Value="True">
                             <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Surface3}" />
                         </Trigger>

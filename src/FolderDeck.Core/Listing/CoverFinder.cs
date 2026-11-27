@@ -30,20 +30,20 @@ public static class CoverFinder
         IFileSystem fs,
         string folder,
         IReadOnlyList<FsEntry>? rootEntries,
-        bool includeHidden,
+        ListingFilter filter,
         CancellationToken cancellationToken,
         int maxDepth = MaxDepth,
         int maxFolders = MaxFolders)
     {
         int budget = maxFolders;
-        return Search(fs, folder, rootEntries, includeHidden, maxDepth, ref budget, cancellationToken);
+        return Search(fs, folder, rootEntries, filter, maxDepth, ref budget, cancellationToken);
     }
 
     private static string? Search(
         IFileSystem fs,
         string folder,
         IReadOnlyList<FsEntry>? entries,
-        bool includeHidden,
+        ListingFilter filter,
         int depthLeft,
         ref int budget,
         CancellationToken cancellationToken)
@@ -57,7 +57,7 @@ public static class CoverFinder
         budget--;
         if (entries is null)
         {
-            var listing = FolderLister.List(fs, folder, includeHidden, cancellationToken);
+            var listing = FolderLister.List(fs, folder, filter, cancellationToken);
             if (!listing.IsOk)
             {
                 return null;
@@ -91,7 +91,7 @@ public static class CoverFinder
                 return null;
             }
 
-            string? found = Search(fs, e.FullPath, null, includeHidden, depthLeft - 1, ref budget, cancellationToken);
+            string? found = Search(fs, e.FullPath, null, filter, depthLeft - 1, ref budget, cancellationToken);
             if (found is not null)
             {
                 return found;

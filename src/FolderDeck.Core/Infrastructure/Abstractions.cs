@@ -31,6 +31,23 @@ public readonly record struct FsEntry(
     FileAttributes Attributes);
 
 /// <summary>
+/// Which entries <see cref="IFileSystem.EnumerateDirectory"/> lists besides the ordinary ones. The two
+/// flags are independent: a hidden (or system) entry whose name starts with '.' needs both.
+/// </summary>
+[Flags]
+public enum ListingFilter
+{
+    /// <summary>Skips hidden and system entries and names starting with '.'.</summary>
+    None = 0,
+
+    /// <summary>Lists hidden and system entries (setting show_hidden).</summary>
+    Hidden = 1,
+
+    /// <summary>Lists names starting with '.', such as .git or .vscode (setting show_dot_items).</summary>
+    DotNames = 2,
+}
+
+/// <summary>
 /// File system access used by Core. Every member may block (network drives), so callers
 /// run them off the UI thread.
 /// </summary>
@@ -38,12 +55,12 @@ public interface IFileSystem
 {
     /// <summary>
     /// Lists the direct children of <paramref name="path"/> (unsorted). Names starting with
-    /// '.' are always skipped; hidden and system entries are skipped unless
-    /// <paramref name="includeHidden"/> is true.
+    /// '.' are skipped unless <paramref name="filter"/> has <see cref="ListingFilter.DotNames"/>;
+    /// hidden and system entries are skipped unless it has <see cref="ListingFilter.Hidden"/>.
     /// Throws <see cref="UnauthorizedAccessException"/>, <see cref="DirectoryNotFoundException"/>
     /// or <see cref="IOException"/> when the folder itself cannot be read.
     /// </summary>
-    IReadOnlyList<FsEntry> EnumerateDirectory(string path, bool includeHidden, CancellationToken cancellationToken);
+    IReadOnlyList<FsEntry> EnumerateDirectory(string path, ListingFilter filter, CancellationToken cancellationToken);
 
     PathKind GetKind(string path);
 

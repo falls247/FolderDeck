@@ -45,6 +45,18 @@ public sealed class OpenTabSetting
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? FileId { get; set; }
+
+    /// <summary>
+    /// How the tab shows its items (<see cref="CardShapes"/>: portrait / square / details). Null in files
+    /// written before it was kept per tab: <see cref="AppSettings.Normalize"/> fills it from <see cref="AppSettings.CardShape"/>.
+    /// </summary>
+    public string? CardShape { get; set; }
+
+    /// <summary>
+    /// The tab's sort mode (<see cref="CardSortModes"/>). Null in files written before it was kept per tab:
+    /// <see cref="AppSettings.Normalize"/> fills it from the kind's <see cref="AppSettings.SortModes"/>.
+    /// </summary>
+    public string? SortMode { get; set; }
 }
 
 /// <summary>Ids of the sidebar's collapsible sections (<c>sidebar_collapsed_sections</c>).</summary>
@@ -157,8 +169,9 @@ public sealed class AppSettings
     public int CardSize { get; set; } = CardSizeDefault;
 
     /// <summary>
-    /// How every tab shows its items: cards, <c>portrait</c> (3:4 thumbnail) or <c>square</c> (1:1),
-    /// or the <c>details</c> list.
+    /// View mode of the tab used last: cards, <c>portrait</c> (3:4 thumbnail) or <c>square</c> (1:1),
+    /// or the <c>details</c> list. Each tab keeps its own (<see cref="OpenTabSetting.CardShape"/>); a tab
+    /// that is opened (not restored) starts with this one, and open_tabs entries without one take it.
     /// </summary>
     public string? CardShape { get; set; } = CardShapes.Portrait;
 
@@ -179,11 +192,19 @@ public sealed class AppSettings
     public int TextScale { get; set; } = TextScaleDefault;
 
     /// <summary>
-    /// Sort mode per tab: <see cref="TabRecent"/> / <see cref="TabFrequent"/> / <see cref="TabFolder"/> →
-    /// <c>manual</c>, <c>name_asc</c>, <c>name_desc</c>, <c>modified_asc</c>, <c>modified_desc</c>,
-    /// <c>size_asc</c>, <c>size_desc</c>, <c>type_asc</c>, <c>type_desc</c>.
+    /// Sort mode per kind of tab, as earlier versions kept it: <see cref="TabRecent"/> / <see cref="TabFrequent"/> /
+    /// <see cref="TabFolder"/> → <c>manual</c>, <c>name_asc</c>, <c>name_desc</c>, <c>modified_asc</c>, <c>modified_desc</c>,
+    /// <c>size_asc</c>, <c>size_desc</c>, <c>type_asc</c>, <c>type_desc</c>. Each tab keeps its own now
+    /// (<see cref="OpenTabSetting.SortMode"/>): this is read only to fill open_tabs entries without one, and
+    /// still written (the last sort mode set in a tab of that kind) for an earlier exe.
     /// </summary>
     public Dictionary<string, string>? SortModes { get; set; } = new();
+
+    /// <summary>
+    /// Sort mode of the tab used last (the shown one; the last shown while no tab is open): a tab that is
+    /// opened, not restored, starts with it and with <see cref="CardShape"/>. Missing: the selected open tab's.
+    /// </summary>
+    public string? LastSortMode { get; set; }
 
     /// <summary>
     /// What the top level of <see cref="TabRecent"/> / <see cref="TabFrequent"/> shows:
@@ -193,6 +214,20 @@ public sealed class AppSettings
 
     public bool ShowHidden { get; set; }
 
+    /// <summary>
+    /// List names starting with '.' (.vscode, .gitignore). Independent of <see cref="ShowHidden"/>: a '.'
+    /// entry that is also hidden (Git for Windows marks .git so) needs both.
+    /// </summary>
+    public bool ShowDotItems { get; set; }
+
+    /// <summary>What folder listings include, from <see cref="ShowHidden"/> and <see cref="ShowDotItems"/>.</summary>
+    public ListingFilter ToListingFilter() =>
+        (ShowHidden ? ListingFilter.Hidden : ListingFilter.None) | (ShowDotItems ? ListingFilter.DotNames : ListingFilter.None);
+
+    /// <summary>
+    /// Ask before a program (ShellActions.IsExecutable) runs. Not asked for the double click of
+    /// <see cref="OpenOnDoubleClick"/> (on a card / details row); every other way of opening still asks.
+    /// </summary>
     public bool ConfirmExecutables { get; set; } = true;
 
     public bool IncludeWindowsRecent { get; set; } = true;
@@ -460,6 +495,23 @@ public sealed class AppSettings
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
         ThumbCacheMb = Math.Clamp(ThumbCacheMb, 0, ThumbCacheMbMax);
         AutoRefreshSeconds = Math.Clamp(AutoRefreshSeconds, AutoRefreshSecondsMin, AutoRefreshSecondsMax);
+        NormalizeTabViews(); // last: reads the normalized open_tabs, card_shape and sort_modes
+    }
+
+    /// <summary>
+    /// Gives every open tab its own view mode and sort mode. Entries written before they were kept per tab
+    /// take the shared card_shape and the sort mode of their kind (sort_modes).
+    /// </summary>
+    private void NormalizeTabViews()
+    {
+        foreach (var tab in OpenTabs!)
+        {
+            tab.CardShape = CardShapes.ToSetting(CardShapes.FromSetting(string.IsNullOrWhiteSpace(tab.CardShape) ? CardShape : tab.CardShape));
+            tab.SortMode = CardSortModes.ToSetting(tab.SortMode is null ? SortModeOf(tab.Kind!) : CardSortModes.FromSetting(tab.SortMode));
+        }
+
+        LastSortMode ??= SelectedTab >= 0 && SelectedTab < OpenTabs.Count ? OpenTabs[SelectedTab].SortMode : SortModes![TabFolder];
+        LastSortMode = CardSortModes.ToSetting(CardSortModes.FromSetting(LastSortMode));
     }
 
     public AppSettings Clone()
@@ -474,7 +526,16 @@ public sealed class AppSettings
             Maximized = Window.Maximized,
         };
         copy.Locations = Locations?.ToDictionary(kv => kv.Key, kv => new LocationSetting { Root = kv.Value.Root, Path = kv.Value.Path });
-        copy.OpenTabs = OpenTabs?.Select(t => new OpenTabSetting { Kind = t.Kind, Root = t.Root, Path = t.Path, FileId = t.FileId }).ToList();
+        // Every member of OpenTabSetting: Current is handed out through this copy.
+        copy.OpenTabs = OpenTabs?.Select(t => new OpenTabSetting
+        {
+            Kind = t.Kind,
+            Root = t.Root,
+            Path = t.Path,
+            FileId = t.FileId,
+            CardShape = t.CardShape,
+            SortMode = t.SortMode,
+        }).ToList();
         copy.SidebarCollapsedSections = SidebarCollapsedSections?.ToList();
         copy.DetailsColumns = DetailsColumns is null ? null : new Dictionary<string, double>(DetailsColumns);
         copy.SortModes = SortModes is null ? null : new Dictionary<string, string>(SortModes);

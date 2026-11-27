@@ -208,6 +208,28 @@ public static class PathTools
 
     public static bool PathEquals(string? a, string? b) => Comparer.Equals(a, b);
 
+    /// <summary>
+    /// True when <paramref name="path"/> is <paramref name="folder"/> or lies below it (any case,
+    /// trailing separators ignored; by whole names: <c>E:\ab</c> is not below <c>E:\a</c>).
+    /// </summary>
+    public static bool IsSameOrUnder(string? path, string? folder)
+    {
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(folder))
+        {
+            return false;
+        }
+
+        string p = TrimTrailingSeparators(path.Replace('/', '\\'));
+        string f = TrimTrailingSeparators(folder.Replace('/', '\\'));
+        if (PathEquals(p, f))
+        {
+            return true;
+        }
+
+        string prefix = f.EndsWith('\\') ? f : f + "\\"; // a root keeps its separator
+        return p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>Joins a relative path ("a\b") and a child name.</summary>
     public static string JoinRel(string rel, string name) =>
         string.IsNullOrEmpty(rel) ? name : rel + "\\" + name;

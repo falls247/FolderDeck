@@ -83,6 +83,15 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     private bool _tabsRestored;
 
+    /// <summary>CardShape is being set to the shown tab's (tab switch, startup): not the user's choice, nothing is saved.</summary>
+    private bool _syncingView;
+
+    /// <summary>
+    /// Sort mode of the tab used last (the shown one; kept while no tab is open). A tab that joins the
+    /// strip starts with it (<see cref="InheritViewState"/>); saved as <c>last_sort_mode</c>.
+    /// </summary>
+    private CardSortMode _lastSortMode;
+
     /// <summary>The shown tab; <see cref="NoTab"/> (never null) while no tab is open.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanGoBack), nameof(CanGoForward), nameof(HasTab))]
@@ -93,8 +102,9 @@ public sealed partial class MainViewModel : ObservableObject
     private int _cardSize = AppSettings.CardSizeDefault;
 
     /// <summary>
-    /// How every tab shows its items (toolbar, right of the sort button): cards of one of two
-    /// shapes, or the details list.
+    /// How the shown tab shows its items (toolbar, right of the sort button): cards of one of two
+    /// shapes, or the details list. Mirrors <see cref="TabViewModel.CardShape"/> of <see cref="SelectedTab"/>
+    /// (<see cref="OnSelectedTabChanged"/>); kept while no tab is open: what a new tab starts with.
     /// </summary>
     [ObservableProperty]
     private CardShape _cardShape = CardShape.Portrait;
@@ -221,7 +231,46 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         newValue.IsSelected = true;
+        if (newValue.IsPlaceholder)
+        {
+            return; // no tab: the toolbar is hidden; the last tab's view stays, new tabs start with it
+        }
+
+        // Runs before SelectedTab is announced (generated setter), so the view swaps with the new tab and
+        // ActiveList is already its view for the scroll position ShowTabAsync restores.
+        _lastSortMode = newValue.SortMode;
+        if (CardShape != newValue.CardShape)
+        {
+            View?.CloseCardCascade(); // the overlay was sized for the other shape
+            SyncCardShape(newValue.CardShape);
+        }
     }
+
+    /// <summary>Sets <see cref="CardShape"/> to the shown tab's without saving it or dropping scroll positions.</summary>
+    private void SyncCardShape(CardShape shape)
+    {
+        _syncingView = true;
+        try
+        {
+            CardShape = shape;
+        }
+        finally
+        {
+            _syncingView = false;
+        }
+    }
+
+    /// <summary>A tab restored from open_tabs comes back with its own view (Normalize filled older entries).</summary>
+    private static void RestoreViewState(TabViewModel tab, OpenTabSetting entry) =>
+        tab.SetViewState(CardShapes.FromSetting(entry.CardShape), CardSortModes.FromSetting(entry.SortMode));
+
+    /// <summary>
+    /// A tab that joins the strip now (not restored) starts with the view of the tab used last: the shown
+    /// one, or while no tab is open the last shown (across a restart too: card_shape / last_sort_mode).
+    /// Call before the tab is shown. The three callers: OpenFolderTabAsync, OpenQuickTabAsync, NavigateAsync.
+    /// </summary>
+    private void InheritViewState(TabViewModel tab) =>
+        tab.SetViewState(HasTab ? SelectedTab.CardShape : CardShape, HasTab ? SelectedTab.SortMode : _lastSortMode);
 
     // ---- startup / shutdown -----------------------------------------------------------------
 
@@ -233,7 +282,8 @@ public sealed partial class MainViewModel : ObservableObject
     {
         var settings = Settings;
         CardSize = settings.CardSize;
-        CardShape = CardShapes.FromSetting(settings.CardShape);
+        SyncCardShape(CardShapes.FromSetting(settings.CardShape)); // the selected tab's follows below
+        _lastSortMode = CardSortModes.FromSetting(settings.LastSortMode);
         SidebarWidth = settings.SidebarWidth;
 
         // A folder tab whose folder is gone stays, with its error banner: the user closes it. A fixed
@@ -256,7 +306,9 @@ public sealed partial class MainViewModel : ObservableObject
                 if (located)
                 {
                     var location = new NavLocation(TabKind.Folder, entry.Root, entry.Path);
-                    AddFolderTab(location).SetIdentity(location, entry.FileId);
+                    var restored = AddFolderTab(location);
+                    restored.SetIdentity(location, entry.FileId);
+                    RestoreViewState(restored, entry);
                 }
 
                 continue;
@@ -275,12 +327,14 @@ public sealed partial class MainViewModel : ObservableObject
                 _restoring.Add(tab);
             }
 
+            RestoreViewState(tab, entry);
             AddToStrip(tab);
         }
 
         RefreshRegistered();
         _ = DriveList.RefreshAsync(recheck: false); // not awaited: a drive that does not answer must not delay the first tab
-        SelectedTab = Tabs.Count == 0 ? NoTab : Tabs[Math.Clamp(selected, 0, Tabs.Count - 1)];
+        OpenInTools.Refresh(); // in the background: the right-click menus' 「… で開く」
+        SelectedTab =Tabs.Count == 0 ? NoTab : Tabs[Math.Clamp(selected, 0, Tabs.Count - 1)];
         _tabsRestored = true; // before the first await: what the user does while the first tab loads is saved too
         ApplyAutoRefreshSetting(settings);
         if (HasTab)
@@ -294,8 +348,18 @@ public sealed partial class MainViewModel : ObservableObject
         bool tabs = _tabsRestored;
         int selectedTab = Tabs.IndexOf(SelectedTab); // -1: no tab is open
         var openTabs = Tabs
-            .Select(t => new OpenTabSetting { Kind = TabKinds.ToSetting(t.Kind), Root = t.Location.Root, Path = t.Location.Rel, FileId = t.Identity })
+            .Select(t => new OpenTabSetting
+            {
+                Kind = TabKinds.ToSetting(t.Kind),
+                Root = t.Location.Root,
+                Path = t.Location.Rel,
+                FileId = t.Identity,
+                CardShape = CardShapes.ToSetting(t.CardShape),
+                SortMode = CardSortModes.ToSetting(t.SortMode),
+            })
             .ToList();
+        string lastShape = CardShapes.ToSetting(HasTab ? SelectedTab.CardShape : CardShape);
+        string lastSort = CardSortModes.ToSetting(HasTab ? SelectedTab.SortMode : _lastSortMode);
         _services.Stores.Settings.Update(s =>
         {
             if (window is not null)
@@ -307,11 +371,14 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 s.OpenTabs = openTabs;
                 s.SelectedTab = selectedTab;
+
+                // The view of the tab used last: before the tabs are restored it is not known yet (defaults).
+                s.CardShape = lastShape;
+                s.LastSortMode = lastSort;
             }
 
             s.SidebarWidth = SidebarWidth;
             s.CardSize = CardSize;
-            s.CardShape = CardShapes.ToSetting(CardShape);
         });
     }
 
@@ -410,6 +477,7 @@ public sealed partial class MainViewModel : ObservableObject
         Message.ClearPersistent();
         if (!tab.IsOpen)
         {
+            InheritViewState(tab); // SelectedTab is still the tab used last
             AddToStrip(tab);
         }
 
@@ -436,6 +504,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (tab is null)
         {
             tab = AddFolderTab(target with { Tab = TabKind.Folder });
+            InheritViewState(tab); // SelectedTab is still the tab used last
         }
 
         await ShowTabAsync(tab);
@@ -683,6 +752,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             if (!tab.IsOpen)
             {
+                InheritViewState(tab); // SelectedTab is still the tab used last
                 AddToStrip(tab);
             }
 
@@ -1082,20 +1152,34 @@ public sealed partial class MainViewModel : ObservableObject
     public void StepCardSize(int direction) =>
         CardSize = AppSettings.ClampCardSize(CardSize + (Math.Sign(direction) * AppSettings.CardSizeStep));
 
+    /// <summary>
+    /// The user changed the view mode (toolbar, UI Automation): it is the shown tab's from now on, saved in
+    /// its open_tabs entry and as card_shape (the tab used last). Not while <see cref="SyncCardShape"/> runs.
+    /// </summary>
     partial void OnCardShapeChanged(CardShape oldValue, CardShape newValue)
     {
+        if (_syncingView)
+        {
+            return; // the shown tab brought its own view: nothing to save, its scroll positions fit it
+        }
+
         View?.CloseCascade(); // the overlay covers the thumbnail, whose height changes; a row's list hangs on a row
-        _services.Stores.Settings.Update(s => s.CardShape = CardShapes.ToSetting(newValue));
+        if (!HasTab)
+        {
+            SaveLocations(); // no tab (toolbar hidden, UI Automation): what a new tab starts with (card_shape)
+            return;
+        }
+
+        var tab = SelectedTab;
+        tab.CardShape = newValue;
+        SaveLocations(); // this tab's card_shape in open_tabs, and card_shape (the tab used last)
         if (CardShapes.IsCards(oldValue) != CardShapes.IsCards(newValue))
         {
-            // Another view takes over (card grid ↔ details list). A scroll position is an offset of
-            // the view it was read from, so every remembered one is dropped rather than applied to
-            // the wrong view; the view that shows the items from now on starts at the top.
-            foreach (var tab in AllTabs)
-            {
-                tab.ResetScrollOffsets();
-            }
-
+            // Another view takes over this tab (card grid ↔ details list). A scroll position is an
+            // offset of the view it was read from, so this tab's remembered ones (saved, back / forward)
+            // are dropped rather than applied to the wrong view. Other tabs keep theirs: each is shown
+            // in its own view. Runs before CardShape is announced, so ScrollTo(0) reaches the new view.
+            tab.ResetScrollOffsets();
             View?.ScrollTo(0);
         }
     }
@@ -1167,8 +1251,8 @@ public sealed partial class MainViewModel : ObservableObject
     // ---- card order: sort modes, filter and drag & drop -------------------------------------
 
     /// <summary>
-    /// Changes the selected tab's sort mode (saved per tab; the folder tabs share one, so all of
-    /// them follow) and re-orders the cards in place.
+    /// Changes the selected tab's sort mode (saved per tab: the other tabs keep theirs) and re-orders
+    /// the cards in place.
     /// </summary>
     public void SetSortMode(CardSortMode mode)
     {
@@ -1181,15 +1265,6 @@ public sealed partial class MainViewModel : ObservableObject
 
         SaveSortMode(tab, mode);
         tab.ApplyOrder();
-        if (tab.IsFolderTab)
-        {
-            foreach (var other in Tabs.Where(t => t.IsFolderTab && !ReferenceEquals(t, tab)))
-            {
-                other.SortMode = mode;
-                other.ApplyOrder();
-            }
-        }
-
         View?.ScrollTo(0);
     }
 
@@ -1255,11 +1330,21 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Saves a tab's new sort mode: in its open_tabs entry, as last_sort_mode when it is the shown tab,
+    /// and per kind in sort_modes (only an earlier exe reads that).
+    /// </summary>
     private void SaveSortMode(TabViewModel tab, CardSortMode mode)
     {
+        tab.SortMode = mode; // first: SaveLocations reads it
+        if (ReferenceEquals(tab, SelectedTab))
+        {
+            _lastSortMode = mode;
+        }
+
         string key = TabKinds.ToSetting(tab.Kind);
         _services.Stores.Settings.Update(s => s.SetSortMode(key, mode));
-        tab.SortMode = mode;
+        SaveLocations();
     }
 
     /// <summary>
@@ -1324,14 +1409,20 @@ public sealed partial class MainViewModel : ObservableObject
 
     // ---- opening items (§6.8, §9.7, §12) ----------------------------------------------------
 
-    public Task ActivateCardAsync(CardViewModel card)
+    /// <param name="card">The card or details row to open.</param>
+    /// <param name="askBeforeProgram">
+    /// false only for the double click of ダブルクリックで開く (on a card / details row): already
+    /// deliberate, so a program runs without 実行形式の確認. Every other path (Enter, cascade rows and
+    /// headers, previews, menus, the address bar, several items) keeps the default true.
+    /// </param>
+    public Task ActivateCardAsync(CardViewModel card, bool askBeforeProgram = true)
     {
         if (card.IsDisabled || card.IsBusy)
         {
             return Task.CompletedTask;
         }
 
-        return OpenItemAsync(card.ToItemRef());
+        return OpenItemAsync(card.ToItemRef(), askBeforeProgram);
     }
 
     /// <summary>
@@ -1368,6 +1459,14 @@ public sealed partial class MainViewModel : ObservableObject
         return true;
     }
 
+    /// <summary>
+    /// Alt+↓ (Explorer): the one selected folder, to enter as a click on it (the shown tab moves into it;
+    /// a folder of the 最近の履歴 / よく使う項目 list opens its tab, <see cref="CardViewModel.ToItemRef"/>).
+    /// Null unless exactly one item is selected and it is a usable folder (a file, several items: the key does nothing).
+    /// </summary>
+    public CardViewModel? FolderToEnter() =>
+        HasTab && SelectedTab.SelectedCards() is [{ IsFolderLike: true, IsDisabled: false, IsBusy: false } one] ? one : null;
+
     private async Task OpenManyAsync(IReadOnlyList<CardViewModel> files, IReadOnlyList<CardViewModel> folders)
     {
         foreach (var file in files)
@@ -1386,7 +1485,9 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    public Task OpenItemAsync(ItemRef item)
+    /// <param name="item">The item to open.</param>
+    /// <param name="askBeforeProgram">Passed to <see cref="OpenFileAsync"/> for a file (see <see cref="ActivateCardAsync"/>).</param>
+    public Task OpenItemAsync(ItemRef item, bool askBeforeProgram = true)
     {
         if (item.IsFolder)
         {
@@ -1408,15 +1509,21 @@ public sealed partial class MainViewModel : ObservableObject
             return Task.CompletedTask;
         }
 
-        return OpenFileAsync(item.Path, item.Card);
+        return OpenFileAsync(item.Path, item.Card, askBeforeProgram);
     }
 
-    public async Task OpenFileAsync(string path, CardViewModel? card)
+    /// <param name="path">The file to open.</param>
+    /// <param name="card">Its card, if any (busy while it opens).</param>
+    /// <param name="askBeforeProgram">
+    /// false skips 実行形式の確認 (<see cref="Settings"/>.ConfirmExecutables): only the double click of
+    /// ダブルクリックで開く passes it (see <see cref="ActivateCardAsync"/>).
+    /// </param>
+    public async Task OpenFileAsync(string path, CardViewModel? card, bool askBeforeProgram = true)
     {
         Message.ClearPersistent();
         string name = PathTools.DisplayName(path);
         var settings = Settings;
-        if (settings.ConfirmExecutables && ShellActions.IsExecutable(path))
+        if (askBeforeProgram && settings.ConfirmExecutables && ShellActions.IsExecutable(path))
         {
             bool run = View?.Confirm("プログラムの実行", $"プログラムを実行しようとしています。{name} を実行しますか？", path, "実行", danger: true) ?? false;
             if (!run)
@@ -1527,6 +1634,54 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 「ターミナルで開く」「PowerShell で開く」 (開く / 管理者として開く), 「Code で開く」 and 「WSL で開く」 of
+    /// the blank area and the item / selection menus: <paramref name="tool"/> in <paramref name="folder"/>, as <paramref name="programs"/>
+    /// found it when the menu was built. Elevated (UAC) with <paramref name="elevated"/>. A SUBST drive
+    /// goes as the folder it stands for and a mapped network drive as its UNC path when elevated or to WSL
+    /// (neither sees the user's SUBST or mapped drives).
+    /// Declining the UAC prompt says nothing; a failure says why on the message line; a start that
+    /// worked says nothing (the window is the answer, as in Explorer). Not recorded as a use.
+    /// </summary>
+    public async Task OpenInAsync(OpenInTool tool, bool elevated, string folder, OpenInPrograms programs)
+    {
+        string target = elevated || tool == OpenInTool.Wsl
+            ? await Task.Run(() =>
+            {
+                string real = DriveCatalog.SubstTargetOf(folder) ?? folder;
+                return DriveCatalog.UncOf(real) ?? real;
+            })
+            : folder;
+        if (OpenInCommand.Build(tool, elevated, target, programs, Environment.SystemDirectory) is not { } spec)
+        {
+            return; // not installed (the menu offers only what was found)
+        }
+
+        if (spec.Refusal is not null)
+        {
+            Message.Error(spec.Refusal);
+            return;
+        }
+
+        // Off the UI thread: with runas ShellExecuteEx returns only once the UAC prompt is answered.
+        var result = await Task.Run(() => ShellActions.Launch(spec, elevated));
+        if (result.Cancelled)
+        {
+            return; // the UAC prompt was declined
+        }
+
+        if (!result.Success)
+        {
+            Message.Error(result.Error ?? "起動できませんでした。");
+            return;
+        }
+
+        if (spec.Note is not null)
+        {
+            Message.Info(spec.Note); // WSL on another share: opened in the home directory
+        }
+    }
+
     public void CopyPath(ItemRef item) => CopyPaths([item]);
 
     /// <summary>パスをコピー: the paths as text, one per line (a selection gives several).</summary>
@@ -1620,6 +1775,7 @@ public sealed partial class MainViewModel : ObservableObject
             _fileOpBusy = false;
         }
 
+        RecordFileOp(FileOpStep.Deleted(result.Items), changed: result.Recycled > 0); // only what reached the Recycle Bin
         ShowDeleteResult(result, items);
 
         // Even a cancelled or failed delete may have moved part of it: list again. The selection is
@@ -1640,19 +1796,39 @@ public sealed partial class MainViewModel : ObservableObject
         && !PathTools.IsRoot(item.Path);
 
     /// <summary>
-    /// F2: the one selected card, or null (nothing selected: the key does nothing; several selected:
-    /// said on the message line). Whether it can be renamed is <see cref="CanStartRename"/>'s call.
+    /// F2: the card whose edit box opens, or null (nothing selected: the key does nothing; a
+    /// selection that cannot be renamed together: said on the message line). Whether it can be
+    /// renamed is <see cref="CanStartRename"/>'s call. With several selected, <paramref name="batch"/>
+    /// is their paths in display order (Explorer's "name (1)", "name (2)"…, <see cref="RenameManyAsync"/>)
+    /// and the card is the focused one (the selection's <see cref="SelectionModel.Focus"/>: the item
+    /// clicked last, else the first); otherwise empty.
     /// </summary>
-    public CardViewModel? RenameCandidate()
+    public CardViewModel? RenameCandidate(out IReadOnlyList<string> batch)
     {
+        batch = [];
         var cards = SelectedTab.SelectedCards();
-        if (cards.Count > 1)
+        if (cards.Count <= 1)
         {
-            Message.Info("名前を変更する項目を 1 つだけ選んでください。");
+            return cards.Count == 1 ? cards[0] : null;
+        }
+
+        if (!CanRenameTogether(cards))
+        {
+            Message.Info("選択した項目には、名前を変更できないものが含まれています。");
             return null;
         }
 
-        return cards.Count == 1 ? cards[0] : null;
+        batch = cards.Select(c => c.Path).ToList();
+        string? focus = SelectedTab.Selection.Focus;
+        return cards.FirstOrDefault(c => PathTools.PathEquals(c.Path, focus)) ?? cards[0];
+    }
+
+    /// <summary>Every card can be renamed (<see cref="CanRename"/>) and all are in one folder.</summary>
+    private static bool CanRenameTogether(IReadOnlyList<CardViewModel> cards)
+    {
+        string folder = PathTools.ParentOf(cards[0].Path);
+        return folder.Length > 0
+            && cards.All(c => CanRename(c.ToItemRef()) && PathTools.PathEquals(PathTools.ParentOf(c.Path), folder));
     }
 
     /// <summary>The edit box may open for <paramref name="card"/> now; says why not on the message line.</summary>
@@ -1770,6 +1946,11 @@ public sealed partial class MainViewModel : ObservableObject
                 return false;
         }
 
+        if (result.NewPath is { } now)
+        {
+            RecordFileOp(FileOpStep.Renamed([new PathMove(card.Path, now)])); // Ctrl+Z (MainViewModel.FileHistory)
+        }
+
         if (card.Kind == CardKind.Folder && result.NewPath is { } renamed)
         {
             ApplyRename(card.Path, renamed); // the 登録フォルダ and tabs at or below it keep up with it
@@ -1785,6 +1966,121 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// The edit box of <paramref name="edited"/> closed with <paramref name="typed"/> for a batch of
+    /// <paramref name="paths"/> (display order, <see cref="RenameCandidate"/>): renames them all
+    /// "base (1)", "base (2)"… in one shell operation (one undo), lists the folder again and selects
+    /// them, as Explorer does. The base is the typed name without the edited file's extension; each
+    /// file keeps its own extension, so nothing asks about extensions. Nothing happens when the name
+    /// did not change or was emptied; the edit box never opens again (each item keeps its name on a
+    /// failure).
+    /// </summary>
+    public async Task RenameManyAsync(CardViewModel edited, string typed, IReadOnlyList<string> paths)
+    {
+        string name = ItemNames.Clean(typed);
+        if (string.Equals(typed, edited.Name, StringComparison.Ordinal)
+            || string.Equals(name, edited.Name, StringComparison.Ordinal)
+            || name.Length == 0)
+        {
+            return; // unchanged, or emptied: every name stays (as in Explorer)
+        }
+
+        var problem = ItemNames.Check(name);
+        string baseName = problem == NameProblem.None ? ItemNames.BatchBaseName(name, edited.Name, edited.Kind == CardKind.Folder) : string.Empty;
+        if (problem != NameProblem.None || baseName.Length == 0)
+        {
+            Message.Info(ItemNames.MessageOf(problem == NameProblem.None ? NameProblem.Empty : problem));
+            return;
+        }
+
+        if (_fileOpBusy)
+        {
+            Message.Info("前の操作が終わってから実行してください。");
+            return;
+        }
+
+        // The cards shown now (a reload meanwhile made new instances), in display order.
+        var wanted = new HashSet<string>(paths, PathTools.Comparer);
+        var tab = SelectedTab;
+        var cards = tab.Cards.Where(c => wanted.Contains(c.Path)).ToList();
+        string folder = PathTools.ParentOf(edited.Path);
+        if (cards.Count == 0 || !CanRenameTogether(cards) || !PathTools.PathEquals(PathTools.ParentOf(cards[0].Path), folder))
+        {
+            Message.Info("選択した項目には、名前を変更できないものが含まれています。");
+            return;
+        }
+
+        var items = cards.Select(c => new BatchRenameItem(c.Path, c.Name, c.Kind == CardKind.Folder)).ToList();
+        var shownNames = tab.Cards.Select(c => c.Name).ToList();
+        _fileOpBusy = true;
+        BatchRenameResult result;
+        try
+        {
+            foreach (var c in cards)
+            {
+                c.IsBusy = true;
+            }
+
+            result = await ShellFileOps.RenameManyAsync(folder, items, baseName, shownNames, View?.WindowHandle ?? 0);
+        }
+        finally
+        {
+            foreach (var c in cards)
+            {
+                c.IsBusy = false;
+            }
+
+            _fileOpBusy = false;
+        }
+
+        // One step for the whole batch (empty: nothing renamed, not recorded).
+        RecordFileOp(FileOpStep.Renamed(result.Renamed.Select(r => new PathMove(r.OldPath, r.NewPath))));
+        foreach (var r in result.Renamed)
+        {
+            if (cards.FirstOrDefault(c => PathTools.PathEquals(c.Path, r.OldPath)) is { Kind: CardKind.Folder })
+            {
+                ApplyRename(r.OldPath, r.NewPath); // the 登録フォルダ and tabs at or below it keep up with it
+            }
+        }
+
+        if (result.Renamed.Count > 0)
+        {
+            await ReloadAfterFileChangeAsync();
+        }
+
+        // Explorer keeps the items selected, the edited one first (it stays the anchor). After the
+        // reload only items of the batch that kept their name (skipped, failed) can still be
+        // selected; anything else selected now was chosen while the rename ran (a click that
+        // committed the name): kept.
+        tab = SelectedTab;
+        if (tab.Selection.Snapshot().Keys.All(wanted.Contains) && PathTools.PathEquals(tab.TransferTargetPath, folder))
+        {
+            var newPaths = result.Renamed.ToDictionary(r => r.OldPath, r => r.NewPath, PathTools.Comparer);
+            string Now(string path) => newPaths.TryGetValue(path, out var p) ? p : path;
+            var keys = cards.Select(c => Now(c.Path)).Prepend(Now(edited.Path))
+                .Where(p => tab.Cards.Any(c => PathTools.PathEquals(c.Path, p)));
+            tab.Selection.Replace(keys);
+        }
+
+        int done = result.Renamed.Count;
+        if (result.Error is { } error)
+        {
+            // Skipped items were left as they were on purpose: not failures.
+            int failed = Math.Max(1, result.Requested - done - result.Skipped);
+            Message.Error($"{failed} 個の項目の名前を変更できませんでした：{error}");
+        }
+        else if (result.Canceled)
+        {
+            Message.Info($"名前の変更を中止しました（{done} / {result.Requested} 個を変更済み）。");
+        }
+        else
+        {
+            Message.Info(result.Skipped > 0
+                ? $"{done} 個の項目の名前を変更しました（{result.Skipped} 個はそのまま）。"
+                : $"{done} 個の項目の名前を変更しました。");
+        }
     }
 
     /// <summary>
@@ -1844,6 +2140,7 @@ public sealed partial class MainViewModel : ObservableObject
             return null;
         }
 
+        RecordFileOp(FileOpStep.NewFolder(result.NewPath));
         await ReloadAfterFileChangeAsync();
         return SelectInShownFolder(folder, result.NewPath);
     }
@@ -2320,6 +2617,19 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         var result = await FileTransfer.RunAsync(plan.Items, folder, owner);
+
+        // Ctrl+Z: only results that are new items (a merge or a replace would move or recycle what
+        // was there before with them). Where a merge or a replace landed, the older steps naming that
+        // place (or a folder holding it, or something inside it) are taken out first: undoing a copy
+        // or a new folder there would recycle what was merged in.
+        // A merge or a replace, done or stopped part-way: older steps at those items would move or
+        // recycle what came into them.
+        InvalidateFileOps(result.TakenTargets.Concat(result.Items.Where(i => !i.Fresh).Select(i => i.NewPath)));
+        var fresh = result.Items.Where(i => i.Fresh).ToList();
+        RecordFileOp(FileOpStep.Transferred(
+            fresh.Where(i => i.Kind == TransferKind.Move).Select(i => new PathMove(i.Source, i.NewPath)),
+            fresh.Where(i => i.Kind == TransferKind.Copy).Select(i => i.NewPath)),
+            changed: true); // the transfer ran: even with nothing done in full it may have changed files (part of a merge)
         Message.Show(PasteMessageKind(result), PasteResultText(result, plan, folderName, gesture));
         return (plan, result);
     }
@@ -3204,7 +3514,7 @@ public sealed partial class MainViewModel : ObservableObject
             }
 
             int generation = tab.LoadGeneration;
-            bool hidden = _services.Listings.IncludeHidden;
+            var filter = _services.Listings.Filter;
             _services.Listings.Invalidate(path); // else the 60 s cache answers
 
             // The only waiter: giving up cancels the listing (a hung share does not keep a check, or
@@ -3232,7 +3542,7 @@ public sealed partial class MainViewModel : ObservableObject
 
             // Checked again after the await: the user may have moved, reloaded or started something.
             if (!CanAutoRefresh() || !ReferenceEquals(SelectedTab, tab) || tab.LoadGeneration != generation
-                || !PathTools.Comparer.Equals(tab.AutoRefreshPath, path) || _services.Listings.IncludeHidden != hidden)
+                || !PathTools.Comparer.Equals(tab.AutoRefreshPath, path) || _services.Listings.Filter != filter)
             {
                 return;
             }
@@ -3357,8 +3667,8 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         Message.Placement = MessagePlacements.FromSetting(after.MessagePosition); // before 設定を保存しました below: it shows in the new place
-        _services.ShowHidden = after.ShowHidden;
-        if (before.ShowHidden != after.ShowHidden)
+        _services.Filter = after.ToListingFilter();
+        if (before.ToListingFilter() != after.ToListingFilter())
         {
             foreach (var tab in AllTabs)
             {
