@@ -1,4 +1,5 @@
 SHCreateItemFromParsingName
+SHCreateItemFromRelativeName
 IShellItem
 IShellItemImageFactory
 SIIGBF

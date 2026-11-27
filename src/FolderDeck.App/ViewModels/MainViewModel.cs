@@ -1775,6 +1775,7 @@ public sealed partial class MainViewModel : ObservableObject
             _fileOpBusy = false;
         }
 
+        RecordFileOp(FileOpStep.Deleted(result.Items), changed: result.Recycled > 0); // only what reached the Recycle Bin
         ShowDeleteResult(result, items);
 
         // Even a cancelled or failed delete may have moved part of it: list again. The selection is
@@ -1945,6 +1946,11 @@ public sealed partial class MainViewModel : ObservableObject
                 return false;
         }
 
+        if (result.NewPath is { } now)
+        {
+            RecordFileOp(FileOpStep.Renamed([new PathMove(card.Path, now)])); // Ctrl+Z (MainViewModel.FileHistory)
+        }
+
         if (card.Kind == CardKind.Folder && result.NewPath is { } renamed)
         {
             ApplyRename(card.Path, renamed); // the 登録フォルダ and tabs at or below it keep up with it
@@ -2029,6 +2035,8 @@ public sealed partial class MainViewModel : ObservableObject
             _fileOpBusy = false;
         }
 
+        // One step for the whole batch (empty: nothing renamed, not recorded).
+        RecordFileOp(FileOpStep.Renamed(result.Renamed.Select(r => new PathMove(r.OldPath, r.NewPath))));
         foreach (var r in result.Renamed)
         {
             if (cards.FirstOrDefault(c => PathTools.PathEquals(c.Path, r.OldPath)) is { Kind: CardKind.Folder })
@@ -2132,6 +2140,7 @@ public sealed partial class MainViewModel : ObservableObject
             return null;
         }
 
+        RecordFileOp(FileOpStep.NewFolder(result.NewPath));
         await ReloadAfterFileChangeAsync();
         return SelectInShownFolder(folder, result.NewPath);
     }
@@ -2608,6 +2617,19 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         var result = await FileTransfer.RunAsync(plan.Items, folder, owner);
+
+        // Ctrl+Z: only results that are new items (a merge or a replace would move or recycle what
+        // was there before with them). Where a merge or a replace landed, the older steps naming that
+        // place (or a folder holding it, or something inside it) are taken out first: undoing a copy
+        // or a new folder there would recycle what was merged in.
+        // A merge or a replace, done or stopped part-way: older steps at those items would move or
+        // recycle what came into them.
+        InvalidateFileOps(result.TakenTargets.Concat(result.Items.Where(i => !i.Fresh).Select(i => i.NewPath)));
+        var fresh = result.Items.Where(i => i.Fresh).ToList();
+        RecordFileOp(FileOpStep.Transferred(
+            fresh.Where(i => i.Kind == TransferKind.Move).Select(i => new PathMove(i.Source, i.NewPath)),
+            fresh.Where(i => i.Kind == TransferKind.Copy).Select(i => i.NewPath)),
+            changed: true); // the transfer ran: even with nothing done in full it may have changed files (part of a merge)
         Message.Show(PasteMessageKind(result), PasteResultText(result, plan, folderName, gesture));
         return (plan, result);
     }

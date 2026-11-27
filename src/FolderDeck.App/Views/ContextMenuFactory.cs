@@ -359,7 +359,9 @@ public sealed class ContextMenuFactory
 
     /// <summary>
     /// The menu of the blank area of the item list: the menu of the folder shown, as Explorer's
-    /// blank area. 貼り付け (into that folder), 並べ替え ▶ (the shown tab's sort mode) and 最新の情報に更新, then エクスプローラーで表示,
+    /// blank area. 貼り付け (into that folder), 新しいフォルダー, 元に戻す（…） / やり直し（…） (the app's
+    /// own history, Ctrl+Z / Ctrl+Y; only when there is something to undo / redo, also without a
+    /// folder on screen), 並べ替え ▶ (the shown tab's sort mode) and 最新の情報に更新, then エクスプローラーで表示,
     /// パスをコピー and 登録フォルダに追加 for the folder itself, and Explorer's background menu of it
     /// (新規作成, プロパティ…): last as 「その他のメニュー（Windows）」, or with the setting
     /// 「Windows のメニュー」 below these entries. Without a folder on screen (the top lists, while it
@@ -387,9 +389,6 @@ public sealed class ContextMenuFactory
                 BeforeNavigate?.Invoke(); // the transfer reloads the list
                 _ = _vm.PasteAsync(folder!);
             }),
-            MenuEntry.Separator,
-            SortEntry(),
-            new("最新の情報に更新", RefreshGlyph, true, () => _vm.RefreshCommand.Execute(null)),
         };
 
         var shown = _vm.ShownFolderItem();
@@ -397,11 +396,40 @@ public sealed class ContextMenuFactory
         {
             // Explorer's Ctrl+Shift+N: the new folder opens its edit box (the shell's 新規作成 cannot,
             // without a view of its own to edit in).
-            entries.Insert(1, new("新しいフォルダー", NewFolderGlyph, !_vm.IsFileOperationRunning, () =>
+            entries.Add(new("新しいフォルダー", NewFolderGlyph, !_vm.IsFileOperationRunning, () =>
             {
                 BeforeNavigate?.Invoke(); // the reload replaces the cascade
                 NewFolderRequested?.Invoke();
             }));
+        }
+
+        // Ctrl+Z / Ctrl+Y: the app's own history (app-wide, so also beside a top list); absent when empty.
+        // The step named in the label is kept: RunEntry may run the action later (Explorer's menu
+        // takes a while), and a step recorded meanwhile must not be the one reversed.
+        if (_vm.NextUndoStep is { } undo)
+        {
+            entries.Add(new($"元に戻す（{undo.Label}）", UndoGlyph, !_vm.IsFileOperationRunning, () =>
+            {
+                BeforeNavigate?.Invoke(); // the reload replaces the cascade
+                _ = _vm.UndoAsync(undo);
+            }));
+        }
+
+        if (_vm.NextRedoStep is { } redo)
+        {
+            entries.Add(new($"やり直し（{redo.Label}）", RedoGlyph, !_vm.IsFileOperationRunning, () =>
+            {
+                BeforeNavigate?.Invoke();
+                _ = _vm.RedoAsync(redo);
+            }));
+        }
+
+        entries.Add(MenuEntry.Separator);
+        entries.Add(SortEntry());
+        entries.Add(new("最新の情報に更新", RefreshGlyph, true, () => _vm.RefreshCommand.Execute(null)));
+
+        if (shown is not null)
+        {
             entries.Add(MenuEntry.Separator);
             entries.Add(new("エクスプローラーで表示", ExplorerGlyph, true, () => _ = _vm.ShowInExplorerAsync(shown)));
             entries.Add(new("パスをコピー", CopyGlyph, true, () => _vm.CopyPath(shown)));
@@ -727,7 +755,8 @@ public sealed class ContextMenuFactory
     private const string AdminGlyph = "\uEA18"; // Shield
     private const string SortGlyph = "\uE8CB"; // Sort (as the toolbar's sort button)
     private const string CheckGlyph = "\uE73E"; // CheckMark
-    private const string UndoGlyph = "\uE7A7"; // Undo (reset of the manual order, as the toolbar)
+    private const string UndoGlyph = "\uE7A7"; // Undo (\u5143\u306B\u623B\u3059; the reset of the manual order, as the toolbar)
+    private const string RedoGlyph = "\uE7A6"; // Redo (\u3084\u308A\u76F4\u3057)
 
     /// <summary>
     /// One entry of an item's menu, rendered as a WPF <see cref="MenuItem"/> or handed to Explorer's

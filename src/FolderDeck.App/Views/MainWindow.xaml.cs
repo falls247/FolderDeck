@@ -481,7 +481,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     /// <summary>
     /// The selection keys (not in a text box): Ctrl+A, Esc (after the cascade had its turn),
-    /// Ctrl+C / Ctrl+X / Ctrl+V, Delete, F2 (rename) and Enter (open). Copy, cut, delete, rename and open act on the selection only, never on
+    /// Ctrl+C / Ctrl+X / Ctrl+V, Delete, F2 (rename), Enter (open) and Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z
+    /// (the app's undo / redo of its own file operations; not while a menu takes the keys). Copy, cut, delete, rename and open act on the selection only, never on
     /// the item under the pointer (nor the row the cascade's keys highlight); a held key repeats
     /// nothing (one paste or one delete confirmation per press). Delete only recycles: Shift+Delete
     /// (Explorer's permanent delete) and Ctrl+Delete are not used. Returns true when the key was used.
@@ -547,6 +548,27 @@ public partial class MainWindow : Window, IMainView, ICardHost
             e.Handled = true; // before a modal confirmation (a program, many items)
             _cascade.CloseAll(); // as Delete: what opens replaces the cascade
             return _vm.OpenSelection();
+        }
+
+        // Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z: the app's own history of its file operations (never
+        // Explorer's, see RemovedVerbs in ShellContextMenu). Text boxes keep their own undo: this
+        // method is not called while one has the focus.
+        bool redoKeys = (key == Key.Y && modifiers == ModifierKeys.Control)
+            || (key == Key.Z && modifiers == (ModifierKeys.Control | ModifierKeys.Shift));
+        if ((key == Key.Z && modifiers == ModifierKeys.Control) || redoKeys)
+        {
+            if (IsMenuTakingKeys())
+            {
+                return false; // a menu has the keys
+            }
+
+            if (!e.IsRepeat) // a held key undoes once
+            {
+                _cascade.CloseAll(); // as Delete: the reload replaces the cascade
+                _ = redoKeys ? _vm.RedoAsync() : _vm.UndoAsync();
+            }
+
+            return true;
         }
 
         if (modifiers != ModifierKeys.Control || key is not (Key.A or Key.C or Key.X or Key.V))
