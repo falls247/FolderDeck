@@ -476,6 +476,16 @@ internal static class ShellInterop
 
     public static void AllowAnyForeground() => PInvoke.AllowSetForegroundWindow(unchecked((uint)-1));
 
+    /// <summary>
+    /// DWM cloaking (DWMWA_CLOAK = 13): a shown window that is neither drawn on screen nor given a
+    /// taskbar button, as a window on another virtual desktop. False when DWM refused.
+    /// </summary>
+    public static unsafe bool SetCloaked(IntPtr hwnd, bool cloaked)
+    {
+        int value = cloaked ? 1 : 0;
+        return PInvoke.DwmSetWindowAttribute(new HWND(hwnd), (Windows.Win32.Graphics.Dwm.DWMWINDOWATTRIBUTE)13, &value, sizeof(int)).Succeeded;
+    }
+
     /// <summary>The window the user is working in (0 while Windows switches between two windows).</summary>
     public static nint GetForegroundWindow() => (IntPtr)PInvoke.GetForegroundWindow();
 

@@ -160,6 +160,13 @@
                     </CheckBox>
                     <TextBlock Text="エクスプローラーが開いていないとき、またはタブに対応していない Windows では、新しいウィンドウで開きます。"
                                Style="{StaticResource Help}" Margin="20,0,0,0" />
+
+                    <TextBlock Text="常駐" Style="{StaticResource Section}" />
+                    <CheckBox Content="Windows のログオン時に起動する（ウィンドウを出さずに通知領域で待つ）" IsChecked="{Binding StartAtLogin}" />
+                    <TextBlock Text="{Binding StartAtLoginNote}" Style="{StaticResource Help}" Margin="20,0,0,0" />
+                    <CheckBox Content="ウィンドウを閉じても終了せず、通知領域に残る" IsChecked="{Binding KeepRunningOnClose}" />
+                    <TextBlock Text="次にウィンドウを出すとき（通知領域のアイコンのクリック、もう一度の起動）がすぐになります。終了は通知領域のアイコンの右クリックの「終了」です。常駐中はメモリを使い続けます。"
+                               Style="{StaticResource Help}" Margin="20,0,0,0" />
                 </StackPanel>
 
                 <!-- フォルダ -->

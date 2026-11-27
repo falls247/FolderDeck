@@ -203,6 +203,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     private AppSettings Settings => _services.Stores.Settings.Current;
 
+    /// <summary>常駐モード: closing the window only hides it (read at every close).</summary>
+    public bool KeepRunningOnClose => Settings.KeepRunningOnClose;
+
+    /// <summary>A setting of 常駐モード changed on OK in the settings (the app shows or removes the tray icon).</summary>
+    public event Action? ResidentSettingsChanged;
+
     /// <summary>
     /// Every tab that holds data: the two fixed ones (open or not: a closed one is reloaded when it
     /// is opened again, so it has to go stale with the others), then the open folder tabs.
@@ -3724,6 +3730,49 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 常駐モード: the window was hidden to the notification area. The state is saved (the stores
+    /// write on their own threads, waited for off the UI thread) and the checks for the screen stop.
+    /// </summary>
+    public void OnWindowHidden(WindowPlacementSetting? window)
+    {
+        SaveState(window);
+        _autoRefreshTimer?.Stop();
+        var stores = _services.Stores;
+        _ = Task.Run(stores.FlushAll);
+    }
+
+    /// <summary>
+    /// 常駐モード: the hidden window is shown again. The auto refresh resumes and the shown tab is
+    /// brought up to date at once (a folder: compared with a fresh listing, the cards stay where they
+    /// are; a list of 最近の履歴 / よく使う項目: read again). The other tabs read again when shown.
+    /// </summary>
+    public async Task OnWindowShownAsync()
+    {
+        ApplyAutoRefreshSetting(Settings);
+        foreach (var tab in AllTabs)
+        {
+            if (!ReferenceEquals(tab, SelectedTab))
+            {
+                tab.IsStale = true;
+            }
+        }
+
+        if (!HasTab)
+        {
+            return;
+        }
+
+        if (SelectedTab.AutoRefreshPath is not null)
+        {
+            await AutoRefreshTickAsync(force: true);
+        }
+        else
+        {
+            await LoadTabAsync(SelectedTab);
+        }
+    }
+
     /// <summary>The window closes: no more checks.</summary>
     public void StopAutoRefresh()
     {
@@ -3737,10 +3786,11 @@ public sealed partial class MainViewModel : ObservableObject
     /// (<see cref="IMainView.IsAutoRefreshBlocked"/>: a name's edit box, a marquee, the cascade or a
     /// menu, a dialog, a button held, input just now, the window minimized).
     /// </summary>
-    private bool CanAutoRefresh() =>
-        _autoRefreshMs > 0 && !_fileOpBusy && !_cutCheckBusy && !FileDragOut.IsDragging && View is { IsAutoRefreshBlocked: false };
+    private bool CanAutoRefresh(bool force = false) =>
+        (force || _autoRefreshMs > 0) && !_fileOpBusy && !_cutCheckBusy && !FileDragOut.IsDragging && View is { IsAutoRefreshBlocked: false };
 
-    private async Task AutoRefreshTickAsync()
+    /// <param name="force">Now, whatever the interval and the setting (the window was shown again).</param>
+    private async Task AutoRefreshTickAsync(bool force = false)
     {
         try
         {
@@ -3756,9 +3806,9 @@ public sealed partial class MainViewModel : ObservableObject
             }
 
             long now = Environment.TickCount64;
-            if (now - tab.LastListedAt < _autoRefreshMs
+            if ((!force && now - tab.LastListedAt < _autoRefreshMs)
                 || (PathTools.Comparer.Equals(path, _autoRefreshFailPath) && now < _autoRefreshHoldUntil)
-                || !CanAutoRefresh())
+                || !CanAutoRefresh(force))
             {
                 return; // not due, held back after failures, or busy: the next beat decides again
             }
@@ -3791,7 +3841,7 @@ public sealed partial class MainViewModel : ObservableObject
             }
 
             // Checked again after the await: the user may have moved, reloaded or started something.
-            if (!CanAutoRefresh() || !ReferenceEquals(SelectedTab, tab) || tab.LoadGeneration != generation
+            if (!CanAutoRefresh(force) || !ReferenceEquals(SelectedTab, tab) || tab.LoadGeneration != generation
                 || !PathTools.Comparer.Equals(tab.AutoRefreshPath, path) || _services.Listings.Filter != filter)
             {
                 return;
@@ -3898,6 +3948,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             ResetStatsAction = ResetStats,
             OpenDataFolderAction = OpenDataFolder,
+            ManagesRunKey = _services.ManagesRunKey,
         };
         if (View?.ShowSettings(vm) != true)
         {
@@ -3939,6 +3990,24 @@ public sealed partial class MainViewModel : ObservableObject
         if (before.AutoRefresh != after.AutoRefresh || before.AutoRefreshSeconds != after.AutoRefreshSeconds)
         {
             ApplyAutoRefreshSetting(after); // turned on: the shown folder is checked about a second after OK
+        }
+
+        if (before.StartAtLogin != after.StartAtLogin && _services.ManagesRunKey)
+        {
+            bool wanted = after.StartAtLogin;
+            string? error = await Task.Run(() => RunKeyRegistry.Apply(wanted));
+            if (error is not null)
+            {
+                _services.Stores.Settings.Update(s => s.StartAtLogin = before.StartAtLogin); // the registry stays the truth
+                Message.Error($"Windows のスタートアップに{(wanted ? "登録" : "解除")}できませんでした：{error}");
+                ResidentSettingsChanged?.Invoke();
+                return;
+            }
+        }
+
+        if (before.StartAtLogin != after.StartAtLogin || before.KeepRunningOnClose != after.KeepRunningOnClose)
+        {
+            ResidentSettingsChanged?.Invoke();
         }
 
         Message.Success("設定を保存しました。");

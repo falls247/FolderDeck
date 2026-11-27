@@ -218,6 +218,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
         };
         Drop += OnDrop;
         Closing += OnClosing;
+        IsVisibleChanged += OnVisibleChanged;
+        Closed += (_, _) => _closed = true;
 
         // The blank part of the item list: a press clears the selection, a right click offers paste.
         // The cards' own presses are not handled (ItemPointerTracker), and the scroll viewer may
@@ -233,14 +235,153 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// </summary>
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (_vm.IsFileOperationRunning
+        // 常駐モード: the user's close only hides (a program's WM_CLOSE, 終了 and the sign-out quit).
+        if (!_exitRequested && !_sessionEnding && _vm.KeepRunningOnClose && _hook?.IsUserClose == true)
+        {
+            e.Cancel = true;
+            HideToTray();
+            return;
+        }
+
+        if (!_sessionEnding && _vm.IsFileOperationRunning
             && !Confirm("終了しますか？", "ファイルの移動・コピー・削除が実行中です。終了すると途中で中断されます。", null, "終了する", danger: true))
         {
             e.Cancel = true;
+            _exitRequested = false;
             return;
         }
 
         _vm.SaveState(CapturePlacement());
+    }
+
+    // ---- 常駐モード: hidden in the notification area ------------------------------------------
+
+    /// <summary>The next close quits (終了 in the tray, a request of another program).</summary>
+    private bool _exitRequested;
+
+    /// <summary>Windows ends the session: nothing may refuse or ask.</summary>
+    private bool _sessionEnding;
+
+    /// <summary>Closed already (the exit event can come right after a CloseMainWindow of the same script).</summary>
+    private bool _closed;
+
+    /// <summary>Hidden (or never shown: --background): the next show resumes the checks and refreshes the shown tab.</summary>
+    private bool _resumeOnShow;
+
+    /// <summary>Started with --background: the handle exists (hooks, tray, session monitor), the window is not shown.</summary>
+    public void PrepareHidden()
+    {
+        _resumeOnShow = true;
+        new WindowInteropHelper(this).EnsureHandle();
+    }
+
+    /// <summary>The window is shown cloaked once (laid out and drawn, nothing on screen) until <see cref="EndPrewarm"/>.</summary>
+    private bool _prewarming;
+
+    /// <summary>
+    /// Started with --background, the first tab loaded: the window is laid out and drawn once while
+    /// cloaked (no picture, no taskbar button), then hidden again. A window never drawn took about
+    /// 400 ms to come up at the first reveal; after this it takes as long as the later ones.
+    /// </summary>
+    public void PrewarmHidden()
+    {
+        nint hwnd = new WindowInteropHelper(this).EnsureHandle();
+        if (IsVisible || !ShellInterop.SetCloaked(hwnd, true))
+        {
+            return;
+        }
+
+        _prewarming = true;
+        bool activate = ShowActivated;
+        ShowActivated = false;
+        Show();
+        ShowActivated = activate;
+        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () =>
+        {
+            if (_prewarming)
+            {
+                Hide();
+                EndPrewarm();
+            }
+        });
+    }
+
+    private void EndPrewarm()
+    {
+        _prewarming = false;
+        ShellInterop.SetCloaked(new WindowInteropHelper(this).Handle, false);
+    }
+
+    /// <summary>Windows ends the session: the close must go through, without a question.</summary>
+    public void AllowClose()
+    {
+        _sessionEnding = true;
+        _exitRequested = true;
+    }
+
+    /// <summary>The state for an exit that WPF's shutdown may not reach (the session ends).</summary>
+    public void SaveForExit() => _vm.SaveState(CapturePlacement());
+
+    /// <summary>終了 in the tray, or another program asked to quit: closes for real (asks while a file operation runs).</summary>
+    public void RequestExit(string by)
+    {
+        if (_closed || Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        AppLog.Info($"resident: exit requested by {by}");
+        _exitRequested = true;
+        if (_vm.IsFileOperationRunning && !IsVisible)
+        {
+            BringToFront(); // the question needs a visible owner
+        }
+
+        Close();
+    }
+
+    /// <summary>
+    /// Shows the window (from hidden, minimized or behind others) and brings it to the front.
+    /// <paramref name="askedAt"/>: when the request came (a second launch's signal), for the log.
+    /// </summary>
+    public void Reveal(string by, long? askedAt = null)
+    {
+        bool wasHidden = !IsVisible || _prewarming;
+        long start = askedAt ?? Environment.TickCount64;
+        if (_prewarming)
+        {
+            EndPrewarm(); // asked for while being drawn: it stays shown
+            _resumeOnShow = false;
+            Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () => _ = _vm.OnWindowShownAsync());
+        }
+
+        BringToFront();
+        if (wasHidden)
+        {
+            Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () =>
+                AppLog.Info($"resident: shown from hidden by {by} in {Environment.TickCount64 - start} ms"));
+        }
+    }
+
+    private void HideToTray()
+    {
+        _cascade.CloseAll();
+        var placement = CapturePlacement();
+        Hide();
+        _resumeOnShow = true;
+        _vm.OnWindowHidden(placement);
+        AppLog.Info("resident: window hidden to the notification area");
+    }
+
+    private void OnVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true && _resumeOnShow && !_prewarming)
+        {
+            _resumeOnShow = false;
+
+            // After the first frame: the refresh must not delay the window coming up.
+            Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () => _ = _vm.OnWindowShownAsync());
+        }
     }
 
     // ---- window placement (§5.5) ------------------------------------------------------------

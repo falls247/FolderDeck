@@ -157,6 +157,19 @@ function Stop-RunningApp([string[]]$Dirs) {
         [void]$p.CloseMainWindow()
     }
 
+    # 常駐モードでウィンドウを隠している FolderDeck には CloseMainWindow が届かない（閉じても隠れるだけの設定もある）。
+    # 終了の合図（名前付きイベント）でも終了を頼む。
+    $exitEvent = $null
+    try {
+        if ([Threading.EventWaitHandle]::TryOpenExisting('Local\FolderDeck.Exit', [ref]$exitEvent)) {
+            [void]$exitEvent.Set()
+        }
+    }
+    catch { }
+    finally {
+        if ($exitEvent) { $exitEvent.Dispose() }
+    }
+
     foreach ($p in $procs) {
         if (-not $p.WaitForExit(15000)) {
             Write-Host "PID $($p.Id) が終了しません（確認ダイアログが開いていませんか？）。閉じてからもう一度実行してください。" -ForegroundColor Red

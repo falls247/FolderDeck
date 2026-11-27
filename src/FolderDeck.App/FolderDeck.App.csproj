@@ -5,6 +5,8 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <RootNamespace>FolderDeck</RootNamespace>
+    <!-- Program.Main: a second launch signals the first one before WPF starts (overview §1.2). -->
+    <StartupObject>FolderDeck.Program</StartupObject>
     <AssemblyName>FolderDeck</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\FolderDeck.ico</ApplicationIcon>

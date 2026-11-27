@@ -281,6 +281,20 @@ public sealed class AppSettings
     /// <summary>The interval of <see cref="AutoRefresh"/>, in seconds (kept while it is off).</summary>
     public int AutoRefreshSeconds { get; set; } = AutoRefreshSecondsDefault;
 
+    /// <summary>
+    /// 常駐モード: start at the Windows sign-in, hidden in the notification area (the Run key of
+    /// HKCU holds the exe and <c>--background</c>, see <see cref="Infrastructure.LoginStartup"/>).
+    /// Off by default. The registry is the truth: at startup this follows what is registered
+    /// (not with <c>--data-dir</c>, which never touches the Run key).
+    /// </summary>
+    public bool StartAtLogin { get; set; }
+
+    /// <summary>
+    /// 常駐モード: closing the window hides it in the notification area instead of quitting (the
+    /// tray's 終了 quits). Off by default.
+    /// </summary>
+    public bool KeepRunningOnClose { get; set; }
+
     public static int ClampCardSize(int value) => Snap(value, CardSizeMin, CardSizeMax, CardSizeStep);
 
     public static int ClampTextScale(int value) => Snap(value, TextScaleMin, TextScaleMax, TextScaleStep);

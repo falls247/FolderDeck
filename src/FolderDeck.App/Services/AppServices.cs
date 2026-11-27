@@ -52,6 +52,12 @@ public sealed class AppServices : IDisposable
     /// </summary>
     public TypeNameCache TypeNames { get; }
 
+    /// <summary>
+    /// 「ログオン時に起動」 reads and writes the Run key (<see cref="Shell.RunKeyRegistry"/>). False
+    /// with <c>--data-dir</c>: a test run keeps its hands off the registration of the copy in use.
+    /// </summary>
+    public bool ManagesRunKey { get; init; }
+
     /// <summary>At most 8 cards load their details at the same time (§7.4.1).</summary>
     public SemaphoreSlim DetailGate { get; } = new(8, 8);
 

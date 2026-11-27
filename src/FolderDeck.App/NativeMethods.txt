@@ -137,3 +137,8 @@ WNDCLASSEXW
 GetWindowLongPtr
 VirtualQuery
 GetGuiResources
+Shell_NotifyIcon
+NOTIFYICONDATAW
+RegisterWindowMessage
+LoadIconWithScaleDown
+GetSystemMetrics

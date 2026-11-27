@@ -17,16 +17,24 @@ public partial class App : Application
     private AppServices? _services;
     private SessionMonitor? _session;
     private UiWatchdog? _watchdog;
+    private TrayIcon? _tray;
+    private MainWindow? _window;
+    private bool _background;
+    private int _exitLogged;
     private DateTime _lastErrorDialog = DateTime.MinValue;
 
     public ThemeManager? Theme { get; private set; }
+
+    /// <summary>The single-instance lock, taken by <see cref="Program.Main"/> before WPF starts.</summary>
+    internal SingleInstance? Instance { get; init; }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
-        // §4.4: a second launch only brings the running window to the front.
-        _instance = SingleInstance.Acquire();
+        // §4.4: a second launch only brings the running window to the front (normally already
+        // decided in Program.Main; this is the fallback for WPF's generated Main).
+        _instance = Instance ?? SingleInstance.Acquire();
         if (!_instance.IsFirst)
         {
             _instance.SignalFirstInstance();
@@ -34,7 +42,12 @@ public partial class App : Application
             return;
         }
 
-        string dataDir = ParseDataDir(e.Args) ?? DataStores.DefaultDataDirectory;
+        string? dataDirArg = ParseDataDir(e.Args);
+        string dataDir = dataDirArg ?? DataStores.DefaultDataDirectory;
+
+        // A test run with --data-dir never reads or writes the Run key (the copy in use keeps its registration).
+        bool managesRunKey = dataDirArg is null;
+        _background = LoginStartup.IsBackgroundLaunch(e.Args);
         string logDir = Path.Combine(dataDir, "logs");
         string version = typeof(App).Assembly.GetName().Version?.ToString() ?? "?";
         AppLog.Initialize(logDir);
@@ -52,8 +65,15 @@ public partial class App : Application
         Theme.Apply();
 
         var stores = new DataStores(dataDir, SystemClock.Instance);
-        await Task.Run(stores.LoadAll); // JSON I/O off the UI thread (§16)
-        _services = new AppServices(stores);
+        await Task.Run(() =>
+        {
+            stores.LoadAll(); // JSON I/O off the UI thread (§16)
+            if (managesRunKey)
+            {
+                SyncStartAtLogin(stores.Settings);
+            }
+        });
+        _services = new AppServices(stores) { ManagesRunKey = managesRunKey };
         _session.DescribeMemory = _services.DescribeMemory;
         AppLog.Info($"startup: data loaded at {Since()}");
 
@@ -63,13 +83,33 @@ public partial class App : Application
 
         var vm = new MainViewModel(_services);
         var window = new MainWindow(vm, Theme);
+        _window = window;
         window.RestorePlacement(stores.Settings.Current.Window);
         _session.Watch(window);
+        _session.SessionEnded = EndSession;
         MainWindow = window;
         ShutdownMode = ShutdownMode.OnMainWindowClose;
+        SessionEnding += (_, _) => window.AllowClose(); // a hidden window must not refuse the sign-out
         AppLog.Info($"startup: window built at {Since()}");
         window.ContentRendered += (_, _) => AppLog.Info($"startup: first frame at {Since()}");
-        window.Show();
+
+        // 常駐モード: the icon in the notification area, while resident (either setting or --background).
+        _tray = new TrayIcon();
+        _tray.ShowRequested += () => window.Reveal("tray");
+        _tray.ExitRequested += () => window.RequestExit("the tray menu");
+        vm.ResidentSettingsChanged += UpdateTray;
+        UpdateTray();
+
+        if (_background)
+        {
+            // No window yet: its handle only (the hooks, the session monitor and the tray need it). The first tab loads below.
+            window.PrepareHidden();
+            AppLog.Info($"resident: started in the background at {Since()}");
+        }
+        else
+        {
+            window.Show();
+        }
 
         foreach (var store in stores.All)
         {
@@ -77,8 +117,76 @@ public partial class App : Application
         }
 
         ReportLoadProblems(stores, vm.Message);
-        _instance.Listen(() => Dispatcher.BeginInvoke(window.BringToFront));
+        _instance.Listen(() =>
+        {
+            long signalled = Environment.TickCount64;
+            Dispatcher.BeginInvoke(() => window.Reveal("a second launch", signalled));
+        });
+        _instance.ListenExit(() => Dispatcher.BeginInvoke(() => window.RequestExit("another program (the exit event)")));
         await vm.InitializeAsync();
+        if (_background)
+        {
+            AppLog.Info($"resident: first tab loaded in the background at {Since()}");
+            window.PrewarmHidden();
+        }
+    }
+
+    /// <summary>The icon shows while the app is resident: a setting of 常駐モード, or started with --background.</summary>
+    private void UpdateTray()
+    {
+        if (_tray is null || _services is null)
+        {
+            return;
+        }
+
+        var settings = _services.Stores.Settings.Current;
+        _tray.SetVisible(_background || settings.KeepRunningOnClose || settings.StartAtLogin);
+    }
+
+    /// <summary>
+    /// The registry is the truth for 「ログオン時に起動」: a value removed by hand, or left for an exe
+    /// that was moved, turns the setting off (a value added by hand turns it on). Pool thread.
+    /// </summary>
+    private static void SyncStartAtLogin(SettingsStore settings)
+    {
+        var state = RunKeyRegistry.ReadState();
+        bool registered = state == LoginStartupState.Registered;
+        if (settings.Current.StartAtLogin != registered)
+        {
+            AppLog.Info($"resident: start_at_login follows the Run key ({state}): {registered}");
+            settings.Update(s => s.StartAtLogin = registered);
+        }
+    }
+
+    /// <summary>
+    /// Windows ends the session (<c>WM_ENDSESSION</c>): the process may be ended as soon as the
+    /// message returns, before WPF's shutdown runs <see cref="OnExit"/>. So the stores are saved
+    /// and the exit is recorded right here (a hidden, resident window gets the message too).
+    /// </summary>
+    private void EndSession()
+    {
+        try
+        {
+            if (_window is { } window)
+            {
+                window.SaveForExit();
+            }
+
+            _services?.Stores.FlushAll();
+        }
+        finally
+        {
+            LogExit("session end");
+            _session?.MarkCleanExit();
+        }
+    }
+
+    private void LogExit(string how)
+    {
+        if (Interlocked.Exchange(ref _exitLogged, 1) == 0)
+        {
+            AppLog.Info($"lifecycle: exit ({how})");
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -89,7 +197,8 @@ public partial class App : Application
         }
         finally
         {
-            AppLog.Info($"lifecycle: exit (code {e.ApplicationExitCode})");
+            LogExit($"code {e.ApplicationExitCode}");
+            _tray?.Dispose();
             _services?.Dispose();
             Theme?.Dispose();
             _instance?.Dispose();

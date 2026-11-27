@@ -79,6 +79,12 @@ public sealed class SessionMonitor
     /// </summary>
     public Func<string>? DescribeMemory { get; set; }
 
+    /// <summary>
+    /// Runs inside <c>WM_ENDSESSION</c> (the session really ends, on the UI thread): saves and marks
+    /// the clean exit, which <see cref="MarkCleanExit"/> after it repeats harmlessly.
+    /// </summary>
+    public Action? SessionEnded { get; set; }
+
     /// <summary>Logs why <paramref name="window"/> is asked to close.</summary>
     public void Watch(Window window)
     {
@@ -167,6 +173,11 @@ public sealed class SessionMonitor
                 if (wParam == 0)
                 {
                     _sessionEnding = null;
+                }
+                else
+                {
+                    // Windows may end the process once this returns: no shutdown of WPF comes first.
+                    SessionEnded?.Invoke();
                 }
 
                 break;
