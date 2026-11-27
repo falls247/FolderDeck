@@ -129,6 +129,22 @@ public sealed class CascadeController
     /// <summary>Where the pointer was first seen on an anchor that has no cascade (see <see cref="AnchorMouseMove"/>).</summary>
     private Point? _rearmFrom;
 
+    /// <summary>
+    /// The open cascade was opened from the keyboard (<see cref="OpenFromKeys(CardView)"/>) and the
+    /// pointer has not taken it over yet: the exit timer does not close it (the pointer was never on
+    /// its card or row), and pointer events while the pointer has not moved are ignored (see
+    /// <see cref="PointerRestsSinceKeys"/>). Cleared by <see cref="CloseAll"/>, and by a real pointer
+    /// move onto the cascade's own card, row or lists (from then on the hover rules apply).
+    /// </summary>
+    private bool _byKeys;
+
+    /// <summary>
+    /// Where the pointer was (screen pixels) at the last key that opened a list or moved the list's
+    /// cursor (<see cref="NoteKeyMove"/>); null once the pointer has moved since, after a mouse press,
+    /// or when it could not be read. Not cleared by <see cref="CloseAll"/>: the keys' own scroll closes the cascade.
+    /// </summary>
+    private (int X, int Y)? _keysPointer;
+
     public CascadeController(Window window, MainViewModel vm, ContextMenuFactory menus)
     {
         _window = window;
@@ -325,6 +341,16 @@ public sealed class CascadeController
             return; // dragging a card
         }
 
+        if (PointerRestsSinceKeys())
+        {
+            return; // the keys scrolled the view or opened the list under a resting pointer: not the user's hover
+        }
+
+        if (_byKeys && ReferenceEquals(card, _card))
+        {
+            _byKeys = false; // the pointer takes over the keyboard's list
+        }
+
         // Rule 7 (revised): the window does not have to be active. FolderDeck is used beside other
         // apps, and a hover that silently did nothing until the window was clicked read as a bug.
         // What the old rule protected is kept by RestartOverlay (a longer rest while inactive),
@@ -383,6 +409,16 @@ public sealed class CascadeController
         if (_suspended)
         {
             return; // dragging (an inactive window is fine: see CardMouseEnter)
+        }
+
+        if (PointerRestsSinceKeys())
+        {
+            return; // a row moved under a resting pointer (the keyboard scrolled it): not a hover
+        }
+
+        if (_byKeys && ReferenceEquals(hover, _anchor))
+        {
+            _byKeys = false; // the pointer takes over the keyboard's list
         }
 
         if (ReferenceEquals(hover, _anchor))
@@ -546,6 +582,7 @@ public sealed class CascadeController
         _anchor = null;
         _anchorPlacement = null;
         _anchorItem = null;
+        _byKeys = false; // _keysPointer stays: the keys' scroll that closed this may still move items under the pointer
         _aim.Clear(); // the moves belong to this cascade (none are recorded while nothing is open)
         _generation++;
     }
@@ -617,6 +654,11 @@ public sealed class CascadeController
         }
 
         CloseFrom(_levels.Count - 1);
+        if (!IsOpen)
+        {
+            _byKeys = false; // the keyboard's list is gone: the next Space opens it again (IsOpenOn)
+        }
+
         return true;
     }
 
@@ -797,7 +839,9 @@ public sealed class CascadeController
 
     private async Task OpenOverlayAsync(CardView card, CardViewModel vm)
     {
-        if (vm.Target is null || vm.IsDisabled || (vm.FolderCount + vm.FileCount) == 0)
+        // The hover waits for the counts (OnOverlayTimer); the keyboard does not, and then the
+        // listing below tells whether there is a child.
+        if (vm.Target is null || vm.IsDisabled || (vm.CountsLoaded && (vm.FolderCount + vm.FileCount) == 0))
         {
             return; // §9.2: only folder cards with at least one child
         }
@@ -820,6 +864,7 @@ public sealed class CascadeController
 
         if (listing is null || !listing.IsOk || listing.Entries.Count == 0)
         {
+            _byKeys = false; // nothing opened: the next Space tries again rather than "closing" nothing (IsOpenOn)
             return;
         }
 
@@ -885,6 +930,12 @@ public sealed class CascadeController
             return;
         }
 
+        if (PointerRestsSinceKeys())
+        {
+            return; // the keyboard's list opened (or scrolled) under a resting pointer: not a hover
+        }
+
+        _byKeys = false; // the pointer is on the list: it takes over
         _exitTimer.Stop();
         OnPreviewHover(level, row);
         if (row is not null && row.IsFolder)
@@ -912,6 +963,11 @@ public sealed class CascadeController
 
     private void OnFlyoutEnter(Level level)
     {
+        if (!PointerRestsSinceKeys())
+        {
+            _byKeys = false; // really moved onto the list: the pointer takes over
+        }
+
         _exitTimer.Stop();
         if (_pendingAnchor is not null || _pendingCard is not null)
         {
@@ -1023,6 +1079,11 @@ public sealed class CascadeController
         if (_menuOpen)
         {
             return; // rule 8
+        }
+
+        if (_byKeys)
+        {
+            return; // the keyboard's list: the pointer was never on it, its leaving does not close it
         }
 
         if (IsPointerInside())
@@ -1931,6 +1992,139 @@ public sealed class CascadeController
         _ = item.Card is { } card ? _vm.ActivateCardAsync(card) : _vm.OpenItemAsync(item);
     }
 
+    // ---- opening from the keyboard (SOW 20261127 §3.3-1, ADR-2) --------------------------------
+    //
+    // Space on a folder (and → in the details list) opens the list the hover would open, at once:
+    // the card's overlay, or the flyout beside a details row's name. The pointer is usually
+    // elsewhere, so the hover's own closing (the exit timer, started by a MouseLeave) must not apply:
+    // _byKeys keeps the list until Esc, Enter on a row, a press outside (WindowPressed), a scroll, a
+    // tab switch, a keyboard move of the list's cursor, Ctrl / Shift (CloseForSelectionKeys), Space
+    // again, or the pointer really moving onto another card or anchor (which switches as today).
+    // A pointer that really moves onto the list's own card, row or lists takes it over, and from
+    // then on the hover rules apply. "Really moves": the keyboard scrolls the view and the list opens
+    // under a pointer that rests, and WPF raises MouseEnter for whatever comes under it; those events
+    // are ignored until the pointer is a drag distance away from where it was at the key press.
+
+    /// <summary>
+    /// Opens <paramref name="card"/>'s overlay at once (the caller scrolled the card into view). False
+    /// when there is nothing to open: not a folder, missing or not responding, known to be empty, or
+    /// the cascade is frozen (a drag, Explorer's menu, an edit box). A folder whose counts are not in
+    /// yet is listed first; when it turns out empty or unreadable nothing opens, as for the hover.
+    /// </summary>
+    public bool OpenFromKeys(CardView card)
+    {
+        if (card.ViewModel is not { IsFolderLike: true, IsDisabled: false, Target: not null } vm
+            || (vm.CountsLoaded && (vm.FolderCount + vm.FileCount) == 0)
+            || !BeginKeysOpen())
+        {
+            return false;
+        }
+
+        _card = card;
+        _ = OpenOverlayAsync(card, vm);
+        return true;
+    }
+
+    /// <summary>
+    /// Opens the folder list of <paramref name="item"/> (a details row's folder: <see cref="CardAnchor"/>)
+    /// beside <paramref name="hover"/> (the row's name cell, laid out: the caller scrolled the row into
+    /// view) at once. False for a file, a missing or not responding folder, or a frozen cascade.
+    /// </summary>
+    public bool OpenFromKeys(FrameworkElement hover, ICascadeAnchor item)
+    {
+        if (item.File is not null || item.Target is null || item.IsDisabled || !hover.IsVisible || !BeginKeysOpen())
+        {
+            return false;
+        }
+
+        _anchor = hover;
+        _anchorPlacement = hover;
+        _anchorItem = item;
+        OpenRoot(hover, hover, item);
+        return IsOpen;
+    }
+
+    /// <summary>The cascade shows (or is about to show) the list of <paramref name="vm"/>, by key or by hover: Space closes it again.</summary>
+    public bool IsOpenOn(CardViewModel vm) =>
+        (IsOpen || _byKeys)
+        && (ReferenceEquals(_card?.ViewModel, vm)
+            || (_anchorItem is CardAnchor anchor && Core.Paths.PathTools.PathEquals(anchor.Path, vm.Path)));
+
+    /// <summary>
+    /// A mouse press in the main window: the keyboard's list closes unless the press is on its own
+    /// card (the overlay is inside it) or row name. A list the pointer opened or took over closes by
+    /// the hover rules instead (the pointer had to leave it to press elsewhere).
+    /// </summary>
+    public void WindowPressed(DependencyObject? source)
+    {
+        _keysPointer = null; // the mouse is in use again: what is under it now is its hover
+        if (!_byKeys)
+        {
+            return;
+        }
+
+        if ((_card is not null && RenameEditor.IsWithin(source, _card))
+            || (_anchor is not null && RenameEditor.IsWithin(source, _anchor)))
+        {
+            return;
+        }
+
+        CloseAll();
+    }
+
+    /// <summary>Clears whatever is open or pending and marks the next level 0 as the keyboard's. False while frozen.</summary>
+    private bool BeginKeysOpen()
+    {
+        if (_suspended)
+        {
+            return false;
+        }
+
+        CloseAll();
+        _byKeys = true;
+        NoteKeyMove();
+        return true;
+    }
+
+    /// <summary>
+    /// The keys moved the list's cursor (arrows, Home / End, Page keys, a typed name), which may
+    /// scroll the view under a resting pointer: WPF then raises MouseEnter for whatever comes under
+    /// it, and without this the hover would open that card's or row's list, which then takes the
+    /// arrows (the cascade has them first). Until the pointer really moves, those events are ignored
+    /// (<see cref="PointerRestsSinceKeys"/>), as for a list the keys opened.
+    /// </summary>
+    public void NoteKeyMove() =>
+        _keysPointer = ShellInterop.TryGetCursorPos(out int x, out int y) ? (x, y) : null;
+
+    /// <summary>
+    /// The pointer has not moved (by more than the drag distance) since the last key that moved the
+    /// cursor or opened a list (<see cref="NoteKeyMove"/>): a pointer event now is the layout moving
+    /// things under it, not a hover. Once it has moved, the note is dropped and every event counts
+    /// again (also when the position could not be read at the key press).
+    /// </summary>
+    private bool PointerRestsSinceKeys()
+    {
+        if (_keysPointer is not { } at)
+        {
+            return false;
+        }
+
+        if (!ShellInterop.TryGetCursorPos(out int x, out int y))
+        {
+            return true;
+        }
+
+        var dpi = VisualTreeHelper.GetDpi(_window);
+        if (Math.Abs(x - at.X) < SystemParameters.MinimumHorizontalDragDistance * dpi.DpiScaleX
+            && Math.Abs(y - at.Y) < SystemParameters.MinimumVerticalDragDistance * dpi.DpiScaleY)
+        {
+            return true;
+        }
+
+        _keysPointer = null;
+        return false;
+    }
+
     // ---- keyboard (§9.9) ----------------------------------------------------------------------
 
     /// <summary>Handles ↑ ↓ → ← Enter Esc while the cascade is open.</summary>
@@ -1963,6 +2157,12 @@ public sealed class CascadeController
                 {
                     CloseFrom(index);
                     _keyLevel = index - 1;
+                }
+                else if (_byKeys)
+                {
+                    // SOW 20261127 §7: the keyboard's own list folds back with ←, as a tree does
+                    // (the key stays used: it does not also move the list's cursor).
+                    CloseAll();
                 }
 
                 return true;

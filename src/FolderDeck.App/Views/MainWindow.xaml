@@ -104,7 +104,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <Button Grid.Column="0" Style="{StaticResource Btn.Icon}" Content="&#xE74A;" ToolTip="1つ上へ（Backspace / Alt+↑）"
+                <Button Grid.Column="0" Style="{StaticResource Btn.Icon}" Content="&#xE74A;" ToolTip="{views:ShortcutTip Text=1つ上へ, Id=Up}"
                         Command="{Binding GoUpCommand}" />
 
                 <!--
@@ -124,7 +124,7 @@
                         MouseLeftButtonUp="OnAddressBarClick">
                     <Grid>
                         <Border Background="Transparent" Cursor="IBeam"
-                                ToolTip="クリックでパスを入力・コピー（Ctrl + L）。cmd・wsl・powershell などと入力すると、このフォルダで開きます" />
+                                ToolTip="{views:ShortcutTip Text=クリックでパスを入力・コピー, Id=Address, Tail=。cmd・wsl・powershell などと入力すると、このフォルダで開きます}" />
                         <!-- the "…" lies over the room TrailPanel keeps free at the start while it leaves crumbs out -->
                         <Grid x:Name="Crumbs" Margin="1,0" HorizontalAlignment="Left" VerticalAlignment="Center">
                             <ItemsControl x:Name="CrumbItems" ItemsSource="{Binding SelectedTab.Breadcrumbs}" ClipToBounds="True" Focusable="False">
@@ -196,14 +196,14 @@
                     <Grid Margin="0,0,8,0" VerticalAlignment="Center">
                         <Border x:Name="SearchChip" CornerRadius="6" BorderThickness="1" Padding="8,2,2,2" Cursor="IBeam"
                                 BorderBrush="{DynamicResource Brush.Accent}" Background="{DynamicResource Brush.AccentSoft}"
-                                ToolTip="一覧を名前で絞り込み中（クリックまたは Ctrl+F で編集、× で解除）"
+                                ToolTip="{views:ShortcutTip Text=一覧を名前で絞り込み中。クリックで編集, Id=Search, Tail=、× で解除}"
                                 Visibility="{Binding SelectedTab.IsSearching, Converter={StaticResource BoolToVis}}"
                                 MouseLeftButtonUp="OnSearchChipClick">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE721;" FontFamily="{StaticResource Font.Icons}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"
                                            Foreground="{DynamicResource Brush.Accent}" />
                                 <TextBlock Text="{Binding SelectedTab.SearchText}" MaxWidth="180" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                                <Button Style="{StaticResource Btn.TabClose}" Margin="4,0,0,0" ToolTip="検索を解除（Esc）" Click="OnSearchClearClick" />
+                                <Button Style="{StaticResource Btn.TabClose}" Margin="4,0,0,0" ToolTip="検索を解除" Click="OnSearchClearClick" />
                             </StackPanel>
                         </Border>
                         <Border x:Name="SearchBox" Width="220" Visibility="Collapsed" CornerRadius="6" BorderThickness="1" Padding="6,0,0,0"
@@ -301,7 +301,7 @@
                 </StackPanel>
 
                 <Grid Grid.Column="8">
-                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE72C;" ToolTip="更新（F5）"
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE72C;" ToolTip="{views:ShortcutTip Text=更新, Id=Refresh}"
                             Command="{Binding RefreshCommand}"
                             IsEnabled="{Binding SelectedTab.IsLoading, Converter={StaticResource Not}}" />
                     <ContentControl Style="{StaticResource Spinner}" Width="16" Height="16"

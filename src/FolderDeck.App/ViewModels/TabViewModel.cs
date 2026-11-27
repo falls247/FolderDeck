@@ -163,11 +163,8 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
                 IsSlow = true;
             }
         };
-        Selection.Changed += () =>
-        {
-            ApplyItemFlags();
-            SelectionText = Selection.Count > 0 ? $"{Selection.Count:N0} 個を選択" : null;
-        };
+        Selection.Changed += ApplyItemFlags; // also rewrites SelectionText (count and size)
+        Selection.CursorChanged += ApplyCursorFlag; // a cursor-only move (Ctrl + arrow) raises no Changed
         UpdateBreadcrumbs();
     }
 
@@ -229,14 +226,67 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     /// </summary>
     public string? AutoRefreshPath => TransferTargetPath is null ? null : _shownListing?.Path;
 
-    /// <summary>Mirrors the selection and the cut onto the shown cards (<c>IsSelected</c> / <c>IsCut</c>).</summary>
+    /// <summary>
+    /// The keyboard moved <see cref="SelectionModel.Cursor"/> since the last mouse press: its frame is
+    /// drawn (<c>IsCursor</c>). Set by <c>MainViewModel</c>; a press hides the frame (as Explorer's
+    /// focus rectangle, which a mouse user does not see) while the cursor itself stays, so a
+    /// following Shift + arrow still spans from the clicked item.
+    /// </summary>
+    public bool ShowsCursor
+    {
+        get => _showsCursor;
+        set
+        {
+            if (_showsCursor != value)
+            {
+                _showsCursor = value;
+                ApplyCursorFlag();
+            }
+        }
+    }
+
+    private bool _showsCursor;
+
+    /// <summary>
+    /// Mirrors the selection, the cursor and the cut onto the shown cards (<c>IsSelected</c> /
+    /// <c>IsCursor</c> / <c>IsCut</c>) and rewrites <see cref="SelectionText"/>. The selected files'
+    /// total size is summed in the same pass over <see cref="Cards"/> (one set lookup per card, no
+    /// I/O), so it also follows a reload or an auto refresh that brings new cards with new sizes:
+    /// <see cref="Show"/> calls this even when its prune changes nothing.
+    /// </summary>
     private void ApplyItemFlags()
     {
         var cut = _cutPaths;
+        int sizedFiles = 0;
+        long bytes = 0;
+        bool hasFolders = false;
         foreach (var card in Cards)
         {
-            card.IsSelected = Selection.Contains(card.Path);
+            bool selected = Selection.Contains(card.Path);
+            card.IsSelected = selected;
             card.IsCut = cut is not null && cut.Contains(card.Path);
+            if (selected && !card.IsFile)
+            {
+                hasFolders = true;
+            }
+            else if (selected && card.Length is { } length)
+            {
+                // A file whose size is not known (Length null until a top-list card has loaded) is left out.
+                sizedFiles++;
+                bytes += length;
+            }
+        }
+
+        SelectionText = Selection.Count > 0 ? SelectionSummary.Format(Selection.Count, sizedFiles, bytes, hasFolders) : null;
+        ApplyCursorFlag();
+    }
+
+    private void ApplyCursorFlag()
+    {
+        string? cursor = _showsCursor ? Selection.Cursor : null;
+        foreach (var card in Cards)
+        {
+            card.IsCursor = cursor is not null && PathTools.Comparer.Equals(card.Path, cursor); // as the selection compares keys
         }
     }
 
@@ -903,7 +953,9 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
 
         // The selection keeps the items still shown (a reload, a re-sort, the filter); new card
         // instances get their flags here, since a prune that removes nothing raises nothing.
-        Selection.Prune(SelectableKeys());
+        // The cursor may rest on a missing / not responding card (it is never selected): it stays
+        // while that card is still shown.
+        Selection.Prune(SelectableKeys(), Cards.Select(c => c.Path).ToList());
         ApplyItemFlags();
         UpdateTopSummary();
         OnPropertyChanged(nameof(ShownCountText));

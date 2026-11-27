@@ -101,7 +101,29 @@ public static class FileDrag
     /// I/O: it runs on every DragOver on the UI thread. What really moves is decided after the drop
     /// by <see cref="TransferRules.Decide"/> with <see cref="TransferOptions.Drop"/>.
     /// </summary>
-    public static DropEffects DropEffectFor(IReadOnlyList<string>? sources, string? target, DropKeys keys, DropEffects allowed)
+    public static DropEffects DropEffectFor(IReadOnlyList<string>? sources, string? target, DropKeys keys, DropEffects allowed) =>
+        EffectFor(sources, target, keys, allowed, copyInPlace: false);
+
+    /// <summary>
+    /// The effect of dropping <paramref name="sources"/> on the blank part of the list (or on a file
+    /// of it) that shows the folder <paramref name="target"/>: as <see cref="DropEffectFor"/>, except
+    /// that with Ctrl (<see cref="CopiesInPlace"/>) items already in that folder are duplicated there
+    /// (renamed "x - コピー", as a paste does) instead of refused. Without Ctrl they stay refused: all
+    /// of them gives None, some of them are left out after the drop (the rest is moved or copied).
+    /// The caller passes <see cref="CopiesInPlace"/> on to <see cref="TransferOptions.Drop"/>.
+    /// </summary>
+    public static DropEffects DropEffectForShownFolder(IReadOnlyList<string>? sources, string? target, DropKeys keys, DropEffects allowed) =>
+        EffectFor(sources, target, keys, allowed, copyInPlace: CopiesInPlace(keys));
+
+    /// <summary>
+    /// A drop on the shown folder with these keys may copy items into the folder they are already
+    /// in (Ctrl alone, as Explorer's Ctrl+drag inside one folder). Any other key state, also the
+    /// default copy across volumes, never duplicates in place: only an explicit copy does.
+    /// </summary>
+    public static bool CopiesInPlace(DropKeys keys) =>
+        (keys & (DropKeys.Control | DropKeys.Shift | DropKeys.Alt | DropKeys.RightButton)) == DropKeys.Control;
+
+    private static DropEffects EffectFor(IReadOnlyList<string>? sources, string? target, DropKeys keys, DropEffects allowed, bool copyInPlace)
     {
         if (sources is null || sources.Count == 0)
         {
@@ -145,7 +167,7 @@ public static class FileDrag
                 return DropEffects.None;
             }
 
-            switch (TransferRules.Check(source, target, kind, allowSameFolderCopy: false))
+            switch (TransferRules.Check(source, target, kind, allowSameFolderCopy: copyInPlace))
             {
                 case TransferRefusal.None:
                     any = true;

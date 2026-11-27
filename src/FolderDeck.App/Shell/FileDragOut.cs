@@ -5,8 +5,12 @@ using FolderDeck.Core.Transfer;
 
 namespace FolderDeck.Shell;
 
-/// <summary>Where a drop on a folder of the app landed (recorded by the window's Drop; the transfer starts once the drag has ended).</summary>
-public readonly record struct InAppDrop(string Folder, TransferKind Kind);
+/// <summary>
+/// Where a drop on a folder of the app landed (recorded by the window's Drop; the transfer starts
+/// once the drag has ended). <paramref name="CopyInPlace"/>: a Ctrl drop on the shown folder's
+/// list, which duplicates items already in it (<see cref="FileDrag.CopiesInPlace"/>).
+/// </summary>
+public readonly record struct InAppDrop(string Folder, TransferKind Kind, bool CopyInPlace = false);
 
 /// <summary>
 /// One drag the app started: the data, the long-path spelling of what it carries (the file drop

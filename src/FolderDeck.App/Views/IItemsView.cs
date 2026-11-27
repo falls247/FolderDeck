@@ -45,6 +45,15 @@ public interface IItemsView
     /// </summary>
     FrameworkElement? BringItemIntoView(CardViewModel item);
 
+    /// <summary>
+    /// How many items one row holds (the card grid's columns, 1 for the details list): what the
+    /// keyboard's ↑ ↓ step by (<see cref="FolderDeck.Core.Selection.GridNavigation"/>).
+    /// </summary>
+    int ItemsPerRow { get; }
+
+    /// <summary>How many whole rows the viewport shows (1 at least): what PageUp / PageDown step by.</summary>
+    int PageRows { get; }
+
     /// <summary>A marquee (rubber-band selection) is pressed or being dragged in this view.</summary>
     bool IsMarqueeRunning { get; }
 
@@ -113,6 +122,39 @@ internal static class ItemsViewReveal
         }
 
         return null;
+    }
+}
+
+/// <summary>The common part of <see cref="IItemsView.PageRows"/>.</summary>
+internal static class ItemsViewPaging
+{
+    /// <summary>
+    /// The whole rows of <paramref name="rowsPanel"/> that fit in <paramref name="scroll"/>'s viewport
+    /// (pixel scrolling: the viewport is in device-independent pixels). The pitch is a realized row's
+    /// laid-out height, as the reorder drag measures it (layout rounding makes it differ from the
+    /// nominal height); <paramref name="fallbackPitch"/> before any row is realized.
+    /// </summary>
+    public static int PageRows(ScrollViewer? scroll, Panel? rowsPanel, double fallbackPitch)
+    {
+        if (scroll is not { ViewportHeight: > 0 } viewer)
+        {
+            return 1;
+        }
+
+        double pitch = fallbackPitch;
+        if (rowsPanel is not null)
+        {
+            foreach (UIElement child in rowsPanel.Children)
+            {
+                if (child.RenderSize.Height > 0)
+                {
+                    pitch = child.RenderSize.Height;
+                    break;
+                }
+            }
+        }
+
+        return pitch > 0 ? Math.Max(1, (int)Math.Floor(viewer.ViewportHeight / pitch)) : 1;
     }
 }
 

@@ -399,6 +399,36 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Ctrl+Tab / Ctrl+Shift+Tab (<paramref name="back"/>): the next / previous tab of the strip,
+    /// wrapping at the ends, through the same command as a click on the tab. Nothing with one tab.
+    /// </summary>
+    public void SelectAdjacentTab(bool back)
+    {
+        int index = Tabs.IndexOf(SelectedTab);
+        if (Tabs.Count < 2 || index < 0)
+        {
+            return;
+        }
+
+        int next = (index + (back ? Tabs.Count - 1 : 1)) % Tabs.Count;
+        SelectTabCommand.Execute(Tabs[next]);
+    }
+
+    /// <summary>
+    /// Ctrl+1…8: the tab at <paramref name="index"/> (0-based) of the strip, nothing when there are
+    /// fewer tabs; <see cref="int.MaxValue"/> (Ctrl+9, as Explorer and browsers) the last tab.
+    /// </summary>
+    public void SelectTabAt(int index)
+    {
+        if (Tabs.Count == 0 || index < 0 || (index >= Tabs.Count && index != int.MaxValue))
+        {
+            return;
+        }
+
+        SelectTabCommand.Execute(Tabs[Math.Min(index, Tabs.Count - 1)]);
+    }
+
+    /// <summary>
     /// Makes <paramref name="tab"/> the shown one (a tab of <see cref="Tabs"/>, or <see cref="NoTab"/>
     /// when the last one was closed). The tab left remembers its scroll position; the lists of
     /// 最近の履歴 / よく使う項目 are rebuilt each time they are shown, a folder is listed again only
@@ -2308,6 +2338,70 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Alt+Enter: Explorer's プロパティ of the selection (one sheet for several items), through the
+    /// same shell command as the entry of 「Windows のメニュー」. Nothing selected: the folder shown
+    /// (its background menu's プロパティ, so a drive root gets the drive's sheet); a top list shows
+    /// none. One selected drive or share root goes the same way. Returns false when there is
+    /// nothing to show (the key is not used).
+    /// </summary>
+    public bool ShowProperties()
+    {
+        if (!HasTab)
+        {
+            return false;
+        }
+
+        var paths = SelectedItems().Select(i => i.Path).ToList();
+        bool background;
+        if (paths.Count == 0)
+        {
+            if (SelectedTab.FolderTargetPath is not { } folder)
+            {
+                return false;
+            }
+
+            paths = [folder];
+            background = true;
+        }
+        else if (paths.TrueForAll(path => TransferRules.IsTransferable(path)))
+        {
+            background = false;
+        }
+        else if (paths.Count == 1)
+        {
+            background = true; // a root: the item menu refuses it (its menu would offer フォーマット)
+        }
+        else
+        {
+            Message.Info("ドライブのプロパティは 1 つずつ表示してください。");
+            return true;
+        }
+
+        _ = ShowPropertiesAsync(paths, background);
+        return true;
+    }
+
+    private async Task ShowPropertiesAsync(IReadOnlyList<string> paths, bool background)
+    {
+        var result = await ShellContextMenu.ShowPropertiesAsync(paths, background, View?.WindowHandle ?? 0);
+        switch (result.Outcome)
+        {
+            case ShellMenuOutcome.Invoked:
+                // The sheet can rename the item or change its attributes: the lists are read again
+                // when the window is activated after it (as after a command of Explorer's menu).
+                _shellCommandAt = Environment.TickCount64;
+                break;
+            case ShellMenuOutcome.Unavailable:
+            case ShellMenuOutcome.TimedOut:
+            case ShellMenuOutcome.Failed:
+                Message.Warning(result.Error is { Length: > 0 } error
+                    ? $"プロパティを表示できませんでした：{error}"
+                    : "プロパティを表示できませんでした。");
+                break;
+        }
+    }
+
     // ---- selection, clipboard and paste ---------------------------------------------------------
 
     private static readonly TimeSpan ClipboardReadTimeout = TimeSpan.FromSeconds(2);
@@ -2391,8 +2485,161 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Ctrl+A: every enabled item of the shown list. Returns true when the selection changed.</summary>
     public bool SelectAll() => HasTab && SelectedTab.Selection.SelectAll(SelectedTab.SelectableKeys());
 
-    /// <summary>Esc, a plain click, a press on the blank area. Returns true when something was selected.</summary>
-    public bool ClearSelection() => SelectedTab.Selection.Clear();
+    /// <summary>
+    /// Esc, a plain click, a press on the blank area. The keyboard cursor stays where it was (as
+    /// Explorer's focus), so the next arrow goes on from there; only another folder forgets it
+    /// (<see cref="TabViewModel"/> clears the model). Returns true when something was selected.
+    /// </summary>
+    public bool ClearSelection()
+    {
+        var selection = SelectedTab.Selection;
+        string? cursor = selection.Cursor;
+        bool changed = selection.Clear();
+        if (cursor is not null)
+        {
+            selection.MoveCursor(SelectedTab.Cards.Select(c => c.Path).ToList(), cursor, select: false, extend: false);
+        }
+
+        return changed;
+    }
+
+    // ---- the keyboard cursor (arrows, Home / End, Page keys, Space, typed names) ----------------
+
+    /// <summary>
+    /// An arrow, Home / End or a Page key on the shown list: the cursor moves by
+    /// <see cref="GridNavigation.Move"/> over the shown cards (<paramref name="columns"/> per row,
+    /// <paramref name="pageRows"/> rows per screen) and, by <see cref="SelectionModel.MoveCursor"/>,
+    /// selects the target alone (<paramref name="select"/>), the range from the anchor
+    /// (<paramref name="extend"/>, Shift; added to the selection with Ctrl) or nothing (Ctrl).
+    /// Returns the card the cursor is on now, for the view to scroll to (null: an empty list).
+    /// </summary>
+    public CardViewModel? MoveCursor(NavKey key, int columns, int pageRows, bool select, bool extend)
+    {
+        if (!HasTab)
+        {
+            return null;
+        }
+
+        var cards = SelectedTab.Cards;
+        int index = GridNavigation.Move(CursorIndex(), key, cards.Count, columns, pageRows);
+        if (index < 0)
+        {
+            return null;
+        }
+
+        MoveCursorTo(cards[index], select, extend);
+        return cards[index];
+    }
+
+    /// <summary>
+    /// A typed name (letters within a second of each other are joined): the cursor goes to the next
+    /// shown card whose name starts with <paramref name="typed"/> (<see cref="GridNavigation.FindByPrefix"/>)
+    /// and selects it alone, as a plain arrow. Returns that card, or null when no name matches.
+    /// </summary>
+    public CardViewModel? MoveCursorToName(string typed)
+    {
+        if (!HasTab)
+        {
+            return null;
+        }
+
+        var cards = SelectedTab.Cards;
+        int index = GridNavigation.FindByPrefix(cards.Select(c => c.Name).ToList(), CursorIndex(), typed);
+        if (index < 0)
+        {
+            return null;
+        }
+
+        MoveCursorTo(cards[index], select: true, extend: false);
+        return cards[index];
+    }
+
+    /// <summary>
+    /// Space: the cursor's card alone is selected; Ctrl+Space (<paramref name="toggle"/>) flips it in
+    /// the selection. Both make it the anchor of a following Shift + arrow. Returns false when there
+    /// is no cursor (the key is not used); a missing or unanswering card is never selected.
+    /// </summary>
+    public bool SelectAtCursor(bool toggle)
+    {
+        if (CursorCard() is not { } card)
+        {
+            return false;
+        }
+
+        var tab = SelectedTab;
+        tab.ShowsCursor = true;
+        if (!card.IsDisabled)
+        {
+            if (toggle)
+            {
+                tab.Selection.Toggle(card.Path);
+            }
+            else
+            {
+                tab.Selection.Replace([card.Path]);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>The shown card the keyboard cursor is on, or null (no cursor yet, another folder was shown, the item went away).</summary>
+    public CardViewModel? CursorCard() =>
+        HasTab && SelectedTab.Selection.Cursor is { } path ? ShownCard(path) : null;
+
+    /// <summary>A mouse press: the cursor's frame is no longer drawn (the cursor itself stays, see <see cref="TabViewModel.ShowsCursor"/>).</summary>
+    public void HideKeyboardCursor()
+    {
+        if (HasTab)
+        {
+            SelectedTab.ShowsCursor = false;
+        }
+    }
+
+    /// <summary>The cursor's index in the shown cards (its anchor without one, e.g. after Ctrl+A), or -1.</summary>
+    private int CursorIndex()
+    {
+        var selection = SelectedTab.Selection;
+        if ((selection.Cursor ?? selection.Anchor) is not { } path)
+        {
+            return -1;
+        }
+
+        var cards = SelectedTab.Cards;
+        for (int i = 0; i < cards.Count; i++)
+        {
+            if (PathTools.PathEquals(cards[i].Path, path))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Moves the cursor onto <paramref name="card"/> with the selection rule of
+    /// <see cref="SelectionModel.MoveCursor"/>, over the selectable cards (a range skips missing and
+    /// unanswering ones). Such a card is never selected: the cursor rests on it alone, and a plain
+    /// arrow leaves nothing selected (Enter, Delete must not act on the item it left).
+    /// </summary>
+    private void MoveCursorTo(CardViewModel card, bool select, bool extend)
+    {
+        var tab = SelectedTab;
+        tab.ShowsCursor = true;
+        if (!card.IsDisabled)
+        {
+            tab.Selection.MoveCursor(tab.SelectableKeys(), card.Path, select, extend);
+            return;
+        }
+
+        if (select && !extend)
+        {
+            tab.Selection.Clear();
+        }
+
+        tab.Selection.MoveCursor(tab.Cards.Select(c => c.Path).ToList(), card.Path, select: false, extend: false);
+    }
 
     /// <summary>
     /// A marquee drag over the shown list: the tab and the cards it was started on, the selection
@@ -2665,7 +2912,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         if (drag.Dropped is { } dropped)
         {
-            _ = DropAsync(drag.Paths, dropped.Folder, dropped.Kind, fromOtherApp: false);
+            _ = DropAsync(drag.Paths, dropped.Folder, dropped.Kind, fromOtherApp: false, dropped.CopyInPlace);
             return;
         }
 
@@ -2685,9 +2932,12 @@ public sealed partial class MainViewModel : ObservableObject
     /// its dialogs (name conflicts, progress), nothing already in the folder is copied again, and
     /// what cannot be moved from its place is copied. One file operation at a time. A drop from
     /// another app may carry 8.3 short names: they are expanded first (the same-folder and
-    /// into-itself checks compare spellings).
+    /// into-itself checks compare spellings). A drop on the shown folder's list (its blank part or
+    /// a file) goes here too, with that folder; <paramref name="copyInPlace"/> (Ctrl) duplicates
+    /// what is already in it ("x - コピー", the paste's rename on collision), so the result, the
+    /// undo step and the selection of what arrived are those of a paste.
     /// </summary>
-    public async Task DropAsync(IReadOnlyList<string> paths, string folder, TransferKind kind, bool fromOtherApp)
+    public async Task DropAsync(IReadOnlyList<string> paths, string folder, TransferKind kind, bool fromOtherApp, bool copyInPlace = false)
     {
         if (_fileOpBusy)
         {
@@ -2716,8 +2966,8 @@ public sealed partial class MainViewModel : ObservableObject
                 }
             }
 
-            AppLog.Info($"drop: {(fromOtherApp ? "other app" : "app")}, {kind}, {sources.Count} items");
-            if (await TransferIntoAsync(sources, folder, TransferOptions.Drop(kind), TransferGesture.Drop, owner) is not { } done)
+            AppLog.Info($"drop: {(fromOtherApp ? "other app" : "app")}, {kind}{(copyInPlace ? " in place" : "")}, {sources.Count} items");
+            if (await TransferIntoAsync(sources, folder, TransferOptions.Drop(kind, copyInPlace), TransferGesture.Drop, owner) is not { } done)
             {
                 return;
             }

@@ -212,6 +212,34 @@ public class FileDragTests
     }
 
     [Theory]
+    [InlineData(DropKeys.Control, All, DropEffects.Copy)]                     // Ctrl duplicates in place
+    [InlineData(DropKeys.None, All, DropEffects.None)]
+    [InlineData(DropKeys.Shift, All, DropEffects.None)]
+    [InlineData(DropKeys.Control | DropKeys.Shift, All, DropEffects.None)]
+    [InlineData(DropKeys.Control, DropEffects.Move, DropEffects.None)]        // a copy that is not offered
+    public void DropEffectForShownFolder_ItemsAlreadyThere_OnlyCtrlCopies(DropKeys keys, DropEffects allowed, DropEffects expected)
+    {
+        Assert.Equal(expected, FileDrag.DropEffectForShownFolder([@"E:\a\x.txt", @"E:\a\dir"], @"e:\A\", keys, allowed));
+    }
+
+    [Fact]
+    public void DropEffectForShownFolder_SomeAlreadyThere_FollowsTheFolderRules_AndOnlyCtrlCopiesInPlace()
+    {
+        string[] mixed = [@"E:\a\x.txt", @"E:\b\y.txt"];
+        Assert.Equal(DropEffects.Move, FileDrag.DropEffectForShownFolder(mixed, @"E:\a", DropKeys.None, All)); // x is left out after the drop
+        Assert.Equal(DropEffects.Copy, FileDrag.DropEffectForShownFolder(mixed, @"E:\a", DropKeys.Control, All));
+
+        // The default copy across volumes is no explicit copy: the item already there is not duplicated.
+        string[] across = [@"E:\a\x.txt", @"F:\y.txt"];
+        Assert.Equal(DropEffects.Copy, FileDrag.DropEffectForShownFolder(across, @"E:\a", DropKeys.None, All));
+        Assert.False(FileDrag.CopiesInPlace(DropKeys.None));
+        Assert.True(FileDrag.CopiesInPlace(DropKeys.Control));
+
+        // A folder card keeps refusing a Ctrl drop into the items' own folder.
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"E:\a\x.txt"], @"E:\a", DropKeys.Control, All));
+    }
+
+    [Theory]
     [InlineData(DropEffects.None, DropEffects.None)]
     [InlineData(DropEffects.Copy, DropEffects.Copy)]
     [InlineData(DropEffects.Move, DropEffects.Copy)]

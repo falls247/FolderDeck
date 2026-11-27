@@ -8,6 +8,7 @@ using FolderDeck.Core.Infrastructure;
 using FolderDeck.Core.Layout;
 using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
+using FolderDeck.Core.Selection;
 using FolderDeck.Core.Stores;
 using FolderDeck.Core.Transfer;
 using FolderDeck.Shell;
@@ -206,6 +207,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         };
         theme.ThemeChanged += () => _theme.ApplyTitleBar(this);
         PreviewKeyDown += OnPreviewKeyDown;
+        PreviewKeyUp += OnPreviewKeyUp;
         PreviewMouseDown += OnPreviewMouseDown;
         DragEnter += OnDragEnter;
         DragOver += OnDragOver;
@@ -314,9 +316,38 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     // ---- keyboard and mouse (§8.2) ----------------------------------------------------------
 
+    /// <summary>
+    /// The menu key (<see cref="Key.Apps"/> or <see cref="Key.F10"/> of Shift+F10) whose press opened
+    /// the list's menu; <see cref="Key.None"/> otherwise. Its release is swallowed too.
+    /// </summary>
+    private Key _menuKeyDown;
+
+    /// <summary>
+    /// The release of a menu key whose press the list used: neither WPF's keyboard context menu
+    /// (raised on the release of Shift+F10 / Apps for the focused element) nor DefWindowProc
+    /// (WM_SYSKEYUP of F10: the system menu's menu mode; WM_KEYUP of Apps: WM_CONTEXTMENU) gets it.
+    /// Not reached while the focus is inside the menu that opened (a popup); nothing there acts on it.
+    /// </summary>
+    private void OnPreviewKeyUp(object sender, KeyEventArgs e)
+    {
+        Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (_menuKeyDown != Key.None && key == _menuKeyDown)
+        {
+            _menuKeyDown = Key.None;
+            e.Handled = true;
+        }
+    }
+
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
         NoteInput();
+        if (_menuKeyDown != Key.None
+            && (e.Key == Key.System ? e.SystemKey : e.Key) is var pressed
+            && pressed != _menuKeyDown && pressed is not (Key.LeftShift or Key.RightShift))
+        {
+            _menuKeyDown = Key.None; // its release went to the menu's popup: a later one is not ours
+        }
+
         if (ActiveList.IsMarqueeRunning)
         {
             // Esc puts the selection back; no other key may reload or change the list under the
@@ -393,9 +424,34 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 BeginAddressEdit();
                 break;
             case Key.F when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
+            case Key.E when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
             case Key.F3 when Keyboard.Modifiers == ModifierKeys.None && _vm.HasTab:
                 e.Handled = true; // like Explorer: the search box, its text selected
                 BeginSearch();
+                break;
+            case Key.Tab when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
+                // Also in the search / address box, as in Explorer. Handled here, at the window's
+                // preview, before WPF's focus traversal would move the focus (Ctrl+Tab's old effect).
+                e.Handled = true;
+                EndAddressEdit(); // the box shows the tab left (the search box closes with the tab)
+                _vm.SelectAdjacentTab(back: (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
+                break;
+            case >= Key.D1 and <= Key.D9 when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
+            case >= Key.NumPad1 and <= Key.NumPad9 when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
+                e.Handled = true; // Ctrl+1…8: that tab; Ctrl+9: the last one (as Explorer)
+                EndAddressEdit();
+                int digit = key >= Key.NumPad1 ? key - Key.NumPad1 : key - Key.D1;
+                _vm.SelectTabAt(digit == 8 ? int.MaxValue : digit);
+                break;
+            case Key.F1 or Key.OemQuestion or Key.Divide when ShortcutHelpWindow.IsToggleKey(e) && !IsMenuTakingKeys():
+                // §3.3-2: the shortcut list. Also in the search / address box (neither key types text);
+                // not while a name is edited (that branch returned above). The list closes itself.
+                e.Handled = true;
+                if (!e.IsRepeat)
+                {
+                    ShowShortcutHelp();
+                }
+
                 break;
             case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
                 e.Handled = true; // like Explorer: closes the shown tab, whatever its kind
@@ -450,6 +506,9 @@ public partial class MainWindow : Window, IMainView, ICardHost
     private void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
         NoteInput();
+        _typedName.Clear(); // a click ends the typed name, as a key move does
+        _vm.HideKeyboardCursor(); // the cursor's frame is for the keys only (a click moves the cursor itself)
+        _cascade.WindowPressed(e.OriginalSource as DependencyObject); // a list the keys opened closes on a press outside it
         // A press anywhere else commits the name being edited (first: the branches below may handle
         // the press). The items have no focus to take, so a lost focus alone would not end it.
         _rename.CommitIfOutside(e.OriginalSource);
@@ -485,8 +544,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
     }
 
     /// <summary>
-    /// The selection keys (not in a text box): Ctrl+A, Esc (after the cascade had its turn),
-    /// Ctrl+C / Ctrl+X / Ctrl+V, Delete, F2 (rename), Enter (open) and Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z
+    /// The selection keys (not in a text box): the cursor's arrows, Home / End and Page keys (with
+    /// Shift / Ctrl; → on a folder of the details list opens its cascade), Space / Ctrl+Space (a
+    /// plain Space on a folder opens or closes its cascade instead), Ctrl+A, Esc (after the cascade had its turn), Shift+F10 / Apps
+    /// (the selection's menu), Alt+Enter (プロパティ), Ctrl+C / Ctrl+X / Ctrl+V (and Ctrl+Insert /
+    /// Shift+Insert), Delete (and Ctrl+D), F2 (rename), Enter (open) and Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z
     /// (the app's undo / redo of its own file operations; not while a menu takes the keys). Copy, cut, delete, rename and open act on the selection only, never on
     /// the item under the pointer (nor the row the cascade's keys highlight); a held key repeats
     /// nothing (one paste or one delete confirmation per press). Delete only recycles: Shift+Delete
@@ -497,7 +559,93 @@ public partial class MainWindow : Window, IMainView, ICardHost
         var modifiers = Keyboard.Modifiers;
         if (key == Key.Escape && modifiers == ModifierKeys.None)
         {
+            _typedName.Clear();
             return _vm.ClearSelection();
+        }
+
+        // Arrows, Home / End, PageUp / PageDown move the keyboard cursor (ADR-1: the items never take
+        // the focus; the cursor is the tab's SelectionModel.Cursor). Alt + arrows stay back / forward /
+        // up / enter (the switch of OnPreviewKeyDown). The cascade had the plain arrows first.
+        if (NavKeyOf(key) is { } nav && (modifiers & (ModifierKeys.Alt | ModifierKeys.Windows)) == 0)
+        {
+            if (IsMenuTakingKeys() || FocusedControlTakes(key))
+            {
+                return false;
+            }
+
+            // ADR-2: in the details list (one column, ← → move nothing sideways) a plain → on a folder
+            // opens its list, like a tree's expand. The cards keep → for the move. A folder that has
+            // nothing to open moves on, as a file does.
+            if (nav == NavKey.Right && modifiers == ModifierKeys.None && ReferenceEquals(ActiveList, Details)
+                && _vm.CursorCard() is { IsFolderLike: true } folder && OpenCascadeFromKeys(folder, toggle: false))
+            {
+                return true;
+            }
+
+            MoveCursorByKey(nav, modifiers);
+            return true;
+        }
+
+        // Space: the cursor's item alone is selected; Ctrl+Space flips it. Not while a focused
+        // button would be pressed by it (a toolbar button keeps the focus after a click).
+        if (key == Key.Space && (modifiers & ~ModifierKeys.Control) == ModifierKeys.None)
+        {
+            if (IsMenuTakingKeys() || FocusedControlTakes(key))
+            {
+                return false;
+            }
+
+            if (modifiers == ModifierKeys.None && IsTypingName)
+            {
+                return false; // a space inside a typed name: its text input goes on to JumpToTypedName
+            }
+
+            if (e.IsRepeat)
+            {
+                return true; // a held Ctrl+Space flips once
+            }
+
+            // ADR-2: a plain Space on a folder opens (or, open, closes) its list instead of selecting
+            // it; the selection stays as it is. Ctrl+Space always flips. A folder that has nothing to
+            // open is selected, as a file is.
+            if (modifiers == ModifierKeys.None && _vm.CursorCard() is { IsFolderLike: true } folder
+                && OpenCascadeFromKeys(folder, toggle: true))
+            {
+                return true;
+            }
+
+            return _vm.SelectAtCursor(toggle: modifiers == ModifierKeys.Control);
+        }
+
+        // Shift+F10 / the Apps key: the selection's menu. Always used, also when it shows nothing:
+        // an unhandled Shift+F10 (WM_SYSKEYDOWN) reaches DefWindowProc, which opens the window's
+        // system menu (F10 enters its menu mode). The release is swallowed too (OnPreviewKeyUp).
+        if ((key == Key.Apps && modifiers == ModifierKeys.None) || (key == Key.F10 && modifiers == ModifierKeys.Shift))
+        {
+            _menuKeyDown = key;
+            if (!e.IsRepeat && _vm.HasTab && !IsMenuTakingKeys())
+            {
+                ShowMenuFromKeys();
+            }
+
+            return true;
+        }
+
+        // Alt+Enter: Explorer's プロパティ of the selection (nothing selected: of the folder shown).
+        if (key == Key.Enter && modifiers == ModifierKeys.Alt)
+        {
+            if (IsMenuTakingKeys())
+            {
+                return false;
+            }
+
+            if (e.IsRepeat)
+            {
+                return true; // a held Alt+Enter opens one sheet
+            }
+
+            _cascade.CloseAll(); // as Enter: the sheet takes the foreground
+            return _vm.ShowProperties();
         }
 
         if (key == Key.F2 && modifiers == ModifierKeys.None)
@@ -512,7 +660,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
             return true;
         }
 
-        if (key == Key.Delete && modifiers == ModifierKeys.None)
+        // Ctrl+D is Explorer's other key for Delete: the same path (Recycle Bin, with the confirmation).
+        if ((key == Key.Delete && modifiers == ModifierKeys.None) || (key == Key.D && modifiers == ModifierKeys.Control))
         {
             if (e.IsRepeat)
             {
@@ -576,6 +725,13 @@ public partial class MainWindow : Window, IMainView, ICardHost
             return true;
         }
 
+        // Ctrl+Insert / Shift+Insert: the old keys of コピー / 貼り付け, taken as Ctrl+C / Ctrl+V.
+        if (key == Key.Insert && modifiers is (ModifierKeys.Control or ModifierKeys.Shift))
+        {
+            key = modifiers == ModifierKeys.Control ? Key.C : Key.V;
+            modifiers = ModifierKeys.Control;
+        }
+
         if (modifiers != ModifierKeys.Control || key is not (Key.A or Key.C or Key.X or Key.V))
         {
             return false;
@@ -617,6 +773,79 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         return true;
+    }
+
+    private static NavKey? NavKeyOf(Key key) => key switch
+    {
+        Key.Left => NavKey.Left,
+        Key.Right => NavKey.Right,
+        Key.Up => NavKey.Up,
+        Key.Down => NavKey.Down,
+        Key.Home => NavKey.Home,
+        Key.End => NavKey.End,
+        Key.PageUp => NavKey.PageUp,
+        Key.PageDown => NavKey.PageDown,
+        _ => null,
+    };
+
+    /// <summary>
+    /// The focused control uses <paramref name="key"/> itself, so the list's cursor leaves it alone:
+    /// Space presses a focused button or ticks a box; a list, a slider or a scroll bar keeps its
+    /// arrows. Text boxes never get here (HandleSelectionKey is not called in one).
+    /// </summary>
+    private static bool FocusedControlTakes(Key key) => Keyboard.FocusedElement switch
+    {
+        ButtonBase => key == Key.Space,
+        Selector or Slider or ScrollBar => true,
+        _ => false,
+    };
+
+    /// <summary>
+    /// Space (any view) or → (the details list) on the cursor's folder: the list the hover would open
+    /// (the card's overlay, the flyout beside the row's name), at once. The item is scrolled into view
+    /// and laid out first (its row may not be realized: the card or the name cell is the element the
+    /// list hangs on); that scroll closes whatever list was open. With <paramref name="toggle"/> a
+    /// list already open on this folder closes instead. False when nothing opens (the key then acts
+    /// as on a file). The selection is left alone: the cursor may be off it after Ctrl + arrows.
+    /// </summary>
+    private bool OpenCascadeFromKeys(CardViewModel folder, bool toggle)
+    {
+        _typedName.Clear(); // → in the details list: a move like the arrows (Space gets here only when no name is typed)
+        if (_cascade.IsOpenOn(folder))
+        {
+            if (toggle)
+            {
+                _cascade.CloseAll();
+            }
+
+            return true;
+        }
+
+        return ActiveList.BringItemIntoView(folder) switch
+        {
+            CardView card => _cascade.OpenFromKeys(card),
+            DetailsRowView row when CardAnchor.For(folder, _vm.Services.Icons) is { } anchor => _cascade.OpenFromKeys(row.NameCell, anchor),
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// Moves the cursor of the shown list: a plain key selects the target alone, Shift the range from
+    /// the anchor, Ctrl only moves the cursor (Ctrl+Shift adds the range). The target is scrolled
+    /// into view through the virtualizing panel (its row may not be realized yet).
+    /// </summary>
+    private void MoveCursorByKey(NavKey nav, ModifierKeys modifiers)
+    {
+        _typedName.Clear(); // as in Explorer, a move ends the typed name: a Space now selects, a letter starts anew
+        _cascade.CloseAll(); // the cursor leaves the item a list or a preview may hang on
+        _cascade.NoteKeyMove(); // the scroll below moves items under a resting pointer: not a hover
+        var list = ActiveList;
+        if (_vm.MoveCursor(nav, list.ItemsPerRow, list.PageRows,
+                select: (modifiers & ModifierKeys.Control) == 0,
+                extend: (modifiers & ModifierKeys.Shift) != 0) is { } card)
+        {
+            list.BringItemIntoView(card);
+        }
     }
 
     /// <summary>
@@ -860,7 +1089,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
     // Folders dropped from Explorer on the window are registered (the hint shows at the top of the
     // sidebar; no hint while the sidebar is hidden). Over a folder (a folder card or row, a
     // 登録フォルダ or drive row, a folder name of the address bar) a drop is a move or copy into it
-    // instead, also for the app's own drags (FolderDropOf); refused there, it is no registration
+    // instead, also for the app's own drags (FolderDropOf); so is the rest of the list area of a
+    // tab that shows a folder (the shown folder, FolderTargetAt). Refused there, it is no registration
     // either, and nowhere in the address bar is (IsInAddressBar). Drags the app started itself
     // (cards, rows, previews, sidebar rows) carry a file drop too, for other apps: released elsewhere
     // over the window they are never a registration.
@@ -869,11 +1099,23 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private static bool IsOwnDrag(IDataObject data) => FileDragOut.IsDragging || FileDrag.IsFromThisApp(data.GetDataPresent);
 
-    /// <summary>The folder under the pointer during a drag, and what to highlight (a <see cref="CardViewModel"/>, <see cref="SidebarItemViewModel"/> or <see cref="BreadcrumbItem"/>).</summary>
-    private readonly record struct FolderTarget(string Folder, object Mark);
+    /// <summary>
+    /// The folder under the pointer during a drag, and what to highlight (a <see cref="CardViewModel"/>,
+    /// <see cref="SidebarItemViewModel"/> or <see cref="BreadcrumbItem"/>; null for the list itself).
+    /// <paramref name="ShownFolder"/>: the blank part of the shown folder's list or one of its files,
+    /// which drops into that folder (Explorer's rule; Ctrl may duplicate in place there).
+    /// <paramref name="OnFile"/>: the path of the file card or row under the pointer (a release on a
+    /// dragged item itself does nothing, as in Explorer). <paramref name="Refused"/>: a part of a real
+    /// folder's list that takes no drop now (loading, a failed load, a busy or missing folder item);
+    /// it refuses the drop instead of making it a registration, so the list has no registering holes.
+    /// </summary>
+    private readonly record struct FolderTarget(string Folder, object? Mark, bool ShownFolder = false, string? OnFile = null, bool Refused = false);
 
-    /// <summary>A drag over a folder: the folder, the dragged paths, and the effect a release would have there.</summary>
-    private readonly record struct FolderDrop(FolderTarget Target, IReadOnlyList<string> Sources, DropEffects Effect);
+    /// <summary>
+    /// A drag over a folder: the folder, the dragged paths, the effect a release would have there,
+    /// and whether that release duplicates items already in the shown folder (<see cref="FileDrag.CopiesInPlace"/>).
+    /// </summary>
+    private readonly record struct FolderDrop(FolderTarget Target, IReadOnlyList<string> Sources, DropEffects Effect, bool CopyInPlace);
 
     /// <summary>The folder highlighted as the drop target (null: none).</summary>
     private object? _dropMark;
@@ -947,14 +1189,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
             e.Effects = ToWpf(FileDrag.DropResult(d.Effect));
             if (FileDragOut.Current is { } own)
             {
-                own.Dropped = new InAppDrop(d.Target.Folder, kind); // run by FinishDrag once DoDragDrop returned
+                own.Dropped = new InAppDrop(d.Target.Folder, kind, d.CopyInPlace); // run by FinishDrag once DoDragDrop returned
                 return;
             }
 
             // Another app's drag: let its DoDragDrop return first (Explorer waits for this Drop).
             string[] paths = [.. d.Sources];
             string folder = d.Target.Folder;
-            _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, () => _ = _vm.DropAsync(paths, folder, kind, fromOtherApp: true));
+            bool copyInPlace = d.CopyInPlace;
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, () => _ = _vm.DropAsync(paths, folder, kind, fromOtherApp: true, copyInPlace));
             return;
         }
 
@@ -1004,18 +1247,32 @@ public partial class MainWindow : Window, IMainView, ICardHost
             return null;
         }
 
-        // the last crumb is the shown folder: the items are there already (no import into it either)
-        var effect = _vm.IsFileOperationRunning || IsNameBusy || target.Mark is BreadcrumbItem { IsLast: true }
+        // the last crumb is the shown folder: the items are there already (no import into it either);
+        // the shown folder's list takes them, and duplicates what is there with Ctrl
+        var keys = KeysOf(e.KeyStates);
+        var allowed = FromWpf(e.AllowedEffects);
+        var effect = target.Refused || _vm.IsFileOperationRunning || IsNameBusy || target.Mark is BreadcrumbItem { IsLast: true }
+                || (target.OnFile is { } onFile && sources.Any(s => PathTools.PathEquals(s, onFile)))
             ? DropEffects.None
-            : FileDrag.DropEffectFor(sources, target.Folder, KeysOf(e.KeyStates), FromWpf(e.AllowedEffects));
-        return new FolderDrop(target, sources, effect);
+            : target.ShownFolder
+                ? FileDrag.DropEffectForShownFolder(sources, target.Folder, keys, allowed)
+                : FileDrag.DropEffectFor(sources, target.Folder, keys, allowed);
+        bool copyInPlace = target.ShownFolder && effect == DropEffects.Copy && FileDrag.CopiesInPlace(keys);
+        return new FolderDrop(target, sources, effect, copyInPlace);
     }
 
     /// <summary>
     /// The usable folder item the element under the pointer belongs to: a folder card or details
     /// row (not busy), a 登録フォルダ or drive row, a folder name of the address bar (its path, not
-    /// checked here: the transfer does). Null for files, missing folders, headers, クイック
-    /// アクセス, the crumbs' separators and everything else. While a tab loads its items do not hit test, so they are not found.
+    /// checked here: the transfer does). Anywhere else in the list area (<see cref="ContentHost"/>:
+    /// between and after the items, a file card or row, the column titles, the scroll bars) it is
+    /// the shown folder, when the tab shows one that is on screen (<see cref="MainViewModel.PasteFolderOf"/>
+    /// with no item: not the top lists, not while loading or after a failed load), with no mark.
+    /// In a real folder's list that takes no drop now (loading, a failed load, an unusable folder
+    /// item: busy, missing) it is a refused target, never null, so an Explorer drag there is no
+    /// registration. Null for those on the top lists, headers, クイック アクセス, the crumbs'
+    /// separators and everything else. While a tab loads its items do not hit test, so they are not
+    /// found (the blank area is refused then).
     /// </summary>
     private FolderTarget? FolderTargetAt(object? originalSource)
     {
@@ -1023,10 +1280,16 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             switch (node)
             {
+                case CardView { ViewModel: { IsFile: true } file }:
+                    return ShownFolderTarget(file.Path); // Explorer: a drop on a file goes into its folder
+                case DetailsRowView { ViewModel: { IsFile: true } file }:
+                    return ShownFolderTarget(file.Path);
                 case CardView { ViewModel: { } card }:
                     return FolderCard(card);
                 case DetailsRowView { ViewModel: { } row }:
                     return FolderCard(row);
+                case DependencyObject when ReferenceEquals(node, ContentHost):
+                    return ShownFolderTarget();
                 case Button { DataContext: BreadcrumbItem crumb }:
                     // a folder of the address bar (not a fixed tab's list or （不明）); the last one is the shown folder (FolderDropOf)
                     return crumb.ToolTip is { } path && PathTools.IsFullyQualified(path) ? new FolderTarget(path, crumb) : null;
@@ -1038,7 +1301,16 @@ public partial class MainWindow : Window, IMainView, ICardHost
         return null;
 
         FolderTarget? FolderCard(CardViewModel card) =>
-            !card.IsBusy && _vm.PasteFolderOf(card.ToItemRef()) is { } folder ? new FolderTarget(folder, card) : null;
+            !card.IsBusy && _vm.PasteFolderOf(card.ToItemRef()) is { } folder ? new FolderTarget(folder, card) : RefusedInFolder();
+
+        // no highlight: the whole list is the target, and a card's mark would say "into this folder"
+        FolderTarget? ShownFolderTarget(string? onFile = null) =>
+            _vm.HasTab && _vm.PasteFolderOf(null) is { } shown ? new FolderTarget(shown, null, ShownFolder: true, onFile) : RefusedInFolder();
+
+        // a real folder's list that takes no drop now refuses it; only the top lists (最近の履歴 /
+        // よく使う項目 / PC) and the placeholder keep the old null (a registration for Explorer drags)
+        FolderTarget? RefusedInFolder() =>
+            _vm.HasTab && _vm.SelectedTab.FolderTargetPath is { } real ? new FolderTarget(real, null, Refused: true) : null;
     }
 
     /// <summary>The paths of another app's file drop (null when it carries none or cannot be read).</summary>
@@ -1309,14 +1581,70 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
     }
 
-    /// <summary>While Ctrl+Shift+N makes its folder, typed text waits for the folder's edit box.</summary>
+    /// <summary>
+    /// While Ctrl+Shift+N makes its folder, typed text waits for the folder's edit box. Otherwise
+    /// letters typed on the list jump to a name (<see cref="JumpToTypedName"/>).
+    /// </summary>
     private void OnPreviewTextInput(object sender, TextCompositionEventArgs e)
     {
         if (_creatingFolder && !_rename.IsOpen)
         {
             _typeAhead.Append(e.Text);
             e.Handled = true;
+            return;
         }
+
+        if (JumpToTypedName(e.Text))
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>The letters of the jump to a typed name, joined while each comes within <see cref="TypedNamePauseMs"/> of the last.</summary>
+    private readonly System.Text.StringBuilder _typedName = new();
+    private long _typedNameAt;
+    private const int TypedNamePauseMs = 1000;
+
+    /// <summary>A typed name is still being joined: a Space now is part of it, not the selection key.</summary>
+    private bool IsTypingName => _typedName.Length > 0 && Environment.TickCount64 - _typedNameAt <= TypedNamePauseMs;
+
+    /// <summary>
+    /// Letters typed on the list move the cursor to the next item whose name starts with them, as in
+    /// Explorer, and select it alone; letters within a second of each other are joined into one
+    /// name. Not in a text box or a list with its own search, not while a name is edited, a marquee
+    /// runs or a menu has the keys, nor for Ctrl / Alt chords. Only committed text reaches
+    /// TextInput (an IME's composition raises TextInputUpdate, and its keys arrive as ImeProcessed),
+    /// so a converted name is matched as a whole. Returns true when the text was used.
+    /// </summary>
+    private bool JumpToTypedName(string text)
+    {
+        if (string.IsNullOrEmpty(text) || text.Any(char.IsControl) // Enter, Backspace, Esc, Ctrl + letter
+            || !_vm.HasTab || IsNameBusy || ActiveList.IsMarqueeRunning || IsMenuTakingKeys()
+            || Keyboard.FocusedElement is TextBoxBase or Selector
+            || (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) != 0)
+        {
+            return false;
+        }
+
+        if (!IsTypingName)
+        {
+            _typedName.Clear();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false; // no name starts with a space: Space alone is not a jump
+            }
+        }
+
+        _typedName.Append(text);
+        _typedNameAt = Environment.TickCount64;
+        _cascade.CloseAll(); // as the arrows: the cursor leaves the item a list may hang on
+        _cascade.NoteKeyMove();
+        if (_vm.MoveCursorToName(_typedName.ToString()) is { } card)
+        {
+            ActiveList.BringItemIntoView(card);
+        }
+
+        return true;
     }
 
     /// <summary>A name is edited, or a folder made for its edit box, or a committed name handled: an activation's reload waits.</summary>
@@ -1338,7 +1666,13 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// The menu of an item that is part of a selection of several applies to the whole selection;
     /// a right click outside the selection clears it and shows the item's own menu.
     /// </summary>
-    public void ItemContextMenu(CardViewModel vm, FrameworkElement element)
+    public void ItemContextMenu(CardViewModel vm, FrameworkElement element) => ShowItemMenu(vm, element, keyPoint: null);
+
+    /// <summary>
+    /// <see cref="ItemContextMenu"/>; with <paramref name="keyPoint"/> (Shift+F10, the Apps key) the
+    /// menu opens at that point of <paramref name="element"/> rather than at the pointer.
+    /// </summary>
+    private void ShowItemMenu(CardViewModel vm, FrameworkElement element, Point? keyPoint)
     {
         var item = vm.ToItemRef();
         var targets = _vm.SelectionTargets(item);
@@ -1347,7 +1681,37 @@ public partial class MainWindow : Window, IMainView, ICardHost
             _vm.ClearSelection();
         }
 
-        _menus.Show(item, element, targets);
+        _menus.Show(item, element, targets, keyPoint);
+    }
+
+    /// <summary>
+    /// Shift+F10 / the Apps key: the menu a right click on the selection shows, at the bottom-left
+    /// corner of the cursor's item (or of the first selected one when the cursor is not on the
+    /// selection), scrolled into view first; nothing selected: the menu of the blank area (the
+    /// folder shown) at the list's top-left corner. Whether it is the app's menu or Explorer's
+    /// follows the setting, as for the mouse (the same <see cref="ContextMenuFactory"/> calls).
+    /// </summary>
+    private void ShowMenuFromKeys()
+    {
+        _cascade.CloseAll(); // the menu is the list's, not the row a list's keys highlight
+        var tab = _vm.SelectedTab;
+        var selected = tab.SelectedCards();
+        if (selected.Count > 0)
+        {
+            var card = _vm.CursorCard() is { } cursor && tab.Selection.Contains(cursor.Path) ? cursor : selected[0];
+            if (ActiveList.BringItemIntoView(card) is { } element)
+            {
+                ShowItemMenu(card, element, new Point(0, element.ActualHeight));
+            }
+            else
+            {
+                ShowItemMenu(card, ContentHost, new Point(0, 0)); // not laid out yet: still the selection's menu
+            }
+
+            return;
+        }
+
+        _menus.ShowBlank(ContentHost, new Point(0, 0));
     }
 
     public void ItemRemove(CardViewModel vm) => _vm.RemoveCard(vm);
@@ -2215,6 +2579,27 @@ public partial class MainWindow : Window, IMainView, ICardHost
         try
         {
             return dialog.ShowDialog(this) == true ? dialog.FolderNames : null;
+        }
+        finally
+        {
+            _modalDepth--;
+        }
+    }
+
+    /// <summary>The list of every shortcut (F1 / Ctrl + /), modal over the window as the other dialogs.</summary>
+    private void ShowShortcutHelp()
+    {
+        _cascade.CloseAll();
+        var window = new ShortcutHelpWindow { Owner = this };
+        if (ActualHeight > 0)
+        {
+            window.MaxHeight = ActualHeight; // the list scrolls beyond that
+        }
+
+        _modalDepth++;
+        try
+        {
+            window.ShowDialog();
         }
         finally
         {

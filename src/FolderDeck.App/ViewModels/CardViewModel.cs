@@ -83,6 +83,13 @@ public sealed partial class CardViewModel : ObservableObject
     [ObservableProperty]
     private bool _isSelected;
 
+    /// <summary>
+    /// The tab's keyboard cursor is on this card and the keys moved it last (set by
+    /// <see cref="TabViewModel"/>): drawn as a dashed frame, as Explorer's focus rectangle.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isCursor;
+
     /// <summary>On the clipboard as this app's pending cut (drawn dimmed until it is pasted or replaced).</summary>
     [ObservableProperty]
     private bool _isCut;

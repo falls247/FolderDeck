@@ -193,6 +193,9 @@ public static class ShellContextMenu
     private static readonly HashSet<string> RemovedWithAppEntries =
         new(StringComparer.OrdinalIgnoreCase) { "copyaspath" };
 
+    /// <summary>The canonical verb of プロパティ (<see cref="ShowPropertiesAsync"/>).</summary>
+    private const string PropertiesVerb = "properties";
+
     /// <summary>1 while a menu is being built or shown (not while a finished one still pumps).</summary>
     private static int _open;
 
@@ -264,6 +267,32 @@ public static class ShellContextMenu
         return Start([folder], screenX, screenY, extended, mainWindow, app, background: true);
     }
 
+    /// <summary>
+    /// Opens Explorer's プロパティ for <paramref name="paths"/> (one sheet for all of them, as Explorer
+    /// does for a selection) without showing a menu: the "properties" command of the same menu
+    /// <see cref="ShowAsync"/> shows, run on a menu thread of its own, which goes on pumping while
+    /// the sheet is open (it may be this thread's window). With <paramref name="background"/> it is
+    /// the properties of the one folder in <paramref name="paths"/> through its background menu,
+    /// which also allows a drive or share root (the drive's own sheet). Completes with
+    /// <see cref="ShellMenuOutcome.Invoked"/> once the command was handed over; never faults.
+    /// </summary>
+    public static Task<ShellMenuResult> ShowPropertiesAsync(IReadOnlyList<string> paths, bool background, nint mainWindow)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        var targets = paths.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(PathTools.Comparer).ToList();
+        bool usable = background
+            ? targets.Count == 1 && PathTools.IsFullyQualified(targets[0])
+            : targets.Count > 0 && targets.TrueForAll(path => TransferRules.IsTransferable(path));
+        if (!usable)
+        {
+            return Task.FromResult(new ShellMenuResult(ShellMenuOutcome.Unavailable, null, "この項目のプロパティは表示できません。"));
+        }
+
+        // The point only matters to handlers that place a window at it; the sheet places itself.
+        ShellInterop.TryGetCursorPos(out int x, out int y);
+        return Start(targets, x, y, extended: false, mainWindow, [], background, PropertiesVerb);
+    }
+
     /// <summary>A copy of the caller's entries (the list must not change under the menu thread).</summary>
     private static ShellMenuAppEntry[] CopyAppEntries(IReadOnlyList<ShellMenuAppEntry>? appEntries)
     {
@@ -288,14 +317,15 @@ public static class ShellContextMenu
     }
 
     private static Task<ShellMenuResult> Start(
-        List<string> targets, int screenX, int screenY, bool extended, nint mainWindow, ShellMenuAppEntry[] app, bool background)
+        List<string> targets, int screenX, int screenY, bool extended, nint mainWindow, ShellMenuAppEntry[] app, bool background,
+        string? verb = null)
     {
         if (Interlocked.CompareExchange(ref _open, 1, 0) != 0)
         {
             return Task.FromResult(new ShellMenuResult(ShellMenuOutcome.Unavailable, null, "別のメニューを表示中です。"));
         }
 
-        var session = new Session(targets, screenX, screenY, extended, mainWindow, app, background);
+        var session = new Session(targets, screenX, screenY, extended, mainWindow, app, background, verb);
         session.Start();
         return session.Completion;
     }
@@ -519,6 +549,9 @@ public static class ShellContextMenu
 
         /// <summary>The background menu of the one folder in <see cref="_paths"/>, not the menu of items.</summary>
         private readonly bool _background;
+
+        /// <summary>A verb run without showing the menu (<see cref="ShowPropertiesAsync"/>); null: the menu is shown.</summary>
+        private readonly string? _verb;
         private readonly TaskCompletionSource<ShellMenuResult> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>
@@ -551,7 +584,7 @@ public static class ShellContextMenu
         private long _phaseStart;
         private readonly List<string> _phaseTimes = new(5);
 
-        public Session(List<string> paths, int x, int y, bool extended, nint mainWindow, ShellMenuAppEntry[] app, bool background)
+        public Session(List<string> paths, int x, int y, bool extended, nint mainWindow, ShellMenuAppEntry[] app, bool background, string? verb)
         {
             _paths = paths;
             _x = x;
@@ -560,6 +593,7 @@ public static class ShellContextMenu
             _mainWindow = mainWindow;
             _app = app;
             _background = background;
+            _verb = verb;
         }
 
         public Task<ShellMenuResult> Completion => _result.Task;
@@ -830,6 +864,12 @@ public static class ShellContextMenu
                 if (filled.Failed)
                 {
                     Complete(ShellMenuOutcome.Unavailable, null, MessageOf(filled));
+                    return;
+                }
+
+                if (_verb is not null)
+                {
+                    RunVerb(dispatcher, contextMenu, menu, owner);
                     return;
                 }
 
@@ -1201,6 +1241,98 @@ public static class ShellContextMenu
             info.nShow = SW_SHOWNORMAL;
             info.ptInvoke = new System.Drawing.Point(_x, _y);
             contextMenu.InvokeCommand((CMINVOKECOMMANDINFO*)&info);
+        }
+
+        /// <summary>
+        /// Runs <see cref="_verb"/> of the filled <paramref name="menu"/> without showing it, as if
+        /// its entry had been picked: same command, same owner, same pumping afterwards (the sheet of
+        /// プロパティ may belong to this thread). The entry is found by its verb; a menu that names no
+        /// verbs (the item array of several parents) gets the verb by name, which the shell's
+        /// default menu understands too.
+        /// </summary>
+        private unsafe void RunVerb(Dispatcher dispatcher, IContextMenu contextMenu, HMENU menu, HWND owner)
+        {
+            uint? offset = null;
+            for (int i = 0, count = PInvoke.GetMenuItemCount(menu); i < count; i++)
+            {
+                if (TryGetItem(menu, i, out MENUITEMINFOW item) && !IsSeparator(item) && item.hSubMenu.IsNull
+                    && item.wID >= FirstId && item.wID <= LastId
+                    && string.Equals(VerbOf(contextMenu, item.wID - FirstId), _verb, StringComparison.OrdinalIgnoreCase))
+                {
+                    offset = item.wID - FirstId;
+                    break;
+                }
+            }
+
+            // As before the menu shows: the timeout may have given up on this session meanwhile.
+            if (Interlocked.CompareExchange(ref _stage, StageShowing, StageBuilding) != StageBuilding)
+            {
+                EndBuild(tooLate: true);
+                Complete(ShellMenuOutcome.TimedOut, null, TimedOutMessage);
+                return;
+            }
+
+            Interlocked.Exchange(ref _timer, null)?.Dispose();
+            EndBuild(tooLate: false);
+
+            // The window the command opens may take the foreground only from a foreground owner.
+            PInvoke.SetForegroundWindow(owner);
+            string? invokeError = null;
+            var early = new Timer(_ => Complete(ShellMenuOutcome.Invoked, _verb, null), null, InvokeReportDelay, Timeout.InfiniteTimeSpan);
+            try
+            {
+                if (offset is { } found)
+                {
+                    Invoke(contextMenu, owner, found);
+                }
+                else
+                {
+                    InvokeByName(contextMenu, owner, _verb!);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ex.HResult is not (ErrorCancelled or EAbort))
+                {
+                    invokeError = ex.Message;
+                    AppLog.Warn($"Shell verb '{_verb}' failed: {Describe()}", ex);
+                }
+            }
+            finally
+            {
+                early.Dispose();
+            }
+
+            if (invokeError is not null)
+            {
+                GiveForegroundBack(owner);
+                Complete(ShellMenuOutcome.Failed, _verb, invokeError);
+                return;
+            }
+
+            AppLog.Info($"Shell verb '{_verb}' on {_paths.Count} item(s), first {_paths[0]}");
+            Complete(ShellMenuOutcome.Invoked, _verb, null);
+            PumpAfterInvoke(dispatcher, owner);
+            GiveForegroundBack(owner);
+        }
+
+        /// <summary>Invokes <paramref name="verb"/> by its canonical name (ANSI and Unicode, as CMIC_MASK_UNICODE asks).</summary>
+        private unsafe void InvokeByName(IContextMenu contextMenu, HWND owner, string verb)
+        {
+            byte[] ansi = System.Text.Encoding.ASCII.GetBytes(verb + "\0");
+            fixed (byte* ansiVerb = ansi)
+            fixed (char* wideVerb = verb) // a pinned string ends with '\0'
+            {
+                CMINVOKECOMMANDINFOEX info = default;
+                info.cbSize = (uint)sizeof(CMINVOKECOMMANDINFOEX);
+                info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
+                info.hwnd = owner;
+                info.lpVerb = (PCSTR)ansiVerb;
+                info.lpVerbW = wideVerb;
+                info.nShow = SW_SHOWNORMAL;
+                info.ptInvoke = new System.Drawing.Point(_x, _y);
+                contextMenu.InvokeCommand((CMINVOKECOMMANDINFO*)&info);
+            }
         }
 
         /// <summary>
