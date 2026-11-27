@@ -70,15 +70,18 @@ public sealed class AppServices : IDisposable
     }
 
     /// <summary>
-    /// One line for app.log: the process's working set and managed heap, and what the two largest
-    /// caches hold (thumbnail LRU, folder listings). Cheap: counters only, no walk.
+    /// One line for app.log: the process's working set and managed heap, what the two largest
+    /// caches hold (thumbnail LRU, folder listings), and what the memory is made of
+    /// (<see cref="FolderDeck.Shell.ProcessMemory"/>: private bytes, committed memory by kind, handles). Cheap:
+    /// counters and one walk of the address space.
     /// </summary>
     public string DescribeMemory()
     {
         const int Mb = 1024 * 1024;
         return $"memory: ws {Environment.WorkingSet / Mb} MB, managed {GC.GetTotalMemory(forceFullCollection: false) / Mb} MB, "
             + $"thumbs {Thumbnails.CachedCount} ({Thumbnails.CachedBytes / Mb} MB), "
-            + $"listings {Listings.CachedListings} ({Listings.CachedEntries} entries)";
+            + $"listings {Listings.CachedListings} ({Listings.CachedEntries} entries); "
+            + FolderDeck.Shell.ProcessMemory.Describe();
     }
 
     public void ClearCaches()

@@ -79,14 +79,16 @@
 
             <!-- 名前: the name cell is as wide as its content, the sub line of a top list takes the rest -->
             <!--
-              NameColumn (the whole 名前 column, up to 更新日時) is what a folder's list hangs beside
-              (ICardHost.RowMouseEnter): resting anywhere on the column (icon, name, 📌, the sub line or
-              the blank after it) opens the list at the column's right edge; resting on the other columns
-              opens nothing. Transparent, not null: the blank after the name must be hit too.
+              NameCell (icon + name + 📌, as wide as its content) is what a folder's list hangs beside
+              (ICardHost.RowMouseEnter): resting on it opens the list right after the name, not at the
+              column's right edge far from a short name. The sub line, the blank after the name and the
+              other columns open nothing: the list covers them, so resting there would open it under the
+              pointer. Transparent, not null: the padding around the name must be hit too.
             -->
-            <DockPanel x:Name="NameColumn" Grid.Column="0" Background="Transparent"
-                       MouseEnter="OnNameEnter" MouseLeave="OnNameLeave" MouseMove="OnNameMove">
-                <Border DockPanel.Dock="Left" Background="Transparent" Padding="6,0,8,0">
+            <!-- NameColumn: the whole column, for the rename box (RenameEditor), which spans it -->
+            <DockPanel x:Name="NameColumn" Grid.Column="0">
+                <Border x:Name="NameCell" DockPanel.Dock="Left" Background="Transparent" Padding="6,0,8,0"
+                        MouseEnter="OnNameEnter" MouseLeave="OnNameLeave" MouseMove="OnNameMove">
                     <DockPanel>
                         <!-- 16 px icon; while the item is being opened (§6.8) a spinner takes its place -->
                         <Grid DockPanel.Dock="Left" Width="16" Height="16" Margin="0,0,7,0" VerticalAlignment="Center">

@@ -33,7 +33,7 @@ public sealed class SessionMonitor
 
     private static readonly TimeSpan AliveInterval = TimeSpan.FromMinutes(1);
 
-    /// <summary>The working set has to move this much before the memory line is logged again.</summary>
+    /// <summary>The working set or the private bytes have to move this much before the memory line is logged again.</summary>
     private const long MemoryLogStepMb = 64;
 
     private readonly SessionMarker _marker;
@@ -42,6 +42,9 @@ public sealed class SessionMonitor
     private long? _sysCloseTick;
     private string? _sessionEnding;
     private long _loggedWorkingSetMb = -MemoryLogStepMb;
+
+    /// <summary>The private bytes at the last memory line: a leak grows them, while Windows may trim the working set.</summary>
+    private long _loggedPrivateMb = -MemoryLogStepMb;
 
     public SessionMonitor(string logDirectory, string version)
     {
@@ -107,10 +110,12 @@ public sealed class SessionMonitor
     private void Touch()
     {
         long workingSet = 0;
+        long privateBytes = 0;
         try
         {
             using var self = Process.GetCurrentProcess();
             workingSet = self.WorkingSet64;
+            privateBytes = self.PrivateMemorySize64;
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
         {
@@ -123,9 +128,12 @@ public sealed class SessionMonitor
             ManagedHeapMb = GC.GetTotalMemory(forceFullCollection: false) / (1024 * 1024),
         };
         _marker.Write(_info);
-        if (DescribeMemory is { } describe && Math.Abs(_info.WorkingSetMb - _loggedWorkingSetMb) >= MemoryLogStepMb)
+        long privateMb = privateBytes / (1024 * 1024);
+        if (DescribeMemory is { } describe
+            && (Math.Abs(_info.WorkingSetMb - _loggedWorkingSetMb) >= MemoryLogStepMb || Math.Abs(privateMb - _loggedPrivateMb) >= MemoryLogStepMb))
         {
             _loggedWorkingSetMb = _info.WorkingSetMb;
+            _loggedPrivateMb = privateMb;
             AppLog.Info(describe());
         }
     }
