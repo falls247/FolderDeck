@@ -15,13 +15,13 @@ public sealed class AppServices : IDisposable
     public const string ThumbCacheFolderName = "thumbs";
 
     private readonly StaWorkerPool _typeNameWorker = new(1, "TypeNames");
-    private volatile bool _showHidden;
+    private volatile ListingFilter _filter;
 
     public AppServices(DataStores stores)
     {
         Stores = stores;
-        _showHidden = stores.Settings.Current.ShowHidden;
-        Listings = new FolderListingCache(FileSystem, () => _showHidden);
+        _filter = stores.Settings.Current.ToListingFilter();
+        Listings = new FolderListingCache(FileSystem, () => _filter);
         Thumbnails = new ThumbnailService(
             Path.Combine(stores.DataDirectory, ThumbCacheFolderName),
             stores.Settings.Current.ThumbCacheMb * 1024L * 1024L);
@@ -55,14 +55,15 @@ public sealed class AppServices : IDisposable
     /// <summary>At most 8 cards load their details at the same time (§7.4.1).</summary>
     public SemaphoreSlim DetailGate { get; } = new(8, 8);
 
-    public bool ShowHidden
+    /// <summary>What listings show (show_hidden, show_dot_items). Changing it drops the cached listings and covers.</summary>
+    public ListingFilter Filter
     {
-        get => _showHidden;
+        get => _filter;
         set
         {
-            if (_showHidden != value)
+            if (_filter != value)
             {
-                _showHidden = value;
+                _filter = value;
                 ClearCaches();
             }
         }

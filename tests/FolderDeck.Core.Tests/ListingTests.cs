@@ -48,7 +48,7 @@ public class FolderListerTests
         string hiddenDir = tmp.MakeDir("hiddendir");
         File.SetAttributes(hiddenDir, File.GetAttributes(hiddenDir) | FileAttributes.Hidden);
 
-        var listing = FolderLister.List(RealFileSystem.Instance, tmp.Path, includeHidden: false, CancellationToken.None);
+        var listing = FolderLister.List(RealFileSystem.Instance, tmp.Path, ListingFilter.None, CancellationToken.None);
 
         Assert.Equal(ListingStatus.Ok, listing.Status);
         Assert.Equal(["sub2", "sub10", "2.txt", "10.txt", "B.pdf"], listing.Entries.Select(e => e.Name));
@@ -59,7 +59,7 @@ public class FolderListerTests
     }
 
     [Fact]
-    public void RealFileSystem_IncludeHidden_ShowsHiddenAndSystemButNeverDotNames()
+    public void RealFileSystem_IncludeHidden_ShowsHiddenAndSystemButNotDotNames()
     {
         using var tmp = new TempDir();
         tmp.MakeFile("a.txt");
@@ -69,11 +69,28 @@ public class FolderListerTests
         string hiddenDir = tmp.MakeDir("hiddendir");
         File.SetAttributes(hiddenDir, File.GetAttributes(hiddenDir) | FileAttributes.Hidden);
 
-        var listing = FolderLister.List(RealFileSystem.Instance, tmp.Path, includeHidden: true, CancellationToken.None);
+        var listing = FolderLister.List(RealFileSystem.Instance, tmp.Path, ListingFilter.Hidden, CancellationToken.None);
 
         Assert.Equal(["hiddendir", "a.txt", "hidden.txt", "system.txt"], listing.Entries.Select(e => e.Name));
         Assert.Equal(1, listing.FolderCount);
         Assert.Equal(3, listing.FileCount);
+    }
+
+    [Theory]
+    [InlineData(ListingFilter.DotNames, new[] { ".dotdir", ".dotfile", "a.txt" })]
+    [InlineData(ListingFilter.DotNames | ListingFilter.Hidden, new[] { ".dotdir", ".dotfile", ".hiddendot", "a.txt", "hidden.txt" })]
+    public void RealFileSystem_DotNames_ListsDotNames_HiddenOnesOnlyWithHiddenToo(ListingFilter filter, string[] expected)
+    {
+        using var tmp = new TempDir();
+        tmp.MakeFile("a.txt");
+        tmp.MakeFile(".dotfile");
+        tmp.MakeFile(".hiddendot", attributes: FileAttributes.Hidden);
+        tmp.MakeFile("hidden.txt", attributes: FileAttributes.Hidden);
+        tmp.MakeDir(".dotdir");
+
+        var listing = FolderLister.List(RealFileSystem.Instance, tmp.Path, filter, CancellationToken.None);
+
+        Assert.Equal(expected, listing.Entries.Select(e => e.Name).Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -81,7 +98,7 @@ public class FolderListerTests
     {
         using var tmp = new TempDir();
         tmp.MakeFile("five.txt", "12345");
-        var listing = FolderLister.List(RealFileSystem.Instance, tmp.Path, false, CancellationToken.None);
+        var listing = FolderLister.List(RealFileSystem.Instance, tmp.Path, ListingFilter.None, CancellationToken.None);
         Assert.Equal(5, listing.Entries.Single().Length);
     }
 
@@ -89,7 +106,7 @@ public class FolderListerTests
     public void MissingFolder_IsNotFound()
     {
         using var tmp = new TempDir();
-        var listing = FolderLister.List(RealFileSystem.Instance, tmp.Combine("nope"), false, CancellationToken.None);
+        var listing = FolderLister.List(RealFileSystem.Instance, tmp.Combine("nope"), ListingFilter.None, CancellationToken.None);
         Assert.Equal(ListingStatus.NotFound, listing.Status);
         Assert.Equal("見つかりません", listing.StatusMessage);
         Assert.Empty(listing.Entries);
@@ -100,7 +117,7 @@ public class FolderListerTests
     {
         using var tmp = new TempDir();
         string file = tmp.MakeFile("a.txt");
-        var listing = FolderLister.List(RealFileSystem.Instance, file, false, CancellationToken.None);
+        var listing = FolderLister.List(RealFileSystem.Instance, file, ListingFilter.None, CancellationToken.None);
         Assert.NotEqual(ListingStatus.Ok, listing.Status);
     }
 
@@ -108,7 +125,7 @@ public class FolderListerTests
     public void EmptyFolder_IsOkAndEmpty()
     {
         using var tmp = new TempDir();
-        var listing = FolderLister.List(RealFileSystem.Instance, tmp.Path, false, CancellationToken.None);
+        var listing = FolderLister.List(RealFileSystem.Instance, tmp.Path, ListingFilter.None, CancellationToken.None);
         Assert.True(listing.IsOk);
         Assert.Empty(listing.Entries);
         Assert.Equal(0, listing.FolderCount);
@@ -121,7 +138,7 @@ public class FolderListerTests
         using var tmp = new TempDir();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        Assert.ThrowsAny<OperationCanceledException>(() => FolderLister.List(RealFileSystem.Instance, tmp.Path, false, cts.Token));
+        Assert.ThrowsAny<OperationCanceledException>(() => FolderLister.List(RealFileSystem.Instance, tmp.Path, ListingFilter.None, cts.Token));
     }
 
     [Fact]
@@ -149,7 +166,7 @@ public class FolderListerTests
             .AddFile(@"C:\r\2.txt")
             .AddFolder(@"C:\r\z")
             .AddFolder(@"C:\r\a");
-        var listing = FolderLister.List(fs, @"C:\r", false, CancellationToken.None);
+        var listing = FolderLister.List(fs, @"C:\r", ListingFilter.None, CancellationToken.None);
         Assert.Equal(["a", "z", "2.txt", "10.txt"], listing.Entries.Select(e => e.Name));
     }
 }
@@ -179,7 +196,7 @@ public class CoverFinderTests
             .AddFile(@"C:\r\2.png")
             .AddFile(@"C:\r\1.txt")
             .AddFile(@"C:\r\sub\0.png");
-        Assert.Equal(@"C:\r\2.png", CoverFinder.Find(fs, @"C:\r", null, false, CancellationToken.None));
+        Assert.Equal(@"C:\r\2.png", CoverFinder.Find(fs, @"C:\r", null, ListingFilter.None, CancellationToken.None));
     }
 
     [Fact]
@@ -189,7 +206,7 @@ public class CoverFinderTests
             .AddFile(@"C:\r\note.txt")
             .AddFile(@"C:\r\a\x\deep.png")
             .AddFile(@"C:\r\b\shallow.png");
-        Assert.Equal(@"C:\r\a\x\deep.png", CoverFinder.Find(fs, @"C:\r", null, false, CancellationToken.None));
+        Assert.Equal(@"C:\r\a\x\deep.png", CoverFinder.Find(fs, @"C:\r", null, ListingFilter.None, CancellationToken.None));
     }
 
     [Fact]
@@ -198,17 +215,17 @@ public class CoverFinderTests
         var fs = new FakeFileSystem()
             .AddFile(@"C:\r\a.txt")
             .AddFile(@"C:\r\s\b.pdf");
-        Assert.Null(CoverFinder.Find(fs, @"C:\r", null, false, CancellationToken.None));
+        Assert.Null(CoverFinder.Find(fs, @"C:\r", null, ListingFilter.None, CancellationToken.None));
     }
 
     [Fact]
     public void Depth6_IsFound_Depth7_IsNot()
     {
         var found = new FakeFileSystem().AddFile(@"C:\r\1\2\3\4\5\6\img.png");
-        Assert.Equal(@"C:\r\1\2\3\4\5\6\img.png", CoverFinder.Find(found, @"C:\r", null, false, CancellationToken.None));
+        Assert.Equal(@"C:\r\1\2\3\4\5\6\img.png", CoverFinder.Find(found, @"C:\r", null, ListingFilter.None, CancellationToken.None));
 
         var tooDeep = new FakeFileSystem().AddFile(@"C:\r\1\2\3\4\5\6\7\img.png");
-        Assert.Null(CoverFinder.Find(tooDeep, @"C:\r", null, false, CancellationToken.None));
+        Assert.Null(CoverFinder.Find(tooDeep, @"C:\r", null, ListingFilter.None, CancellationToken.None));
         Assert.DoesNotContain(@"C:\r\1\2\3\4\5\6\7", tooDeep.Enumerated, StringComparer.OrdinalIgnoreCase);
     }
 
@@ -223,7 +240,7 @@ public class CoverFinderTests
         }
 
         within.AddFile(@"C:\r\f63\img.png");
-        Assert.Equal(@"C:\r\f63\img.png", CoverFinder.Find(within, @"C:\r", null, false, CancellationToken.None));
+        Assert.Equal(@"C:\r\f63\img.png", CoverFinder.Find(within, @"C:\r", null, ListingFilter.None, CancellationToken.None));
         Assert.Equal(64, within.EnumerateCalls);
 
         var beyond = new FakeFileSystem();
@@ -233,7 +250,7 @@ public class CoverFinderTests
         }
 
         beyond.AddFile(@"C:\r\f64\img.png");
-        Assert.Null(CoverFinder.Find(beyond, @"C:\r", null, false, CancellationToken.None));
+        Assert.Null(CoverFinder.Find(beyond, @"C:\r", null, ListingFilter.None, CancellationToken.None));
         Assert.Equal(CoverFinder.MaxFolders, beyond.EnumerateCalls);
     }
 
@@ -247,7 +264,7 @@ public class CoverFinderTests
         }
 
         fs.AddFile(@"C:\r\b\img.png");
-        Assert.Null(CoverFinder.Find(fs, @"C:\r", null, false, CancellationToken.None));
+        Assert.Null(CoverFinder.Find(fs, @"C:\r", null, ListingFilter.None, CancellationToken.None));
         Assert.True(fs.EnumerateCalls <= CoverFinder.MaxFolders);
     }
 
@@ -258,7 +275,7 @@ public class CoverFinderTests
             .AddFolder(@"C:\r\loop", reparse: true)
             .AddFile(@"C:\r\loop\img.png")
             .AddFile(@"C:\r\real\other.png");
-        Assert.Equal(@"C:\r\real\other.png", CoverFinder.Find(fs, @"C:\r", null, false, CancellationToken.None));
+        Assert.Equal(@"C:\r\real\other.png", CoverFinder.Find(fs, @"C:\r", null, ListingFilter.None, CancellationToken.None));
         Assert.DoesNotContain(@"C:\r\loop", fs.Enumerated, StringComparer.OrdinalIgnoreCase);
     }
 
@@ -268,17 +285,17 @@ public class CoverFinderTests
         var fs = new FakeFileSystem()
             .AddFolder(@"C:\r\h", extra: FileAttributes.Hidden)
             .AddFile(@"C:\r\h\img.png");
-        Assert.Null(CoverFinder.Find(fs, @"C:\r", null, false, CancellationToken.None));
-        Assert.Equal(@"C:\r\h\img.png", CoverFinder.Find(fs, @"C:\r", null, true, CancellationToken.None));
+        Assert.Null(CoverFinder.Find(fs, @"C:\r", null, ListingFilter.None, CancellationToken.None));
+        Assert.Equal(@"C:\r\h\img.png", CoverFinder.Find(fs, @"C:\r", null, ListingFilter.Hidden, CancellationToken.None));
     }
 
     [Fact]
     public void RootEntries_AreReused()
     {
         var fs = new FakeFileSystem().AddFile(@"C:\r\a.png");
-        var entries = FolderLister.List(fs, @"C:\r", false, CancellationToken.None).Entries;
+        var entries = FolderLister.List(fs, @"C:\r", ListingFilter.None, CancellationToken.None).Entries;
         int before = fs.EnumerateCalls;
-        Assert.Equal(@"C:\r\a.png", CoverFinder.Find(fs, @"C:\r", entries, false, CancellationToken.None));
+        Assert.Equal(@"C:\r\a.png", CoverFinder.Find(fs, @"C:\r", entries, ListingFilter.None, CancellationToken.None));
         Assert.Equal(before, fs.EnumerateCalls);
     }
 
@@ -307,10 +324,10 @@ public class CoverFinderTests
 
         try
         {
-            var listing = FolderLister.List(RealFileSystem.Instance, root, false, CancellationToken.None);
+            var listing = FolderLister.List(RealFileSystem.Instance, root, ListingFilter.None, CancellationToken.None);
             Assert.True(listing.Entries.Single().IsReparsePoint);
             Assert.True(listing.Entries.Single().IsDirectory);
-            Assert.Null(CoverFinder.Find(RealFileSystem.Instance, root, null, false, CancellationToken.None));
+            Assert.Null(CoverFinder.Find(RealFileSystem.Instance, root, null, ListingFilter.None, CancellationToken.None));
         }
         finally
         {
@@ -326,7 +343,7 @@ public class FolderListingCacheTests
     {
         long ticks = 1_000;
         var fs = new FakeFileSystem().AddFile(@"C:\r\a.txt");
-        var cache = new FolderListingCache(fs, () => false, tickSource: () => ticks);
+        var cache = new FolderListingCache(fs, () => ListingFilter.None, tickSource: () => ticks);
 
         var first = await cache.GetAsync(@"C:\r", CancellationToken.None);
         var second = await cache.GetAsync(@"c:\R", CancellationToken.None);
@@ -352,7 +369,7 @@ public class FolderListingCacheTests
             .AddFile(@"C:\a\1.txt")
             .AddFile(@"C:\a\2.txt")
             .AddFile(@"C:\b\1.txt");
-        var cache = new FolderListingCache(fs, () => false, tickSource: () => ticks);
+        var cache = new FolderListingCache(fs, () => ListingFilter.None, tickSource: () => ticks);
 
         await cache.GetAsync(@"C:\a", CancellationToken.None);
         ticks += 60_001; // a has expired: it is never served again
@@ -377,7 +394,7 @@ public class FolderListingCacheTests
         }
 
         // 5 entries count as 2 (a quarter of the budget) + 1: a + b fit, c pushes a out.
-        var cache = new FolderListingCache(fs, () => false, tickSource: () => ticks, maxTotalEntries: 8);
+        var cache = new FolderListingCache(fs, () => ListingFilter.None, tickSource: () => ticks, maxTotalEntries: 8);
         foreach (string folder in new[] { "a", "b", "c" })
         {
             await cache.GetAsync($@"C:\{folder}", CancellationToken.None);
@@ -397,7 +414,7 @@ public class FolderListingCacheTests
         using var gate = new ManualResetEventSlim(false);
         var fs = new FakeFileSystem().AddFile(@"C:.txt");
         fs.Gate = gate;
-        var cache = new FolderListingCache(fs, () => false);
+        var cache = new FolderListingCache(fs, () => ListingFilter.None);
 
         var before = cache.GetAsync(@"C:", CancellationToken.None); // e.g. an auto refresh, still running
         while (Volatile.Read(ref fs.EnumerateCalls) == 0)
@@ -422,7 +439,7 @@ public class FolderListingCacheTests
     public async Task Clear_ForcesReload()
     {
         var fs = new FakeFileSystem().AddFile(@"C:\r\a.txt");
-        var cache = new FolderListingCache(fs, () => false);
+        var cache = new FolderListingCache(fs, () => ListingFilter.None);
         await cache.GetAsync(@"C:\r", CancellationToken.None);
         cache.Clear();
         Assert.False(cache.TryGetFresh(@"C:\r", out _));
@@ -434,7 +451,7 @@ public class FolderListingCacheTests
     public async Task Invalidate_ForcesReloadOfOnePath()
     {
         var fs = new FakeFileSystem().AddFile(@"C:\r\a.txt").AddFile(@"C:\s\b.txt");
-        var cache = new FolderListingCache(fs, () => false);
+        var cache = new FolderListingCache(fs, () => ListingFilter.None);
         await cache.GetAsync(@"C:\r", CancellationToken.None);
         await cache.GetAsync(@"C:\s", CancellationToken.None);
         cache.Invalidate(@"C:\r");
@@ -445,12 +462,12 @@ public class FolderListingCacheTests
     [Fact]
     public async Task HiddenSettingChange_IsNotServedFromOldInFlight()
     {
-        bool hidden = false;
+        var filter = ListingFilter.None;
         var fs = new FakeFileSystem().AddFile(@"C:\r\h.txt", extra: FileAttributes.Hidden);
-        var cache = new FolderListingCache(fs, () => hidden);
+        var cache = new FolderListingCache(fs, () => filter);
         var a = await cache.GetAsync(@"C:\r", CancellationToken.None);
         Assert.Empty(a.Entries);
-        hidden = true;
+        filter = ListingFilter.Hidden;
         cache.Clear();
         var b = await cache.GetAsync(@"C:\r", CancellationToken.None);
         Assert.Single(b.Entries);
@@ -460,7 +477,7 @@ public class FolderListingCacheTests
     public async Task ConcurrentRequests_ShareOneEnumeration()
     {
         var fs = new BlockingFileSystem();
-        var cache = new FolderListingCache(fs, () => false);
+        var cache = new FolderListingCache(fs, () => ListingFilter.None);
 
         var t1 = cache.GetAsync(@"C:\r", CancellationToken.None);
         var t2 = cache.GetAsync(@"C:\r", CancellationToken.None);
@@ -477,7 +494,7 @@ public class FolderListingCacheTests
     public async Task EnumerationIsCancelled_OnlyWhenEveryCallerLeaves()
     {
         var fs = new BlockingFileSystem();
-        var cache = new FolderListingCache(fs, () => false);
+        var cache = new FolderListingCache(fs, () => ListingFilter.None);
         using var cts1 = new CancellationTokenSource();
         using var cts2 = new CancellationTokenSource();
 
@@ -504,7 +521,7 @@ public class FolderListingCacheTests
     public async Task Errors_AreReturnedAsListings()
     {
         var fs = new FakeFileSystem();
-        var cache = new FolderListingCache(fs, () => false);
+        var cache = new FolderListingCache(fs, () => ListingFilter.None);
         var r = await cache.GetAsync(@"C:\missing", CancellationToken.None);
         Assert.Equal(ListingStatus.NotFound, r.Status);
     }
@@ -521,7 +538,7 @@ public class FolderListingCacheTests
 
         public ManualResetEventSlim Cancelled { get; } = new();
 
-        public IReadOnlyList<FsEntry> EnumerateDirectory(string path, bool includeHidden, CancellationToken cancellationToken)
+        public IReadOnlyList<FsEntry> EnumerateDirectory(string path, ListingFilter filter, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _calls);
             Started.Set();
@@ -600,7 +617,7 @@ public class ExistenceTests
 
     private sealed class HangingFileSystem(ManualResetEventSlim release) : IFileSystem
     {
-        public IReadOnlyList<FsEntry> EnumerateDirectory(string path, bool includeHidden, CancellationToken cancellationToken) => [];
+        public IReadOnlyList<FsEntry> EnumerateDirectory(string path, ListingFilter filter, CancellationToken cancellationToken) => [];
 
         public PathKind GetKind(string path)
         {

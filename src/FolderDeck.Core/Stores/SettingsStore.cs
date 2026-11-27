@@ -215,6 +215,16 @@ public sealed class AppSettings
     public bool ShowHidden { get; set; }
 
     /// <summary>
+    /// List names starting with '.' (.vscode, .gitignore). Independent of <see cref="ShowHidden"/>: a '.'
+    /// entry that is also hidden (Git for Windows marks .git so) needs both.
+    /// </summary>
+    public bool ShowDotItems { get; set; }
+
+    /// <summary>What folder listings include, from <see cref="ShowHidden"/> and <see cref="ShowDotItems"/>.</summary>
+    public ListingFilter ToListingFilter() =>
+        (ShowHidden ? ListingFilter.Hidden : ListingFilter.None) | (ShowDotItems ? ListingFilter.DotNames : ListingFilter.None);
+
+    /// <summary>
     /// Ask before a program (ShellActions.IsExecutable) runs. Not asked for the double click of
     /// <see cref="OpenOnDoubleClick"/> (on a card / details row); every other way of opening still asks.
     /// </summary>

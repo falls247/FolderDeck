@@ -555,6 +555,7 @@ public class SettingsStoreTests
         Assert.True(s.ConfirmExecutables);
         Assert.True(s.IncludeWindowsRecent);
         Assert.False(s.ShowHidden);
+        Assert.False(s.ShowDotItems);
         Assert.False(s.AddToWindowsRecent);
         Assert.Equal(100, s.RecentLimit);
         Assert.Equal(50, s.FrequentLimit);
@@ -859,6 +860,7 @@ public class SettingsStoreTests
             s.Window = new WindowPlacementSetting { Left = 10, Top = 20, Width = 900, Height = 700, Maximized = true };
             s.RecentClearedAt = FakeClock.Default;
             s.ShowHidden = true;
+            s.ShowDotItems = true;
             s.DetailsColumns = new Dictionary<string, double> { [DetailsColumns.Size] = 120 };
         });
         store.Flush();
@@ -872,6 +874,7 @@ public class SettingsStoreTests
         Assert.Contains("\"sidebar_width\": 300", text);
         Assert.Contains("\"recent_cleared_at\": \"2026-11-21T01:23:45+00:00\"", text);
         Assert.Contains("\"show_hidden\": true", text);
+        Assert.Contains("\"show_dot_items\": true", text);
 
         var reloaded = new SettingsStore(file, FakeClock.Fixed());
         reloaded.Load();

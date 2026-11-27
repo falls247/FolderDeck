@@ -469,8 +469,8 @@ public sealed partial class CardViewModel : ObservableObject
             return cached.Length == 0 ? null : cached;
         }
 
-        bool hidden = _services.ShowHidden;
-        string? cover = await Task.Run(() => CoverFinder.Find(_services.FileSystem, Path, listing.Entries, hidden, ct), ct);
+        var filter = _services.Filter;
+        string? cover = await Task.Run(() => CoverFinder.Find(_services.FileSystem, Path, listing.Entries, filter, ct), ct);
         _services.Covers.Set(Path, cover ?? string.Empty);
         return cover;
     }

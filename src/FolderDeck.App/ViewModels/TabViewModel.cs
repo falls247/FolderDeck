@@ -918,7 +918,7 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
 
         if (!_baseIsTop)
         {
-            // folders stay before files, except by modified time (they interleave by their own time)
+            // folders before files ascending, after them descending (Explorer); by modified time they interleave by their own time
             comparer = CardOrdering.InsideFolder(SortMode, c => c.IsFolderLike, comparer);
         }
 

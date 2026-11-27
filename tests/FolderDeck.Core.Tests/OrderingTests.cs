@@ -185,18 +185,30 @@ public class CardOrderingTests
     }
 
     [Theory]
-    [InlineData(CardSortMode.NameAsc)]
-    [InlineData(CardSortMode.NameDesc)]
-    [InlineData(CardSortMode.SizeAsc)]
-    [InlineData(CardSortMode.SizeDesc)]
-    [InlineData(CardSortMode.TypeAsc)]
-    [InlineData(CardSortMode.TypeDesc)]
-    public void InsideFolder_OtherModes_KeepFoldersFirst(CardSortMode mode)
+    // Explorer: ascending puts folders before files, descending after them
+    [InlineData(CardSortMode.NameAsc, new[] { "y", "z", "a.txt", "m.bin" })]
+    [InlineData(CardSortMode.NameDesc, new[] { "m.bin", "a.txt", "z", "y" })]
+    [InlineData(CardSortMode.SizeAsc, new[] { "y", "z", "a.txt", "m.bin" })]
+    [InlineData(CardSortMode.SizeDesc, new[] { "m.bin", "a.txt", "z", "y" })]
+    [InlineData(CardSortMode.TypeAsc, new[] { "y", "z", "m.bin", "a.txt" })]
+    [InlineData(CardSortMode.TypeDesc, new[] { "a.txt", "m.bin", "z", "y" })]
+    public void InsideFolder_OtherModes_FoldersFirstAscending_LastDescending(CardSortMode mode, string[] expected)
     {
-        Item[] items = [new("a.txt", Modified: T(9)), new("z", Folder: true, Modified: T(1)), new("m.bin", Modified: T(5))];
+        Item[] items = [new("a.txt", Modified: T(9)), new("z", Folder: true, Modified: T(1)), new("m.bin", Modified: T(5)), new("y", Folder: true)];
+        long? SizeOf(Item i) => i.Folder ? null : i.Name == "m.bin" ? 50 : 10;
         var comparer = CardOrdering.InsideFolder<Item>(mode, i => i.Folder,
-            CardOrdering.ComparerFor<Item>(mode, i => i.Name, i => i.Modified)!);
-        Assert.Equal("z", items.OrderBy(i => i, comparer).First().Name);
+            CardOrdering.ComparerFor<Item>(mode, i => i.Name, i => i.Modified, SizeOf, i => i.Folder ? string.Empty : Path.GetExtension(i.Name))!);
+        Assert.Equal(expected, Names(items.OrderBy(i => i, comparer)));
+    }
+
+    [Fact]
+    public void InsideFolder_TypeDesc_PinnedFolderKeepsItsSlot()
+    {
+        // base order = listing order (folders first); the pinned folder b stays at slot 1
+        Item[] items = [new("a", Folder: true), new("b", Pinned: true, Folder: true), new("c", Folder: true), new("x.txt"), new("y.bmp")];
+        var comparer = CardOrdering.InsideFolder<Item>(CardSortMode.TypeDesc, i => i.Folder,
+            CardOrdering.ComparerFor<Item>(CardSortMode.TypeDesc, i => i.Name, i => i.Modified, typeOf: i => Path.GetExtension(i.Name))!);
+        Assert.Equal(["x.txt", "b", "y.bmp", "c", "a"], Names(CardOrdering.SortKeepingPinned(items, i => i.Pinned, comparer)));
     }
 
     [Theory]
@@ -340,7 +352,7 @@ public class ExistenceProbeTests
     /// <summary>GetEntry always fails; GetKind reports a folder (optionally after waiting).</summary>
     private sealed class KindOnlyFileSystem(ManualResetEventSlim? release) : IFileSystem
     {
-        public IReadOnlyList<FsEntry> EnumerateDirectory(string path, bool includeHidden, CancellationToken cancellationToken) => [];
+        public IReadOnlyList<FsEntry> EnumerateDirectory(string path, ListingFilter filter, CancellationToken cancellationToken) => [];
 
         public PathKind GetKind(string path)
         {

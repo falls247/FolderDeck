@@ -165,7 +165,10 @@
                 <!-- フォルダ -->
                 <StackPanel x:Name="PageFolders" Visibility="Hidden">
                     <TextBlock Text="表示する項目" Style="{StaticResource Section}" />
-                    <CheckBox Content="隠しファイルを表示" IsChecked="{Binding ShowHidden}" />
+                    <CheckBox Content="隠しファイル・フォルダを表示" IsChecked="{Binding ShowHidden}" />
+                    <CheckBox Content="「.」で始まるファイル・フォルダを表示" IsChecked="{Binding ShowDotItems}" />
+                    <TextBlock Text=".vscode や .gitignore など。隠し属性も付いているもの（Git の .git フォルダなど）は、上の「隠しファイル・フォルダを表示」もオンにすると表示します。"
+                               Style="{StaticResource Help}" Margin="20,0,0,0" />
 
                     <TextBlock Text="フォルダの自動更新" Style="{StaticResource Section}" />
                     <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3" Background="{DynamicResource Brush.Surface2}"

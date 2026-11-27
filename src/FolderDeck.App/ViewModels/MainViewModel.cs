@@ -3492,7 +3492,7 @@ public sealed partial class MainViewModel : ObservableObject
             }
 
             int generation = tab.LoadGeneration;
-            bool hidden = _services.Listings.IncludeHidden;
+            var filter = _services.Listings.Filter;
             _services.Listings.Invalidate(path); // else the 60 s cache answers
 
             // The only waiter: giving up cancels the listing (a hung share does not keep a check, or
@@ -3520,7 +3520,7 @@ public sealed partial class MainViewModel : ObservableObject
 
             // Checked again after the await: the user may have moved, reloaded or started something.
             if (!CanAutoRefresh() || !ReferenceEquals(SelectedTab, tab) || tab.LoadGeneration != generation
-                || !PathTools.Comparer.Equals(tab.AutoRefreshPath, path) || _services.Listings.IncludeHidden != hidden)
+                || !PathTools.Comparer.Equals(tab.AutoRefreshPath, path) || _services.Listings.Filter != filter)
             {
                 return;
             }
@@ -3645,8 +3645,8 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         Message.Placement = MessagePlacements.FromSetting(after.MessagePosition); // before 設定を保存しました below: it shows in the new place
-        _services.ShowHidden = after.ShowHidden;
-        if (before.ShowHidden != after.ShowHidden)
+        _services.Filter = after.ToListingFilter();
+        if (before.ToListingFilter() != after.ToListingFilter())
         {
             foreach (var tab in AllTabs)
             {
