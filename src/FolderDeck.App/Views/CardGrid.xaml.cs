@@ -163,6 +163,19 @@ public partial class CardGrid : UserControl, IItemsView
         return ItemsViewReveal.Reveal(RowsHost, _rowsPanel, index / _columns, item);
     }
 
+    /// <summary>The columns of the last layout (§6.1); the rows are built with exactly this many cards.</summary>
+    public int ItemsPerRow => Math.Max(1, _columns);
+
+    /// <summary>A row's pitch includes the gap below it (the row's bottom margin).</summary>
+    public int PageRows
+    {
+        get
+        {
+            _rowsPanel ??= FindDescendant<VirtualizingStackPanel>(RowsHost);
+            return ItemsViewPaging.PageRows(_scroll, _rowsPanel, Metrics.ThumbHeight + Gap);
+        }
+    }
+
     public void ScrollTo(double offset)
     {
         if (_scroll is null)

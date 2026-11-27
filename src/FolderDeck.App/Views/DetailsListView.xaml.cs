@@ -185,6 +185,18 @@ public partial class DetailsListView : UserControl, IItemsView
         return ItemsViewReveal.Reveal(RowsHost, _rowsPanel, index, item);
     }
 
+    /// <summary>One item per row: ↑ ↓ step one item, as ← → do.</summary>
+    public int ItemsPerRow => 1;
+
+    public int PageRows
+    {
+        get
+        {
+            _rowsPanel ??= FindDescendant<VirtualizingStackPanel>(RowsHost);
+            return ItemsViewPaging.PageRows(_scroll, _rowsPanel, RowHeight);
+        }
+    }
+
     public void ScrollTo(double offset)
     {
         if (_scroll is null)

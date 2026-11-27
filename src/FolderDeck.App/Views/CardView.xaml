@@ -194,6 +194,16 @@
             </Border.Style>
         </Border>
 
+        <!--
+          Keyboard cursor (IsCursor: the keys moved it last, a mouse press hides it): a dashed line
+          inside the selection frame, as Explorer's focus rectangle, so that it shows on a selected
+          card as well as on one the cursor alone is on (Ctrl + arrows).
+        -->
+        <Rectangle x:Name="CursorFrame" Margin="4" RadiusX="7" RadiusY="7" StrokeThickness="1.5" StrokeDashArray="2 2"
+                   Stroke="{DynamicResource Brush.Accent}" IsHitTestVisible="False"
+                   RenderTransform="{Binding RenderTransform, ElementName=CardBorder}"
+                   Visibility="{Binding IsCursor, Converter={StaticResource BoolToVis}}" />
+
         <!-- × (§6.7) -->
         <Button x:Name="CloseButton" Style="{StaticResource Btn.CardClose}" Content="&#xE711;"
                 HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,6,6,0"

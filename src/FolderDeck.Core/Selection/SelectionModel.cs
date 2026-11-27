@@ -8,8 +8,9 @@ namespace FolderDeck.Core.Selection;
 /// and are not normalized; callers pass the paths the list shows.
 /// <para>
 /// Every mutator returns true when the set of selected keys changed and raises <see cref="Changed"/>
-/// once in that case. A move of the <see cref="Anchor"/> alone is not a change. Not thread-safe:
-/// one thread (the UI thread) owns an instance.
+/// once in that case. A move of the <see cref="Anchor"/> or the <see cref="Cursor"/> alone is not a
+/// change; a move of the cursor raises <see cref="CursorChanged"/> instead (also when the same call
+/// changes the selection). Not thread-safe: one thread (the UI thread) owns an instance.
 /// </para>
 /// </summary>
 public sealed class SelectionModel
@@ -18,6 +19,9 @@ public sealed class SelectionModel
 
     /// <summary>The set of selected keys changed.</summary>
     public event Action? Changed;
+
+    /// <summary><see cref="Cursor"/> moved (the view redraws its frame), raised before any <see cref="Changed"/> of the same call.</summary>
+    public event Action? CursorChanged;
 
     public int Count => _keys.Count;
 
@@ -36,6 +40,15 @@ public sealed class SelectionModel
     /// Shift+click moves it to the end of the range; the anchor stays at the start.
     /// </summary>
     public string? Focus => _focus is not null && _keys.Contains(_focus) ? _focus : Anchor;
+
+    /// <summary>
+    /// The item the keyboard is on, as Explorer's focus rectangle: not necessarily selected (Ctrl + arrows
+    /// move it alone). Every gesture that picks an item moves it there: a click (<see cref="Replace"/>,
+    /// <see cref="Toggle"/>, <see cref="SelectRange"/>) and <see cref="MoveCursor"/>. Gestures without a
+    /// picked item follow the anchor (<see cref="SelectBox"/>) or keep it (<see cref="SelectAll"/>), so a
+    /// following Shift + arrow spans from where the mouse left off. Null when there is none.
+    /// </summary>
+    public string? Cursor { get; private set; }
 
     public bool Contains(string key) => !string.IsNullOrEmpty(key) && _keys.Contains(key);
 
@@ -78,6 +91,7 @@ public sealed class SelectionModel
 
         Anchor = key;
         _focus = key;
+        SetCursor(key);
         Changed?.Invoke();
         return true;
     }
@@ -98,6 +112,7 @@ public sealed class SelectionModel
         }
 
         _focus = key;
+        SetCursor(key);
         int start = IndexOf(displayed, Anchor);
         if (start < 0)
         {
@@ -124,7 +139,8 @@ public sealed class SelectionModel
 
     /// <summary>
     /// Selects exactly <paramref name="keys"/>. The anchor is kept when it is one of them,
-    /// otherwise it moves to the first key (null for an empty selection).
+    /// otherwise it moves to the first key (null for an empty selection). The cursor goes to the
+    /// anchor, so a plain click (the clicked item alone) puts it there; an empty selection keeps it.
     /// </summary>
     public bool Replace(IEnumerable<string> keys)
     {
@@ -143,18 +159,24 @@ public sealed class SelectionModel
             Anchor = firstKey;
         }
 
+        if (Anchor is not null)
+        {
+            SetCursor(Anchor);
+        }
+
         return SetKeys(next);
     }
 
-    /// <summary>A copy of the selection and its anchor (the start of a marquee drag), independent of later changes.</summary>
-    public SelectionSnapshot Snapshot() => new(new HashSet<string>(_keys, PathTools.Comparer), Anchor);
+    /// <summary>A copy of the selection, its anchor and cursor (the start of a marquee drag), independent of later changes.</summary>
+    public SelectionSnapshot Snapshot() => new(new HashSet<string>(_keys, PathTools.Comparer), Anchor, Cursor);
 
     /// <summary>
     /// A marquee drag: the selection becomes <paramref name="baseline"/> combined with the keys in
     /// the box (<paramref name="box"/>, in display order): added to it, or with
     /// <paramref name="toggle"/> (Ctrl) flipped against it. The result depends on the baseline and
     /// the box only, so the box may grow and shrink freely. The anchor stays the baseline's when it
-    /// is still selected, else it is the first selected key of the box (null when none is).
+    /// is still selected, else it is the first selected key of the box (null when none is). The
+    /// cursor follows the anchor, or stays the baseline's when there is no anchor.
     /// </summary>
     public bool SelectBox(SelectionSnapshot baseline, IEnumerable<string> box, bool toggle)
     {
@@ -190,23 +212,26 @@ public sealed class SelectionModel
             Anchor = inBox.FirstOrDefault(next.Contains);
         }
 
+        SetCursor(Anchor ?? baseline.Cursor);
         return SetKeys(next);
     }
 
-    /// <summary>Goes back to <paramref name="baseline"/> (a marquee drag cancelled with Esc), its anchor included.</summary>
+    /// <summary>Goes back to <paramref name="baseline"/> (a marquee drag cancelled with Esc), its anchor and cursor included.</summary>
     public bool Restore(SelectionSnapshot baseline)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         Anchor = baseline.Anchor;
         _focus = null;
+        SetCursor(baseline.Cursor);
         return SetKeys(new HashSet<string>(baseline.Keys, PathTools.Comparer));
     }
 
-    /// <summary>Deselects everything and forgets the anchor.</summary>
+    /// <summary>Deselects everything and forgets the anchor and the cursor (another folder is shown).</summary>
     public bool Clear()
     {
         Anchor = null;
         _focus = null;
+        SetCursor(null);
         if (_keys.Count == 0)
         {
             return false;
@@ -218,12 +243,14 @@ public sealed class SelectionModel
     }
 
     /// <summary>
-    /// Drops what is no longer displayed (after a reload): selected keys, and the anchor when it
-    /// is gone too.
+    /// Drops what is no longer displayed (after a reload): selected keys, and the anchor and the
+    /// cursor when they are gone too. <paramref name="cursorDisplayed"/>, when given, is what the
+    /// cursor may stay on instead (every item shown: the cursor may rest on one that cannot be
+    /// selected, such as a missing folder, while <paramref name="displayed"/> holds the selectable ones).
     /// </summary>
-    public bool Prune(IReadOnlyList<string> displayed)
+    public bool Prune(IReadOnlyList<string> displayed, IReadOnlyList<string>? cursorDisplayed = null)
     {
-        if (_keys.Count == 0 && Anchor is null)
+        if (_keys.Count == 0 && Anchor is null && Cursor is null)
         {
             return false;
         }
@@ -234,6 +261,11 @@ public sealed class SelectionModel
             Anchor = null;
         }
 
+        if (Cursor is not null && !(cursorDisplayed is null ? shown : ToSet(cursorDisplayed)).Contains(Cursor))
+        {
+            SetCursor(null);
+        }
+
         if (_keys.RemoveWhere(key => !shown.Contains(key)) == 0)
         {
             return false;
@@ -241,6 +273,48 @@ public sealed class SelectionModel
 
         Changed?.Invoke();
         return true;
+    }
+
+    /// <summary>
+    /// The keyboard's arrows, Home, End and Page keys (the caller picks <paramref name="target"/> with
+    /// <see cref="GridNavigation.Move"/>): the cursor goes to <paramref name="target"/>, and
+    /// <list type="bullet">
+    /// <item><paramref name="select"/> alone (plain arrow): the target alone is selected and is the anchor, as a click.</item>
+    /// <item>neither (Ctrl + arrow): the selection and the anchor stay.</item>
+    /// <item>
+    /// <paramref name="extend"/> (Shift + arrow): the range from the anchor to the target, as a
+    /// Shift + click, replacing the selection with <paramref name="select"/> and added to it without
+    /// (Ctrl + Shift). Without a displayed anchor the range starts at the old cursor, else at the target.
+    /// </item>
+    /// </list>
+    /// A target that is not displayed changes nothing. Returns true when the selection changed (a
+    /// cursor-only move returns false and raises <see cref="CursorChanged"/> only).
+    /// </summary>
+    public bool MoveCursor(IReadOnlyList<string> displayed, string target, bool select, bool extend)
+    {
+        if (IndexOf(displayed, target) < 0)
+        {
+            return false;
+        }
+
+        if (extend)
+        {
+            if (IndexOf(displayed, Anchor) < 0 && IndexOf(displayed, Cursor) >= 0)
+            {
+                Anchor = Cursor;
+            }
+
+            return SelectRange(displayed, target, additive: !select);
+        }
+
+        if (select)
+        {
+            Anchor = target; // Replace keeps an anchor that stays selected: the target must become it
+            return Replace([target]);
+        }
+
+        SetCursor(target);
+        return false;
     }
 
     /// <summary>
@@ -258,6 +332,17 @@ public sealed class SelectionModel
         }
 
         return [clicked];
+    }
+
+    private void SetCursor(string? key)
+    {
+        if (string.Equals(Cursor, key, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Cursor = key;
+        CursorChanged?.Invoke();
     }
 
     private bool SetKeys(HashSet<string> next)
@@ -306,4 +391,4 @@ public sealed class SelectionModel
 }
 
 /// <summary>A selection at one moment (see <see cref="SelectionModel.Snapshot"/>).</summary>
-public sealed record SelectionSnapshot(IReadOnlySet<string> Keys, string? Anchor);
+public sealed record SelectionSnapshot(IReadOnlySet<string> Keys, string? Anchor, string? Cursor = null);

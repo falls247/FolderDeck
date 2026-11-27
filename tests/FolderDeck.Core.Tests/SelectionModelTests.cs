@@ -1,4 +1,5 @@
 using FolderDeck.Core.Selection;
+using FolderDeck.Core.Text;
 
 namespace FolderDeck.Core.Tests;
 
@@ -189,5 +190,84 @@ public class SelectionModelTests
         Assert.Null(onlyB.Anchor);
         onlyB.SelectBox(baseline, [D, E], toggle: false); // the baseline's anchor is still selected
         Assert.Equal(B, onlyB.Anchor);
+    }
+
+    [Fact]
+    public void MoveCursor_ArrowSelectsTheTarget_CtrlMovesOnlyTheCursor_ShiftSpansFromTheAnchor()
+    {
+        var selection = new SelectionModel();
+        int changed = 0, moved = 0;
+        selection.Changed += () => changed++;
+        selection.CursorChanged += () => moved++;
+
+        Assert.True(selection.MoveCursor(Displayed, B, select: true, extend: false));
+        Assert.Equal([B], selection.InOrder(Displayed));
+        Assert.Equal(B, selection.Anchor);
+        Assert.Equal(B, selection.Cursor);
+
+        // Ctrl + arrow: not a selection change, but the view hears of the cursor.
+        Assert.False(selection.MoveCursor(Displayed, D, select: false, extend: false));
+        Assert.Equal([B], selection.InOrder(Displayed));
+        Assert.Equal(D, selection.Cursor);
+        Assert.Equal((1, 2), (changed, moved));
+
+        // Shift + arrow spans from the anchor (B), not from where Ctrl left the cursor.
+        Assert.True(selection.MoveCursor(Displayed, C, select: true, extend: true));
+        Assert.Equal([B, C], selection.InOrder(Displayed));
+        Assert.Equal(B, selection.Anchor);
+        Assert.Equal(C, selection.Cursor);
+
+        Assert.False(selection.MoveCursor(Displayed, @"E:\dir\gone", select: true, extend: false));
+        Assert.Equal(C, selection.Cursor);
+    }
+
+    [Fact]
+    public void Cursor_FollowsClicks_SoShiftArrowSpansFromTheClickedItem_AndIsDroppedWithTheItem()
+    {
+        var selection = new SelectionModel();
+        selection.Replace([D]); // a plain click
+        Assert.Equal(D, selection.Cursor);
+
+        selection.Toggle(B); // Ctrl+click: B is the anchor and the cursor
+        Assert.Equal(B, selection.Cursor);
+        selection.MoveCursor(Displayed, A, select: true, extend: true);
+        Assert.Equal([A, B], selection.InOrder(Displayed));
+
+        selection.SelectRange(Displayed, E, additive: false); // Shift+click: the cursor at the end of the range
+        Assert.Equal(E, selection.Cursor);
+
+        Assert.False(selection.Prune([A, B, C, D, E]));
+        Assert.Equal(E, selection.Cursor);
+        selection.Prune([A, B, C]);
+        Assert.Null(selection.Cursor);
+
+        selection.Toggle(A);
+        selection.Clear();
+        Assert.Null(selection.Cursor);
+    }
+
+    [Fact]
+    public void Prune_KeepsTheCursorOnAShownItemThatCannotBeSelected()
+    {
+        // C is shown but missing (not selectable): the cursor may rest on it, the selection may not.
+        var selection = new SelectionModel();
+        selection.Replace([A]);
+        selection.MoveCursor(Displayed, C, select: false, extend: false);
+
+        selection.Prune([A, B, D, E], cursorDisplayed: [A, B, C, D, E]); // a reload with C still shown
+        Assert.Equal(C, selection.Cursor);
+        Assert.True(selection.Contains(A));
+
+        selection.Prune([A, B, D, E], cursorDisplayed: [A, B, D, E]); // C is gone
+        Assert.Null(selection.Cursor);
+    }
+
+    [Fact]
+    public void SelectionSummary_AddsTheFilesSize_NotesFolders_AndOmitsItForFoldersOnly()
+    {
+        Assert.Equal("3 個を選択\u300012.4 MB", SelectionSummary.Format(3, sizedFiles: 3, bytes: 13_002_342, hasFolders: false));
+        Assert.Equal("1,200 個を選択\u30001.5 KB（フォルダを除く）", SelectionSummary.Format(1200, sizedFiles: 1, bytes: 1536, hasFolders: true));
+        Assert.Equal("2 個を選択", SelectionSummary.Format(2, sizedFiles: 0, bytes: 0, hasFolders: true)); // folders only
+        Assert.Equal("1 個を選択", SelectionSummary.Format(1, sizedFiles: 0, bytes: 0, hasFolders: false)); // a file of unknown size
     }
 }

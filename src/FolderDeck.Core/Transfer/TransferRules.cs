@@ -77,9 +77,12 @@ public sealed record TransferOptions(TransferKind Requested, bool AllowSameFolde
     /// <summary>
     /// A drop on a folder: the kind <see cref="FileDrag.DropEffectFor"/> chose (modifier keys,
     /// volume). Nothing is copied into the folder it is already in (no renamed copy, unlike a
-    /// paste). Read-only media and undeletable sources are still copied when a move is asked for.
+    /// paste), except a Ctrl drop on the shown folder's list (<paramref name="copyInPlace"/>, see
+    /// <see cref="FileDrag.CopiesInPlace"/>), which duplicates as a paste does. Read-only media and
+    /// undeletable sources are still copied when a move is asked for.
     /// </summary>
-    public static TransferOptions Drop(TransferKind kind) => new(kind, AllowSameFolderCopy: false);
+    public static TransferOptions Drop(TransferKind kind, bool copyInPlace = false) =>
+        new(kind, AllowSameFolderCopy: copyInPlace && kind == TransferKind.Copy);
 }
 
 /// <summary>The outcome of <see cref="TransferRules.Decide"/>: what to run and what was left out.</summary>

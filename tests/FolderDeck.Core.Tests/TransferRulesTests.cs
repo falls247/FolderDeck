@@ -82,6 +82,24 @@ public class TransferRulesTests
     }
 
     [Fact]
+    public void Decide_DropCopyInPlace_RenamesWhatIsAlreadyThere_ButNeverForAMove()
+    {
+        TransferSource[] sources = [Local(@"E:\a\x.txt"), Local(@"E:\b\y.txt")];
+        var copy = TransferRules.Decide(sources, @"E:\a", TransferOptions.Drop(TransferKind.Copy, copyInPlace: true));
+        Assert.Equal(
+            new[]
+            {
+                new TransferItem(@"E:\a\x.txt", TransferKind.Copy, CopyReason.Requested, RenameOnCollision: true),
+                new TransferItem(@"E:\b\y.txt", TransferKind.Copy, CopyReason.Requested, RenameOnCollision: false),
+            },
+            copy.Items);
+
+        var move = TransferRules.Decide(sources, @"E:\a", TransferOptions.Drop(TransferKind.Move, copyInPlace: true));
+        Assert.Equal(@"E:\b\y.txt", Assert.Single(move.Items).Path);
+        Assert.Equal((@"E:\a\x.txt", TransferRefusal.SameFolder), Assert.Single(move.Skipped));
+    }
+
+    [Fact]
     public void Decide_KindPerItem_FollowsMediaAndDeletability()
     {
         TransferSource[] sources =

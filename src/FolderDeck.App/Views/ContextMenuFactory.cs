@@ -73,16 +73,18 @@ public sealed class ContextMenuFactory
     /// group (cascade rows and headers have none).
     /// With the setting 「Windows のメニュー」 an item Explorer's menu can be shown for gets that menu
     /// with these entries on top (built off the UI thread; the cascade is frozen meanwhile).
+    /// <paramref name="keyPoint"/>: opened from the keyboard (Shift+F10, the Apps key), the menu's
+    /// corner in <paramref name="target"/>'s coordinates instead of the pointer, which may be anywhere.
     /// </summary>
-    public void Show(ItemRef item, FrameworkElement target, IReadOnlyList<ItemRef>? group = null)
+    public void Show(ItemRef item, FrameworkElement target, IReadOnlyList<ItemRef>? group = null, Point? keyPoint = null)
     {
         // Where Explorer's menu will appear, and whether it gets the extended entries: read now, at
         // the right click, not when its item is clicked.
-        var at = NativeMenuPoint.Capture(target);
+        var at = NativeMenuPoint.Capture(target, keyPoint);
         var entries = group is { Count: > 1 }
             ? GroupEntries(group, out var nativePaths, out bool nativeEnabled)
             : ItemEntries(item, out nativePaths, out nativeEnabled);
-        ShowEntries(entries, target, at, nativePaths, nativeEnabled);
+        ShowEntries(entries, target, at, nativePaths, nativeEnabled, keyPoint: keyPoint);
     }
 
     /// <summary>
@@ -105,15 +107,21 @@ public sealed class ContextMenuFactory
         bool topCard = card?.IsTopLevel == true;
         var entries = new List<MenuEntry>();
 
+        // The keys act on the selection: shown only when this card is the whole of it (a right click
+        // on another item clears the selection first; a cascade row or sidebar row is never selected,
+        // but a details row's preview carries the tab's own card, maybe one of several selected).
+        bool keys = card is not null && _vm.HasTab
+            && _vm.SelectedTab.Selection is { Count: 1 } selection && selection.Contains(card.Path);
+
         // The default entry of Explorer's menu (in place of the shell's open).
         entries.Add(new("開く", OpenGlyph, !disabled, () =>
         {
             BeforeNavigate?.Invoke();
             _ = card is not null ? _vm.ActivateCardAsync(card) : _vm.OpenItemAsync(item);
-        }, IsDefault: true));
+        }, IsDefault: true, Keys: keys ? ShortcutId.Open : null));
         entries.Add(new("エクスプローラーで表示", ExplorerGlyph, !disabled || drive, () => _ = _vm.ShowInExplorerAsync(item)));
         entries.Add(new("パスをコピー", CopyGlyph, !disabled || drive, () => _vm.CopyPath(item)));
-        AddClipboardEntries(entries, [item], item);
+        AddClipboardEntries(entries, [item], item, keys: keys);
 
         // 「…で開く」 as on the blank area (in the details view nearly every right click lands on a
         // row): a folder (also a drive row, a registered folder, a flyout header) opens in itself, a
@@ -151,7 +159,7 @@ public sealed class ContextMenuFactory
             {
                 BeforeNavigate?.Invoke(); // the confirmation and the reload replace the cascade
                 _ = _vm.DeleteAsync([item]);
-            }));
+            }, Keys: keys ? ShortcutId.Delete : null));
 
             // Only a card of the tab has an edit box (not a row of the cascade).
             if (card is not null && MainViewModel.CanRename(item))
@@ -160,7 +168,7 @@ public sealed class ContextMenuFactory
                 {
                     BeforeNavigate?.Invoke(); // the edit box needs the items uncovered
                     RenameRequested?.Invoke(card);
-                }));
+                }, Keys: keys ? ShortcutId.Rename : null));
             }
         }
 
@@ -204,7 +212,7 @@ public sealed class ContextMenuFactory
     private List<MenuEntry> GroupEntries(IReadOnlyList<ItemRef> group, out IReadOnlyList<string>? nativePaths, out bool nativeEnabled)
     {
         var entries = new List<MenuEntry>();
-        AddClipboardEntries(entries, group, pasteItem: null, separator: false);
+        AddClipboardEntries(entries, group, pasteItem: null, separator: false, keys: true); // the group is the selection
         entries.Add(new("パスをコピー", CopyGlyph, true, () => _vm.CopyPaths(group)));
 
         // 「…で開く」 for the folder the selection is in (always one inside a folder tab; the cards
@@ -223,7 +231,7 @@ public sealed class ContextMenuFactory
             {
                 BeforeNavigate?.Invoke(); // the confirmation and the reload replace the cascade
                 _ = _vm.DeleteAsync(group);
-            }));
+            }, Keys: ShortcutId.Delete));
         }
 
         // Explorer's menu of the whole selection (one menu for every item, as with a selection in
@@ -267,7 +275,7 @@ public sealed class ContextMenuFactory
     /// </summary>
     private void ShowEntries(
         List<MenuEntry> entries, FrameworkElement target, NativeMenuPoint at, IReadOnlyList<string>? nativePaths, bool nativeEnabled,
-        bool background = false)
+        bool background = false, Point? keyPoint = null)
     {
         bool windowsMenu = _vm.UsesWindowsItemMenu;
         if (nativePaths is not null && nativeEnabled && windowsMenu && !TimedOutRecently(nativePaths, background))
@@ -283,7 +291,7 @@ public sealed class ContextMenuFactory
             return;
         }
 
-        var menu = Render(entries, target);
+        var menu = Render(entries, target, keyPoint);
         if (nativePaths is not null && !windowsMenu)
         {
             AddNativeItem(menu, nativePaths, nativeEnabled, at, background);
@@ -292,10 +300,20 @@ public sealed class ContextMenuFactory
         Open(menu);
     }
 
-    /// <summary>The WPF menu of <paramref name="entries"/> (IsDefault is not shown there), submenus included.</summary>
-    private static ContextMenu Render(IReadOnlyList<MenuEntry> entries, FrameworkElement target)
+    /// <summary>
+    /// The WPF menu of <paramref name="entries"/> (IsDefault is not shown there), submenus included:
+    /// at the pointer, or with <paramref name="keyPoint"/> at that point of <paramref name="target"/>.
+    /// </summary>
+    private static ContextMenu Render(IReadOnlyList<MenuEntry> entries, FrameworkElement target, Point? keyPoint = null)
     {
         var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
+        if (keyPoint is { } point)
+        {
+            menu.Placement = PlacementMode.Relative;
+            menu.HorizontalOffset = point.X;
+            menu.VerticalOffset = point.Y;
+        }
+
         foreach (var entry in entries)
         {
             menu.Items.Add(RenderEntry(entry));
@@ -314,6 +332,11 @@ public sealed class ContextMenuFactory
         if (!entry.IsSubmenu)
         {
             var item = Item(entry.Header!, entry.Glyph, entry.Enabled, entry.Action!);
+            if (entry.Keys is { } keys)
+            {
+                item.InputGestureText = ShortcutCatalog.MainKeysOf(keys);
+            }
+
             if (entry.Checked is { } isChecked)
             {
                 item.IsCheckable = true; // UI Automation: Toggle (as the toolbar's sort menu)
@@ -366,12 +389,13 @@ public sealed class ContextMenuFactory
     /// (新規作成, プロパティ…): last as 「その他のメニュー（Windows）」, or with the setting
     /// 「Windows のメニュー」 below these entries. Without a folder on screen (the top lists, while it
     /// loads, a failed load) only 貼り付け (off), 並べ替え and 最新の情報に更新, in the WPF menu.
+    /// <paramref name="keyPoint"/>: opened from the keyboard, as in <see cref="Show"/>.
     /// </summary>
-    public void ShowBlank(FrameworkElement target)
+    public void ShowBlank(FrameworkElement target, Point? keyPoint = null)
     {
-        var at = NativeMenuPoint.Capture(target);
+        var at = NativeMenuPoint.Capture(target, keyPoint);
         var entries = BlankEntries(out var nativePaths);
-        ShowEntries(entries, target, at, nativePaths, nativeEnabled: nativePaths is not null, background: true);
+        ShowEntries(entries, target, at, nativePaths, nativeEnabled: nativePaths is not null, background: true, keyPoint: keyPoint);
     }
 
     /// <summary>
@@ -388,7 +412,7 @@ public sealed class ContextMenuFactory
             {
                 BeforeNavigate?.Invoke(); // the transfer reloads the list
                 _ = _vm.PasteAsync(folder!);
-            }),
+            }, Keys: ShortcutId.Paste), // the folder of Ctrl + V too (PasteFolderOf(null))
         };
 
         var shown = _vm.ShownFolderItem();
@@ -400,7 +424,7 @@ public sealed class ContextMenuFactory
             {
                 BeforeNavigate?.Invoke(); // the reload replaces the cascade
                 NewFolderRequested?.Invoke();
-            }));
+            }, Keys: ShortcutId.NewFolder));
         }
 
         // Ctrl+Z / Ctrl+Y: the app's own history (app-wide, so also beside a top list); absent when empty.
@@ -412,7 +436,7 @@ public sealed class ContextMenuFactory
             {
                 BeforeNavigate?.Invoke(); // the reload replaces the cascade
                 _ = _vm.UndoAsync(undo);
-            }));
+            }, Keys: ShortcutId.Undo));
         }
 
         if (_vm.NextRedoStep is { } redo)
@@ -421,12 +445,12 @@ public sealed class ContextMenuFactory
             {
                 BeforeNavigate?.Invoke();
                 _ = _vm.RedoAsync(redo);
-            }));
+            }, Keys: ShortcutId.Redo));
         }
 
         entries.Add(MenuEntry.Separator);
         entries.Add(SortEntry());
-        entries.Add(new("最新の情報に更新", RefreshGlyph, true, () => _vm.RefreshCommand.Execute(null)));
+        entries.Add(new("最新の情報に更新", RefreshGlyph, true, () => _vm.RefreshCommand.Execute(null), Keys: ShortcutId.Refresh));
 
         if (shown is not null)
         {
@@ -692,8 +716,10 @@ public sealed class ContextMenuFactory
     /// <summary>
     /// 切り取り and コピー when every item allows them, and 貼り付け into <paramref name="pasteItem"/>
     /// when that is a folder (or a usable drive row), enabled while the clipboard offers files.
+    /// <paramref name="keys"/>: <paramref name="items"/> is the selection, so 切り取り and コピー show
+    /// Ctrl + X / Ctrl + C. 貼り付け never does here: Ctrl + V pastes into the folder shown, not into the item.
     /// </summary>
-    private void AddClipboardEntries(List<MenuEntry> entries, IReadOnlyList<ItemRef> items, ItemRef? pasteItem, bool separator = true)
+    private void AddClipboardEntries(List<MenuEntry> entries, IReadOnlyList<ItemRef> items, ItemRef? pasteItem, bool separator = true, bool keys = false)
     {
         bool cut = items.All(MainViewModel.CanCut);
         bool copy = items.All(MainViewModel.CanCopy);
@@ -710,12 +736,12 @@ public sealed class ContextMenuFactory
 
         if (cut)
         {
-            entries.Add(new("切り取り", CutGlyph, true, () => _vm.CopyToClipboard(items, cut: true)));
+            entries.Add(new("切り取り", CutGlyph, true, () => _vm.CopyToClipboard(items, cut: true), Keys: keys ? ShortcutId.Cut : null));
         }
 
         if (copy)
         {
-            entries.Add(new("コピー", CopyGlyph, true, () => _vm.CopyToClipboard(items, cut: false)));
+            entries.Add(new("コピー", CopyGlyph, true, () => _vm.CopyToClipboard(items, cut: false), Keys: keys ? ShortcutId.Copy : null));
         }
 
         if (pasteFolder is not null)
@@ -764,11 +790,12 @@ public sealed class ContextMenuFactory
     /// default (bold) entry of Explorer's menu (top level only). With <see cref="Children"/> it is a
     /// submenu (▶): <see cref="Action"/> is null, the children run. <see cref="Checked"/> (not null) is
     /// a checkable entry, checked when true: in WPF shown by a check glyph in <see cref="Glyph"/>, in
-    /// Explorer's menu by MF_CHECKED.
+    /// Explorer's menu by MF_CHECKED. <see cref="Keys"/>: the shortcut that does the same, shown on the
+    /// right of the WPF entry (not in Explorer's menu); only where the key acts on the same items.
     /// </summary>
     private sealed record MenuEntry(
         string? Header, string Glyph, bool Enabled, Action? Action, bool IsDefault = false, IReadOnlyList<MenuEntry>? Children = null,
-        bool? Checked = null)
+        bool? Checked = null, ShortcutId? Keys = null)
     {
         public static MenuEntry Separator { get; } = new(null, "", false, null);
 
@@ -780,9 +807,20 @@ public sealed class ContextMenuFactory
     /// <summary>The pointer in screen pixels and the Shift state when the app's menu was asked for.</summary>
     private readonly record struct NativeMenuPoint(int X, int Y, bool Extended)
     {
-        public static NativeMenuPoint Capture(FrameworkElement target)
+        /// <summary>
+        /// The pointer, or with <paramref name="keyPoint"/> (the keyboard) that point of
+        /// <paramref name="target"/>. A keyboard menu is never the extended one: Shift is part of
+        /// Shift+F10 there, not Explorer's Shift + right click.
+        /// </summary>
+        public static NativeMenuPoint Capture(FrameworkElement target, Point? keyPoint = null)
         {
-            bool extended = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+            if (keyPoint is { } point && target.IsVisible && PresentationSource.FromVisual(target) is not null)
+            {
+                var screen = target.PointToScreen(point); // device pixels, as TrackPopupMenuEx wants
+                return new NativeMenuPoint((int)screen.X, (int)screen.Y, Extended: false);
+            }
+
+            bool extended = keyPoint is null && (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
             if (ShellInterop.TryGetCursorPos(out int x, out int y))
             {
                 return new NativeMenuPoint(x, y, extended);

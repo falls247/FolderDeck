@@ -181,6 +181,11 @@
                     </Style>
                 </Border.Style>
             </Border>
+
+            <!-- Keyboard cursor (IsCursor), inside the selection frame: see CardView's CursorFrame -->
+            <Rectangle Grid.Column="0" Grid.ColumnSpan="6" Margin="3" RadiusX="3" RadiusY="3" StrokeThickness="1"
+                       StrokeDashArray="2 2" Stroke="{DynamicResource Brush.Accent}" IsHitTestVisible="False"
+                       Visibility="{Binding IsCursor, Converter={StaticResource BoolToVis}}" />
         </Grid>
     </Border>
 </UserControl>
