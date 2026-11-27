@@ -70,7 +70,7 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     [NotifyPropertyChangedFor(nameof(IsTop), nameof(ShowClearHistory), nameof(ShowFilter), nameof(CanGoUp), nameof(Title), nameof(ToolTipText))]
     private NavLocation _location;
 
-    /// <summary>The shown cards: sorted, and at the top level filtered (<see cref="Filter"/>).</summary>
+    /// <summary>The shown cards: sorted, at the top level filtered (<see cref="Filter"/>), and searched (<see cref="SearchText"/>).</summary>
     [ObservableProperty]
     private IReadOnlyList<CardViewModel> _cards = [];
 
@@ -85,16 +85,35 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     [ObservableProperty]
     private bool _isLoading;
 
+    /// <summary>
+    /// What the search box (Ctrl+F) holds: only the items whose name has every word of it are shown
+    /// (<see cref="NameSearch"/>). Not saved; cleared when the tab goes to another location.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSearching), nameof(ShownCountText), nameof(ShownEmptyText))]
+    private string _searchText = string.Empty;
+
+    /// <summary>The location changes to the same folder under its new name (<see cref="MoveTo"/>): the search is kept.</summary>
+    private bool _keepSearch;
+
+    /// <summary>
+    /// The search is being cleared by a move to another location: the old cards are not shown again
+    /// unsearched (they would flash before the new location's load replaces them).
+    /// </summary>
+    private bool _quietSearch;
+
     [ObservableProperty]
     private bool _isSlow;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShownEmptyText))]
     private string? _emptyText;
 
     [ObservableProperty]
     private string? _bannerText;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShownCountText))]
     private string _countText = string.Empty;
 
     [ObservableProperty]
@@ -358,7 +377,16 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     public void MoveTo(NavLocation location)
     {
         string? identity = Identity;
-        Location = location;
+        _keepSearch = true; // still the same folder: its search stays
+        try
+        {
+            Location = location;
+        }
+        finally
+        {
+            _keepSearch = false;
+        }
+
         if (identity is not null)
         {
             SetIdentity(location, identity);
@@ -739,7 +767,19 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     public IReadOnlyList<CardViewModel> OrderedCards => _orderedCards;
 
     /// <summary>The filter hides this card right now (top level of 最近の履歴 / よく使う項目 only).</summary>
-    public bool IsShown(CardViewModel card) => !FilterApplies || ItemFilters.Matches(Filter, card.IsFolderLike);
+    public bool IsShown(CardViewModel card) =>
+        (!FilterApplies || ItemFilters.Matches(Filter, card.IsFolderLike))
+        && (!IsSearching || NameSearch.Matches(card.Name, NameSearch.Terms(SearchText)));
+
+    /// <summary>The search box holds a word: the list shows only the matching items.</summary>
+    public bool IsSearching => NameSearch.Terms(SearchText).Length > 0;
+
+    /// <summary>The count beside the address bar: while searching, the matches of all items.</summary>
+    public string ShownCountText => IsSearching ? $"一致 {Cards.Count:N0} / {_orderedCards.Count:N0}" : CountText;
+
+    /// <summary>The text over an empty list: while searching with no match, that nothing matched.</summary>
+    public string? ShownEmptyText =>
+        IsSearching && Cards.Count == 0 && _orderedCards.Count > 0 ? $"「{SearchText.Trim()}」に一致する項目はありません。" : EmptyText;
 
     /// <summary>The given order becomes the base (manual) order: after a drop.</summary>
     public void SetBaseOrder(IReadOnlyList<CardViewModel> order)
@@ -858,13 +898,16 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     private void Show(IReadOnlyList<CardViewModel> ordered)
     {
         _orderedCards = ordered;
-        Cards = FilterApplies ? ItemFilters.Apply(ordered, Filter, c => c.IsFolderLike) : ordered;
+        var filtered = FilterApplies ? ItemFilters.Apply(ordered, Filter, c => c.IsFolderLike) : ordered;
+        Cards = NameSearch.Apply(filtered, SearchText, c => c.Name);
 
         // The selection keeps the items still shown (a reload, a re-sort, the filter); new card
         // instances get their flags here, since a prune that removes nothing raises nothing.
         Selection.Prune(SelectableKeys());
         ApplyItemFlags();
         UpdateTopSummary();
+        OnPropertyChanged(nameof(ShownCountText));
+        OnPropertyChanged(nameof(ShownEmptyText));
     }
 
     /// <summary>
@@ -892,6 +935,14 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
                 : "ファイルはありません（表示：ファイルのみ）。",
             _ => null,
         };
+    }
+
+    partial void OnSearchTextChanged(string value)
+    {
+        if (!IsLoading && !_quietSearch)
+        {
+            Show(_orderedCards); // the running load shows through the search when it finishes
+        }
     }
 
     partial void OnFilterChanged(ItemFilter value)
@@ -1017,6 +1068,19 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     {
         _loadedLocation = null; // nothing of the new location is listed yet
         Selection.Clear();
+        if (!_keepSearch && SearchText.Length > 0)
+        {
+            // As in Explorer, a search belongs to the folder it was typed in.
+            _quietSearch = true;
+            try
+            {
+                SearchText = string.Empty;
+            }
+            finally
+            {
+                _quietSearch = false;
+            }
+        }
         UpdateBreadcrumbs();
     }
 }

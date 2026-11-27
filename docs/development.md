@@ -236,33 +236,38 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\analyze-log.ps1 -LogDi
 
 ### 7.13 メモリを多く使う（タブをたくさん開いたとき）
 
-- **記録**：`app.log` に次の 1 行が出ます。F5 のたび（キャッシュを捨てる直前の量）と、1 分ごとの記録（`SessionMonitor`）で作業セットが前回の行から 64 MB 以上動いたときです。
+- **記録**：`app.log` に次の 1 行が出ます。F5 のたび（キャッシュを捨てる直前の量）と、1 分ごとの記録（`SessionMonitor`）で作業セットかプライベート バイトが前回の行から 64 MB 以上動いたときです。
 
   ```
-  memory: ws 412 MB, managed 96 MB, thumbs 384 (171 MB), listings 640 (152311 entries)
+  memory: ws 412 MB, managed 96 MB, thumbs 384 (171 MB), listings 640 (152311 entries); private 260 MB, committed image 282 / mapped 254 / private 230 MB, gc committed 120 MB, handles 980, gdi 28, user 66, threads 44
   ```
 
 - **読み方**：
   - `ws`：作業セット（タスク マネージャーの「メモリ」に近い値）。`managed`：.NET のヒープ（GC が管理する分。回収前のごみを含む）。
   - `thumbs`：サムネイルのメモリ キャッシュ（LRU）の件数と、画素数から見積もった大きさ。上限は 512 件・192 MB。表示中のカードの絵と、WPF が描画のために持つ複製は、ここに入りません。
+  - `private`（`;` の後の最初）：プライベート バイト（コミット済みで、ほかのプロセスと共有しない分）。`ws` は Windows が使われていないページを外すと下がる（最小化・メモリ不足のとき。950 MB → 150 MB のように）ので、リークかどうかはこちらで見る。
+  - `committed image / mapped / private`：コミット済みのアドレス空間の種類ごとの合計。`image` は exe と DLL（大きく増えたなら拡張機能・セキュリティ ソフトなどの DLL）、`mapped` はファイルのマッピングと共有メモリ（single-file の exe 自身、フォント、GPU と共有するメモリ）、`private` はネイティブのヒープ・GC のヒープ・スレッドのスタック。`gc committed` は GC がコミットしている量（`managed` は生きているオブジェクトだけ）。
+  - `handles` / `gdi` / `user` / `threads`：カーネルのハンドル、GDI・USER のオブジェクト、スレッドの数。操作を繰り返すたびに増え続けるならリーク。
   - `listings`：フォルダの中身の一覧のキャッシュの一覧数と項目の合計。上限は 1,500 件・20 万項目（巨大な一覧 1 つは上限の 1/4 までと数えるので、項目の合計は上限を超えて見えることがあります）。期限（60 秒）の切れた一覧は、次に一覧を入れるときに 60 秒に 1 回捨てます。
-- **切り分け**：`managed` が大きく伸び続けるなら .NET 側（一覧・カードの部品）、`ws` と `managed` の差が大きいならネイティブ側（サムネイルの画素、描画）です。タブの切り替えを 20 回ほど繰り返したり、ウィンドウの幅を何度も変えたりしたあとに F5 を押し、その前後の行を比べます。同じ操作を繰り返すたびに `managed` が増え続けるなら、ビューが残っている（リーク）可能性があります（`dev/docs/codebase_overview.md` §7 の「ビューから VM のイベントを購読するのは読み込まれている間だけ」）。
+- **切り分け**：`managed` が大きく伸び続けるなら .NET 側（一覧・カードの部品）、`private`（プライベート バイト）と `gc committed` の差が大きいならネイティブ側（サムネイルの画素、描画、拡張機能）です。`ws` が大きくても `private` が小さいなら、使われていないページか共有の分で、Windows が必要に応じて外します（リークではない）。タブの切り替えを 20 回ほど繰り返したり、ウィンドウの幅を何度も変えたりしたあとに F5 を押し、その前後の行を比べます。同じ操作を繰り返すたびに `managed` が増え続けるなら、ビューが残っている（リーク）可能性があります（`dev/docs/codebase_overview.md` §7 の「ビューから VM のイベントを購読するのは読み込まれている間だけ」）。
 - `--data-dir` で起動したときは、その下の `logs\app.log` です。
 
 ### 7.14 エクスプローラーのメニューが時間切れになる
 
-- **症状**：右クリックの「Windows のメニュー」で「エクスプローラーのメニューが時間内に準備できなかったため、アプリのメニューを出しました。」が出る。または「その他のメニュー（Windows）」で「このメニューは表示できませんでした：メニューの準備が時間内に終わりませんでした。」が出る。メニューの用意（表示する前）が 5 秒を超えたときです。
+- **症状**：右クリックの「Windows のメニュー」で「エクスプローラーのメニューが時間内に準備できなかったため、アプリのメニューを出しました。」が出る。または「その他のメニュー（Windows）」で「このメニューは表示できませんでした：メニューの準備が時間内に終わりませんでした。」が出る。メニューの用意（表示する前）が 8 秒を超えたときです（0.7.0 までは 5 秒）。
 - **記録**：`app.log` に次の行が出ます。時間切れにならなくても、用意に 1 秒以上かかったときは段階ごとの時間を INFO で書きます（時間切れのあとで用意が終わったときは `ready too late`）。
 
   ```
-  WARN Shell menu timed out in query after 5003 ms (menu threads alive: 2): C:\Users\…\a.png
+  WARN Shell menu timed out in query after 8003 ms (menu threads alive: 2): C:\Users\…\a.png
   INFO Shell menu slow to build, 1840 ms (thread 3, owner 1, bind 25, query 1790, verbs 21 ms): C:\Users\…\a.png
+  INFO Shell menu diagnostics (timed out in query, background): attributes 0x10; handlers (3): Directory\Background: OneDrive = FileSyncShell64.dll; …; modules from outside Windows and the app (4): C:\Program Files\7-Zip\7-zip.dll; …
   ```
 
 - **段階の読み方**：
   - `thread`（スレッドの起動）・`owner`（見えないオーナー ウィンドウの作成）：アプリ側。ここで止まるならアプリの不具合として調べる（メモリ ダンプでメニューのスレッド `FolderDeck shell menu` の呼び出し履歴を見る。[7.12](#712-folderdeck-が応答しなくなるファイルの多いフォルダ)）。
   - `bind`（項目の `IContextMenu` の取得）・`query`（`QueryContextMenu`：拡張機能が項目を足す）・`verbs`（各項目の verb の読み取り）：シェルと拡張機能の側。ほとんどは `query` で、どれかの拡張機能が遅いか止まっている。
-  - `menu threads alive`：まだ終わっていないメニューのスレッドの数（今の 1 本を含む）。2 以上なら、前のメニューのスレッド（コマンドの後の待ち、または時間切れで放棄されて拡張機能の中で止まったまま）が残っている。
+  - `menu threads alive`：まだ終わっていないメニューのスレッドの数（今の 1 本を含む）。2 以上なら、前のメニューのスレッド（コマンドの後の待ち、または時間切れで放棄されて拡張機能の中で止まったまま）が残っている。前のスレッドが止まっている間の次のメニューは、同じ拡張機能を待って何十秒も `ready too late` になりやすい（時間切れのあとは少し待ってから右クリックし直す）。
+  - `Shell menu diagnostics`：遅い用意（1 秒以上）か時間切れのとき、種類（`background` = 空白の右クリック、`folder`、拡張子）ごとにプロセスで 1 回だけ書く。`attributes` は項目のファイル属性（`offline` / `recall on open` / `recall on data access` / `pinned` / `unpinned` が付いていれば OneDrive などのクラウドのファイル）、`handlers` はその種類に登録された右クリックの拡張機能（レジストリの `shellex\ContextMenuHandlers`。名前 = DLL）、`modules` は Windows・アプリ・.NET の外から読み込まれている DLL（前の行で挙げたものは除く）。ここに出た DLL が切り分けの候補になる。
 - **切り分け**：NirSoft の ShellExView で「種類」が Context Menu の拡張機能（Microsoft 以外から）を 1 つずつ無効にし、同じ項目で右クリックを試す。同じ種類のファイル（画像・PDF など）だけで起きるならその種類に登録された拡張機能、どの項目でも起きるなら全体の拡張機能を疑う。「Windows のメニュー」では時間切れの項目に 5 分間エクスプローラーのメニューを使わないので、試すときは 5 分待つか FolderDeck を起動し直す（「その他のメニュー（Windows）」は毎回試す）。
 
 ### 7.15 画面構成の変化のあと、前面に出ない

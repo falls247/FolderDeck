@@ -25,8 +25,8 @@ public partial class DetailsRowView : UserControl
     public CardViewModel? ViewModel => _vm;
 
     /// <summary>
-    /// A button went down on the row (a click, a menu, a drag): moving on the name column does not
-    /// ask for the folder's list again until the pointer has left the column (as on a sidebar row).
+    /// A button went down on the row (a click, a menu, a drag): moving on the name does not
+    /// ask for the folder's list again until the pointer has left the name (as on a sidebar row).
     /// </summary>
     private bool _noRearm;
 
@@ -82,24 +82,24 @@ public partial class DetailsRowView : UserControl
         _pointer.RightUp(e);
     }
 
-    // ---- the name column: where a folder's list hangs -----------------------------------------
+    // ---- the name cell: where a folder's list hangs -------------------------------------------
 
     private void OnNameEnter(object sender, MouseEventArgs e)
     {
         if (_vm is { } vm)
         {
-            CardView.Host?.RowMouseEnter(NameColumn, vm);
+            CardView.Host?.RowMouseEnter(NameCell, vm);
         }
     }
 
     private void OnNameLeave(object sender, MouseEventArgs e)
     {
         _noRearm = false;
-        CardView.Host?.RowMouseLeave(NameColumn);
+        CardView.Host?.RowMouseLeave(NameCell);
     }
 
     /// <summary>
-    /// A hover starts when the pointer enters the name column. After the list was closed under a resting
+    /// A hover starts when the pointer enters the name cell. After the list was closed under a resting
     /// pointer (the window lost activation, the rows changed under it…) a real move asks again.
     /// </summary>
     private void OnNameMove(object sender, MouseEventArgs e)
@@ -109,7 +109,7 @@ public partial class DetailsRowView : UserControl
             && e.RightButton == MouseButtonState.Released
             && _vm is { } vm)
         {
-            CardView.Host?.RowMouseMove(NameColumn, vm);
+            CardView.Host?.RowMouseMove(NameCell, vm);
         }
     }
 
@@ -140,7 +140,7 @@ public partial class DetailsRowView : UserControl
     {
         if (e.OldValue is not null)
         {
-            CardView.Host?.RowMouseLeave(NameColumn);
+            CardView.Host?.RowMouseLeave(NameCell);
         }
 
         _pointer.ItemChanged();

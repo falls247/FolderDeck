@@ -392,6 +392,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 e.Handled = true; // like Explorer: the address bar's path, selected
                 BeginAddressEdit();
                 break;
+            case Key.F when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
+            case Key.F3 when Keyboard.Modifiers == ModifierKeys.None && _vm.HasTab:
+                e.Handled = true; // like Explorer: the search box, its text selected
+                BeginSearch();
+                break;
             case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
                 e.Handled = true; // like Explorer: closes the shown tab, whatever its kind
                 _vm.CloseTabCommand.Execute(_vm.SelectedTab);
@@ -1147,9 +1152,9 @@ public partial class MainWindow : Window, IMainView, ICardHost
     public void CardMouseLeave(CardView card) => _cascade.CardMouseLeave(card);
 
     /// <summary>
-    /// A row of the details list: the name column is both what the pointer rests on and what the
-    /// list is placed beside (at the column's right edge), so resting on the other columns opens
-    /// nothing. A folder opens its list, a previewable file its preview; on any other row nothing is
+    /// A row of the details list: the name cell (icon + name + 📌) is both what the pointer rests on
+    /// and what the list is placed beside (right after the name), so resting on the blank after the
+    /// name or on the other columns opens nothing. A folder opens its list, a previewable file its preview; on any other row nothing is
     /// armed and a list that is open closes as on leaving its row.
     /// </summary>
     public void RowMouseEnter(FrameworkElement nameColumn, CardViewModel vm)
@@ -1674,6 +1679,170 @@ public partial class MainWindow : Window, IMainView, ICardHost
         ShellInterop.RaiseToTop(hwnd);
     }
 
+    // ---- the search box (Ctrl+F) ------------------------------------------------------------------
+
+    /// <summary>The search box is open (typing).</summary>
+    private bool IsSearchEditing => SearchBox.Visibility == Visibility.Visible;
+
+    /// <summary>The tab the box searches: when it moves or another tab is shown, the box closes.</summary>
+    private TabViewModel? _searchTab;
+
+    /// <summary>The box is being closed (its lost focus must not close it a second time).</summary>
+    private bool _searchEnding;
+
+    /// <summary>
+    /// What is typed reaches the list after a short pause: a folder of thousands of items is not
+    /// filtered again on every key.
+    /// </summary>
+    private DispatcherTimer? _searchDelay;
+
+    private static readonly TimeSpan SearchDelay = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>Opens the search box over the chip with the shown tab's search, all of it selected.</summary>
+    private void BeginSearch()
+    {
+        if (!_vm.HasTab || _rename.IsOpen || ActiveList.IsMarqueeRunning)
+        {
+            return;
+        }
+
+        EndAddressEdit();
+        _cascade.SetEditing(true); // no hover opens a list over the items, and Esc reaches the box
+        if (!IsSearchEditing)
+        {
+            _searchTab = _vm.SelectedTab;
+            _searchTab.PropertyChanged += OnSearchTabChanged;
+            _vm.PropertyChanged += OnSearchMainChanged;
+            SearchEdit.Text = _searchTab.SearchText;
+            SearchBox.Visibility = Visibility.Visible;
+        }
+
+        SearchEdit.Focus();
+        SearchEdit.SelectAll();
+    }
+
+    /// <summary>Closes the box; what was typed stays the tab's search (the chip shows it).</summary>
+    private void EndSearch()
+    {
+        if (!IsSearchEditing || _searchEnding)
+        {
+            return;
+        }
+
+        _searchEnding = true;
+        try
+        {
+            ApplySearchNow();
+            if (_searchTab is not null)
+            {
+                _searchTab.PropertyChanged -= OnSearchTabChanged;
+                _searchTab = null;
+            }
+
+            _vm.PropertyChanged -= OnSearchMainChanged;
+            if (SearchEdit.IsKeyboardFocusWithin && IsActive)
+            {
+                RenameEditor.FocusWindowItself(this); // the keys act on the list again
+            }
+
+            SearchBox.Visibility = Visibility.Collapsed; // out of the layout: no layout news for the IME (see MainWindow.xaml)
+            _cascade.SetEditing(_rename.IsOpen || IsAddressEditing);
+        }
+        finally
+        {
+            _searchEnding = false;
+        }
+    }
+
+    /// <summary>Hands what is typed to the tab at once (a pending pause is dropped).</summary>
+    private void ApplySearchNow()
+    {
+        _searchDelay?.Stop();
+        if (_searchTab is { } tab && tab.SearchText != SearchEdit.Text)
+        {
+            tab.SearchText = SearchEdit.Text;
+        }
+    }
+
+    private void OnSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!IsSearchEditing || _searchTab is null)
+        {
+            return;
+        }
+
+        if (_searchDelay is null)
+        {
+            _searchDelay = new DispatcherTimer(DispatcherPriority.Input, Dispatcher) { Interval = SearchDelay };
+            _searchDelay.Tick += (_, _) => ApplySearchNow();
+        }
+
+        _searchDelay.Stop();
+        _searchDelay.Start();
+    }
+
+    private void OnSearchKeyDown(object sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Enter:
+            case Key.Down:
+                e.Handled = true; // the matches are shown: the keys go to the list
+                EndSearch();
+                break;
+            case Key.Escape:
+                e.Handled = true; // like Explorer: the search goes away, the whole list is back
+                SearchEdit.Text = string.Empty;
+                EndSearch();
+                break;
+        }
+    }
+
+    private void OnSearchLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        // Focus inside the box (its own menu) keeps it open.
+        if (!SearchEdit.IsKeyboardFocusWithin)
+        {
+            EndSearch();
+        }
+    }
+
+    /// <summary>The searched tab moved (another folder: its search is cleared) or changed its search otherwise.</summary>
+    private void OnSearchTabChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(TabViewModel.Location))
+        {
+            EndSearch();
+        }
+    }
+
+    private void OnSearchMainChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainViewModel.SelectedTab))
+        {
+            EndSearch();
+        }
+    }
+
+    private void OnSearchChipClick(object sender, MouseButtonEventArgs e)
+    {
+        if (!e.Handled && e.ChangedButton == MouseButton.Left)
+        {
+            e.Handled = true;
+            BeginSearch();
+        }
+    }
+
+    private void OnSearchClearClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        EndSearch();
+        if (_vm.HasTab)
+        {
+            _vm.SelectedTab.SearchText = string.Empty;
+        }
+    }
+
     // ---- the address bar ------------------------------------------------------------------------
 
     /// <summary>The address bar shows its edit box (the path, to type over or copy).</summary>
@@ -1715,6 +1884,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
             return;
         }
 
+        EndSearch();
         _cascade.SetEditing(true); // no hover opens a list over the items, and Esc reaches the box
         if (!IsAddressEditing)
         {

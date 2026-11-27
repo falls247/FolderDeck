@@ -154,8 +154,12 @@ public static class ShellContextMenu
     private const int StageShowing = 1;
     private const int StageCancelled = 2;
 
-    /// <summary>How long the handlers may take to build the menu. There is no limit once it shows.</summary>
-    private static readonly TimeSpan BuildTimeout = TimeSpan.FromSeconds(5);
+    /// <summary>
+    /// How long the handlers may take to build the menu. There is no limit once it shows. 8 s: on a
+    /// PC with OneDrive and other extensions the background menu of a cloud folder took 3–5 s in query
+    /// as a rule, and 5 s cut off menus that were ready a few hundred ms later.
+    /// </summary>
+    private static readonly TimeSpan BuildTimeout = TimeSpan.FromSeconds(8);
 
     /// <summary>
     /// How long the thread keeps pumping after a command at least: handlers start work that still
@@ -614,6 +618,7 @@ public static class ShellContextMenu
             {
                 string what = tooLate ? "ready too late" : "slow to build";
                 AppLog.Info($"Shell menu {what}, {built} ms ({string.Join(", ", _phaseTimes)} ms): {Describe()}");
+                ShellMenuDiagnostics.Describe(_paths[0], _background, what);
             }
         }
 
@@ -630,6 +635,7 @@ public static class ShellContextMenu
             AppLog.Warn(
                 $"Shell menu timed out in {_phase} after {_clock.ElapsedMilliseconds} ms " +
                 $"(menu threads alive: {Volatile.Read(ref _liveThreads)}): {Describe()}");
+            ShellMenuDiagnostics.Describe(_paths[0], _background, $"timed out in {_phase}");
             Complete(ShellMenuOutcome.TimedOut, null, TimedOutMessage);
         }
 

@@ -176,7 +176,7 @@
 
                 <!-- its width is held while the address bar's edit box is open (BeginAddressEdit) -->
                 <StackPanel x:Name="CountPanel" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,12,0" ClipToBounds="True">
-                    <TextBlock Text="{Binding SelectedTab.CountText}" Foreground="{DynamicResource Brush.Muted}"
+                    <TextBlock Text="{Binding SelectedTab.ShownCountText}" Foreground="{DynamicResource Brush.Muted}"
                                VerticalAlignment="Center" Typography.NumeralAlignment="Tabular" />
                     <!-- 「3 個を選択」 while items are selected -->
                     <TextBlock Text="{Binding SelectedTab.SelectionText}" Foreground="{DynamicResource Brush.Accent}" FontWeight="SemiBold"
@@ -184,9 +184,42 @@
                                Visibility="{Binding SelectedTab.SelectionText, Converter={StaticResource NotEmptyToVis}}" />
                 </StackPanel>
 
-                <Button Grid.Column="3" Style="{StaticResource Btn}" Content="履歴をクリア" Margin="0,0,8,0" Padding="10,4"
-                        Command="{Binding ClearHistoryCommand}"
-                        Visibility="{Binding SelectedTab.ShowClearHistory, Converter={StaticResource BoolToVis}}" />
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!--
+                      Search of the shown list (Ctrl+F / F3): the items whose name holds every word typed
+                      (TabViewModel.SearchText). Right of the count, so that a count that changes while
+                      typing does not move the box. The box is Collapsed except while typing (as the
+                      address bar's edit box, see above: a TextBox in the layout keeps the IME busy);
+                      while a search is on and the box is closed, the chip shows it (a click edits it,
+                      × clears it). The box lies over the chip while open.
+                    -->
+                    <Grid Margin="0,0,8,0" VerticalAlignment="Center">
+                        <Border x:Name="SearchChip" CornerRadius="6" BorderThickness="1" Padding="8,2,2,2" Cursor="IBeam"
+                                BorderBrush="{DynamicResource Brush.Accent}" Background="{DynamicResource Brush.AccentSoft}"
+                                ToolTip="一覧を名前で絞り込み中（クリックまたは Ctrl+F で編集、× で解除）"
+                                Visibility="{Binding SelectedTab.IsSearching, Converter={StaticResource BoolToVis}}"
+                                MouseLeftButtonUp="OnSearchChipClick">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE721;" FontFamily="{StaticResource Font.Icons}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"
+                                           Foreground="{DynamicResource Brush.Accent}" />
+                                <TextBlock Text="{Binding SelectedTab.SearchText}" MaxWidth="180" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                <Button Style="{StaticResource Btn.TabClose}" Margin="4,0,0,0" ToolTip="検索を解除（Esc）" Click="OnSearchClearClick" />
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="SearchBox" Width="220" Visibility="Collapsed" CornerRadius="6" BorderThickness="1" Padding="6,0,0,0"
+                                BorderBrush="{DynamicResource Brush.Accent}" Background="{DynamicResource Brush.Surface}">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Left" Text="&#xE721;" FontFamily="{StaticResource Font.Icons}" FontSize="12" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource Brush.Muted}" />
+                                <TextBox x:Name="SearchEdit" Style="{StaticResource AddressBox}" Height="24" AutomationProperties.Name="検索"
+                                         PreviewKeyDown="OnSearchKeyDown" LostKeyboardFocus="OnSearchLostFocus" TextChanged="OnSearchTextChanged" />
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                    <Button Style="{StaticResource Btn}" Content="履歴をクリア" Margin="0,0,8,0" Padding="10,4"
+                            Command="{Binding ClearHistoryCommand}"
+                            Visibility="{Binding SelectedTab.ShowClearHistory, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
 
                 <!-- what the list of 最近の履歴 / よく使う項目 shows: everything, folders only, files only -->
                 <Button Grid.Column="4" Style="{StaticResource Btn}" Margin="0,0,8,0" Padding="10,4" Click="OnFilterClick"
@@ -349,9 +382,9 @@
                 </views:DetailsListView.Style>
             </views:DetailsListView>
 
-            <TextBlock Text="{Binding SelectedTab.EmptyText}" HorizontalAlignment="Center" VerticalAlignment="Center"
+            <TextBlock Text="{Binding SelectedTab.ShownEmptyText}" HorizontalAlignment="Center" VerticalAlignment="Center"
                        Foreground="{DynamicResource Brush.Muted}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="560" Margin="24"
-                       IsHitTestVisible="False" Visibility="{Binding SelectedTab.EmptyText, Converter={StaticResource NotEmptyToVis}}" />
+                       IsHitTestVisible="False" Visibility="{Binding SelectedTab.ShownEmptyText, Converter={StaticResource NotEmptyToVis}}" />
 
             <Border HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,24,0,0" Padding="14,8" CornerRadius="8"
                     Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1"
