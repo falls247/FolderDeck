@@ -89,9 +89,9 @@
             </DockPanel>
         </Border>
 
-        <!-- Toolbar (§5.3): only while a tab is shown -->
+        <!-- Toolbar (§5.3): while a tab or a pane group is shown (an empty pane may be the active one) -->
         <Border Grid.Row="1" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
-                Padding="8,6" Visibility="{Binding HasTab, Converter={StaticResource BoolToVis}}">
+                Padding="8,6" Visibility="{Binding HasPanes, Converter={StaticResource BoolToVis}}">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -277,27 +277,61 @@
                         </StackPanel>
                     </RadioButton>
 
-                    <!-- split the active pane (MainViewModel.SplitPaneCommand): left | right, top / bottom -->
-                    <Button Style="{StaticResource Btn.Icon}" Width="30" Height="28" Margin="10,0,0,0"
-                            ToolTip="{views:ShortcutTip Text=左右に分割, Id=SplitColumns}" AutomationProperties.Name="左右に分割"
+                    <!-- split the active pane (MainViewModel.SplitPaneCommand): left | right, top / bottom; at the pane limit they close the pane beside it -->
+                    <Button Width="30" Height="28" Margin="10,0,0,0"
                             ToolTipService.ShowOnDisabled="True"
                             Command="{Binding SplitPaneCommand}" CommandParameter="{x:Static layout:SplitAxis.Columns}">
+                        <Button.Style>
+                            <Style TargetType="{x:Type Button}" BasedOn="{StaticResource Btn.Icon}">
+                                <Setter Property="ToolTip" Value="{views:ShortcutTip Text=左右に分割, Id=SplitColumns}" />
+                                <Setter Property="AutomationProperties.Name" Value="左右に分割" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsPaneLimitReached}" Value="True">
+                                        <Setter Property="ToolTip" Value="右（なければ左）のペインを閉じる（ペインは 4 個まで）" />
+                                        <Setter Property="AutomationProperties.Name" Value="右（なければ左）のペインを閉じる（ペインは 4 個まで）" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
                         <Grid Width="14" Height="12">
                             <Rectangle RadiusX="1.5" RadiusY="1.5" StrokeThickness="1.5"
                                        Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
                             <Rectangle Width="1.5" HorizontalAlignment="Center"
                                        Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                            <!-- at the pane limit the button closes a pane: a small × in the half it closes -->
+                            <TextBlock Text="&#xE711;" FontFamily="{StaticResource Font.Icons}" FontSize="6"
+                                       HorizontalAlignment="Right" VerticalAlignment="Center"
+                                       Margin="0,0,2,0"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}"
+                                       Visibility="{Binding IsPaneLimitReached, Converter={StaticResource BoolToVis}}" />
                         </Grid>
                     </Button>
-                    <Button Style="{StaticResource Btn.Icon}" Width="30" Height="28" Margin="2,0,0,0"
-                            ToolTip="{views:ShortcutTip Text=上下に分割, Id=SplitRows}" AutomationProperties.Name="上下に分割"
+                    <Button Width="30" Height="28" Margin="2,0,0,0"
                             ToolTipService.ShowOnDisabled="True"
                             Command="{Binding SplitPaneCommand}" CommandParameter="{x:Static layout:SplitAxis.Rows}">
+                        <Button.Style>
+                            <Style TargetType="{x:Type Button}" BasedOn="{StaticResource Btn.Icon}">
+                                <Setter Property="ToolTip" Value="{views:ShortcutTip Text=上下に分割, Id=SplitRows}" />
+                                <Setter Property="AutomationProperties.Name" Value="上下に分割" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsPaneLimitReached}" Value="True">
+                                        <Setter Property="ToolTip" Value="下（なければ上）のペインを閉じる（ペインは 4 個まで）" />
+                                        <Setter Property="AutomationProperties.Name" Value="下（なければ上）のペインを閉じる（ペインは 4 個まで）" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
                         <Grid Width="14" Height="12">
                             <Rectangle RadiusX="1.5" RadiusY="1.5" StrokeThickness="1.5"
                                        Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
                             <Rectangle Height="1.5" VerticalAlignment="Center"
                                        Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                            <!-- at the pane limit the button closes a pane: a small × in the half it closes -->
+                            <TextBlock Text="&#xE711;" FontFamily="{StaticResource Font.Icons}" FontSize="6"
+                                       HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                       Margin="0,0,0,1"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}"
+                                       Visibility="{Binding IsPaneLimitReached, Converter={StaticResource BoolToVis}}" />
                         </Grid>
                     </Button>
                 </StackPanel>
@@ -356,13 +390,13 @@
             <!-- The panes of the shown tab: one PaneView each, with splitters between them (MainWindow.BuildPanes from ShownLayout) -->
             <Border x:Name="PaneArea" />
 
-            <!-- Empty state: every tab was closed (the placeholder tab is selected: no cards, no texts of its own) -->
+            <!-- Empty state: every tab was closed (the placeholder tab is selected: no cards, no texts of its own; an empty pane of a group has its own hint) -->
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
                 <StackPanel.Style>
                     <Style TargetType="{x:Type StackPanel}">
                         <Setter Property="Visibility" Value="Collapsed" />
                         <Style.Triggers>
-                            <DataTrigger Binding="{Binding HasTab}" Value="False">
+                            <DataTrigger Binding="{Binding HasPanes}" Value="False">
                                 <Setter Property="Visibility" Value="Visible" />
                             </DataTrigger>
                         </Style.Triggers>

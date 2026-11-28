@@ -164,6 +164,18 @@ public partial class MainWindow : Window, IMainView, ICardHost
         TabStrip.TabMoved += (element, tab, position) => _cascade.AnchorMouseMove(element, element, tab, position);
         TabStrip.TabLeft += element => _cascade.AnchorMouseLeave(element);
         TabStrip.TabsShifted += () => _cascade.AnchorsMoved<TabLayoutViewModel>();
+        TabStrip.TabDraggedOverPanes += OnTabDraggedOverPanes;
+        TabStrip.TabDroppedOnPanes += OnTabDroppedOnPanes;
+        Sidebar.PaneItemClicked += row =>
+        {
+            _cascade.CloseAll();
+            _ = _vm.OpenRegisteredPaneAsync(row);
+        };
+        Sidebar.PaneItemContextMenu += (row, element) =>
+        {
+            _cascade.CloseAll();
+            _menus.ShowRegisteredPane(row, element);
+        };
 
         // §9.6 rule 5: these close every flyout at once (Popups are topmost windows).
         Deactivated += (_, _) => _cascade.CloseAll();
@@ -625,15 +637,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 e.Handled = true; // like Explorer: the search box, its text selected
                 BeginSearch();
                 break;
-            case Key.Tab when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
+            case Key.Tab when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.Control && _vm.Tabs.Count > 0 && !IsMenuTakingKeys():
                 // Also in the search / address box, as in Explorer. Handled here, at the window's
                 // preview, before WPF's focus traversal would move the focus (Ctrl+Tab's old effect).
                 e.Handled = true;
                 EndAddressEdit(); // the box shows the tab left (the search box closes with the tab)
                 _vm.SelectAdjacentTab(back: (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
                 break;
-            case >= Key.D1 and <= Key.D9 when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
-            case >= Key.NumPad1 and <= Key.NumPad9 when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
+            case >= Key.D1 and <= Key.D9 when Keyboard.Modifiers == ModifierKeys.Control && _vm.Tabs.Count > 0 && !IsMenuTakingKeys():
+            case >= Key.NumPad1 and <= Key.NumPad9 when Keyboard.Modifiers == ModifierKeys.Control && _vm.Tabs.Count > 0 && !IsMenuTakingKeys():
                 e.Handled = true; // Ctrl+1…8: that tab; Ctrl+9: the last one (as Explorer)
                 EndAddressEdit();
                 int digit = key >= Key.NumPad1 ? key - Key.NumPad1 : key - Key.D1;
@@ -649,11 +661,19 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 }
 
                 break;
-            case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
-                e.Handled = true; // like Explorer: closes the shown tab (in a split, the active pane's tab), whatever its kind
-                _vm.CloseTabCommand.Execute(_vm.SelectedTab);
+            case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasPanes:
+                e.Handled = true; // like Explorer: closes the shown tab (in a split, the active pane's tab), whatever its kind; an empty pane closes
+                if (_vm.HasTab)
+                {
+                    _vm.CloseTabCommand.Execute(_vm.SelectedTab);
+                }
+                else
+                {
+                    _vm.ClosePane(_vm.ActivePane);
+                }
+
                 break;
-            case Key.Oem5 or Key.OemBackslash when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
+            case Key.Oem5 or Key.OemBackslash when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.Control && _vm.HasPanes && !IsMenuTakingKeys():
                 // Ctrl + \ (the ¥ key and the ろ key of a Japanese keyboard, \ of others): left | right;
                 // with Shift, top / bottom. Also in the search / address box (neither types with Ctrl).
                 e.Handled = true;
@@ -661,11 +681,14 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 {
                     EndAddressEdit();
                     var axis = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? SplitAxis.Rows : SplitAxis.Columns;
-                    _ = _vm.SplitActivePaneAsync(axis);
+                    if (_vm.SplitPaneCommand.CanExecute(axis))
+                    {
+                        _vm.SplitPaneCommand.Execute(axis); // as the toolbar's buttons: at the pane limit, closes the pane beside
+                    }
                 }
 
                 break;
-            case Key.F6 when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.None && _vm.HasTab && !IsMenuTakingKeys():
+            case Key.F6 when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.None && _vm.HasPanes && !IsMenuTakingKeys():
                 // the next / previous pane of the split (as Windows Terminal's focus moves); nothing otherwise
                 if (_vm.IsSplit)
                 {
@@ -1212,12 +1235,20 @@ public partial class MainWindow : Window, IMainView, ICardHost
             return;
         }
 
-        if (e.Handled || !_vm.HasTab || IsOnItemOrControl(e.OriginalSource) || IsOnPaneBanner(e.OriginalSource))
+        if (e.Handled || !_vm.HasPanes || IsOnItemOrControl(e.OriginalSource) || IsOnPaneBanner(e.OriginalSource))
         {
             return;
         }
 
         e.Handled = true;
+        if (!_vm.HasTab)
+        {
+            // an empty pane (the press made it the active one): only the pane entries
+            _cascade.CloseAll();
+            _menus.ShowEmptyPane(ActivePaneView.ItemsHost);
+            return;
+        }
+
         if (ActiveList.RealizedItemAt(e) is { } view
             && ((view as CardView)?.ViewModel ?? (view as DetailsRowView)?.ViewModel) is { } item)
         {
@@ -1627,12 +1658,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
         // no highlight: the whole list is the target, and a card's mark would say "into this folder"
         FolderTarget? ShownFolderTarget(string? onFile = null) =>
-            _vm.HasTab && _vm.PasteFolderOf(null, pane) is { } shown ? new FolderTarget(shown, null, ShownFolder: true, onFile) : RefusedInFolder();
+            HasTabIn(pane) && _vm.PasteFolderOf(null, pane) is { } shown ? new FolderTarget(shown, null, ShownFolder: true, onFile) : RefusedInFolder();
 
         // a real folder's list that takes no drop now refuses it; only the top lists (最近の履歴 /
         // よく使う項目 / PC) and the placeholder keep the old null (a registration for Explorer drags)
         FolderTarget? RefusedInFolder() =>
-            _vm.HasTab && (pane ?? _vm.ActivePane).FolderTargetPath is { } real ? new FolderTarget(real, null, Refused: true) : null;
+            HasTabIn(pane) && (pane ?? _vm.ActivePane).FolderTargetPath is { } real ? new FolderTarget(real, null, Refused: true) : null;
+
+        // the pane of the drop shows a tab (not an empty pane, not the placeholder); the active one off the panes
+        bool HasTabIn(PaneViewModel? target) => !(target ?? _vm.ActivePane).IsPlaceholder;
     }
 
     /// <summary>The paths of another app's file drop (null when it carries none or cannot be read).</summary>
@@ -2950,6 +2984,16 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _splitOf[splitter] = split;
         var first = Build(split.First);
         var second = Build(split.Second);
+
+        // A view is reused across layouts: the cell it had in its last grid must not carry over (a
+        // former second part keeps Grid.Column / Grid.Row = 2 and would cover the other part, leaving
+        // its own cell empty and dead to clicks).
+        foreach (var part in new[] { first, second })
+        {
+            part.ClearValue(Grid.ColumnProperty);
+            part.ClearValue(Grid.RowProperty);
+        }
+
         if (columns)
         {
             grid.ColumnDefinitions.Add(new ColumnDefinition());
@@ -3079,7 +3123,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             view.IsSplit = split;
             view.IsActive = ReferenceEquals(pane, _vm.ActivePane);
-            view.Slot = split ? _vm.Tabs.FirstOrDefault(t => ReferenceEquals(t.ActivePane, pane))?.PaneSlot ?? -1 : -1;
+            view.Slot = split ? _vm.SlotOf(pane) : -1;
         }
     }
 
@@ -3220,25 +3264,6 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
     }
 
-    public Size PaneSize(PaneViewModel pane)
-    {
-        if (!_shownViews.TryGetValue(pane, out var view))
-        {
-            return Size.Empty;
-        }
-
-        if (!view.IsArrangeValid)
-        {
-            UpdateLayout(); // a tab just switched to (the tab menu's split): its panes are laid out first
-        }
-
-        // A view just given to the pane (a tab switched to) is laid out on the next pass: a tab of
-        // one pane has the whole items area.
-        return view.ActualWidth > 0 || _shownViews.Count > 1
-            ? new Size(view.ActualWidth, view.ActualHeight)
-            : new Size(ContentHost.ActualWidth, ContentHost.ActualHeight);
-    }
-
     public nint WindowHandle => new WindowInteropHelper(this).Handle;
 
     public bool Confirm(string title, string body, string? path, string primaryText, bool danger)
@@ -3254,6 +3279,88 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             _modalDepth--;
         }
+    }
+
+    public string? AskName(string title, string body, string initial)
+    {
+        _cascade.CloseAll();
+        var dialog = new NameInputDialog(title, body, initial) { Owner = this };
+        _modalDepth++;
+        try
+        {
+            return dialog.ShowDialog() == true ? dialog.Result : null;
+        }
+        finally
+        {
+            _modalDepth--;
+        }
+    }
+
+    // ---- a tab dragged from the strip onto a pane ------------------------------------------------
+
+    /// <summary>The pane view marked as where the dragged tab would go (null: none).</summary>
+    private PaneView? _tabDropView;
+
+    /// <summary>
+    /// The tab strip's drag is over the panes (<paramref name="screen"/>; null: it left them): marks the
+    /// pane of the group on screen under the pointer, unless it is the dragged tab's own. True when one is marked.
+    /// </summary>
+    private bool OnTabDraggedOverPanes(TabLayoutViewModel tab, Point? screen)
+    {
+        var view = screen is { } at && _vm.IsSplit ? PaneViewAtScreen(at) : null;
+        if (view?.Pane is not { } pane || ReferenceEquals(pane, tab.ActivePane))
+        {
+            view = null;
+        }
+
+        if (!ReferenceEquals(view, _tabDropView))
+        {
+            if (_tabDropView is not null)
+            {
+                _tabDropView.IsTabDropTarget = false;
+            }
+
+            _tabDropView = view;
+            if (view is not null)
+            {
+                view.IsTabDropTarget = true;
+            }
+        }
+
+        return view is not null;
+    }
+
+    /// <summary>The dragged tab was released over the panes: the pane under the pointer takes it (MainViewModel.PutInPaneAsync).</summary>
+    private bool OnTabDroppedOnPanes(TabLayoutViewModel tab, Point screen)
+    {
+        bool target = OnTabDraggedOverPanes(tab, screen);
+        var pane = _tabDropView?.Pane;
+        OnTabDraggedOverPanes(tab, null);
+        if (!target || pane is null)
+        {
+            return false;
+        }
+
+        _cascade.CloseAll();
+        _ = _vm.PutInPaneAsync(tab, pane);
+        return true;
+    }
+
+    /// <summary>The pane view under a point of the screen (not a splitter), or null.</summary>
+    private PaneView? PaneViewAtScreen(Point screen)
+    {
+        if (!PaneArea.IsVisible || PresentationSource.FromVisual(PaneArea) is null)
+        {
+            return null;
+        }
+
+        Point p = PaneArea.PointFromScreen(screen);
+        if (p.X < 0 || p.Y < 0 || p.X > PaneArea.ActualWidth || p.Y > PaneArea.ActualHeight)
+        {
+            return null;
+        }
+
+        return PaneArea.InputHitTest(p) is DependencyObject hit ? PaneViewOf(hit) : null;
     }
 
     // ---- auto refresh: what a replaced item list would break ------------------------------------

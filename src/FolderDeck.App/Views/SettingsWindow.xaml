@@ -54,7 +54,8 @@
         </Style>
     </Window.Resources>
     <!--
-      The settings in tabs (表示 / 操作 / フォルダ / 履歴 / データ; Ctrl+Tab and Ctrl+PageDown switch).
+      The settings in tabs (表示 / 操作 / フォルダ / 履歴 / データ / ペイン; Ctrl+Tab and Ctrl+PageDown switch).
+      New tabs go at the end: SettingsWindow.OnOk finds the page of an invalid field by its index.
       The pages lie on top of each other and those not shown are Hidden, not Collapsed: the window
       is as tall as the tallest page and does not jump when the tab changes. It is at most as tall as
       the main window (MainWindow.ShowSettings sets MaxHeight): the page scrolls above the message
@@ -79,6 +80,8 @@
                              ToolTip="最近の履歴・よく使う項目" />
                 <RadioButton x:Name="TabData" Style="{StaticResource PageTab}" GroupName="Page" Content="データ" Checked="OnTabChecked"
                              ToolTip="サムネイルのキャッシュ・データフォルダ" />
+                <RadioButton x:Name="TabPanes" Style="{StaticResource PageTab}" GroupName="Page" Content="ペイン" Checked="OnTabChecked"
+                             ToolTip="登録ペイン・ペインを閉じるときの動作" />
             </StackPanel>
         </Border>
 
@@ -253,6 +256,39 @@
                     <Button Style="{StaticResource Btn}" Content="データフォルダを開く" Command="{Binding OpenDataFolderCommand}" HorizontalAlignment="Left" />
                     <TextBlock Text="設定・登録フォルダ・履歴・ログ・サムネイルのキャッシュを置いているフォルダを、エクスプローラーで開きます。"
                                Style="{StaticResource Help}" Margin="0,6,0,0" />
+                </StackPanel>
+
+                <!-- ペイン (the two buttons act at once, as 統計のリセット does; the check boxes apply on OK) -->
+                <StackPanel x:Name="PagePanes" Visibility="Hidden">
+                    <TextBlock Text="登録ペイン" Style="{StaticResource Section}" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <!-- Enter here registers (OnPaneNameKeyDown), it does not press OK -->
+                        <TextBox x:Name="PaneNameBox" Style="{StaticResource Input}" Tag="登録ペインの名前" AutomationProperties.Name="登録ペインの名前"
+                                 Text="{Binding NewPaneName, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanRegisterPanes, Mode=OneTime}"
+                                 PreviewKeyDown="OnPaneNameKeyDown" Margin="0,3,8,3" />
+                        <Button Grid.Column="1" Style="{StaticResource Btn}" Content="現在のペインを登録する" Command="{Binding RegisterPanesCommand}"
+                                VerticalAlignment="Center" />
+                    </Grid>
+                    <TextBlock Text="{Binding RegisterPanesNote, Mode=OneTime}" Style="{StaticResource Help}" Margin="0,6,0,0" />
+                    <Button Style="{StaticResource Btn}" Content="現在のペインを上書きする" Command="{Binding OverwriteRegisteredPaneCommand}"
+                            HorizontalAlignment="Left" Margin="0,12,0,0" />
+                    <TextBlock Text="{Binding OverwritePaneNote}" Style="{StaticResource Help}" Margin="0,6,0,0" />
+                    <CheckBox Content="登録ペインの内容を自動記録する" IsChecked="{Binding PaneAutoRecord}" Margin="0,12,0,4" />
+                    <TextBlock Text="ペインで開くタブ・フォルダが変わるたびに、開いている登録ペインを上書きします。"
+                               Style="{StaticResource Help}" Margin="20,0,0,0" />
+                    <CheckBox IsChecked="{Binding PaneReuseOpenTabs}">
+                        <TextBlock Text="登録ペインを開くとき、同じフォルダのタブがあればそれを使う（タブを増やさない）" TextWrapping="Wrap" />
+                    </CheckBox>
+
+                    <TextBlock Text="ペインとタブ" Style="{StaticResource Section}" />
+                    <CheckBox Content="ペインを閉じたときにタブも閉じる" IsChecked="{Binding PaneCloseClosesTab}" />
+                    <CheckBox IsChecked="{Binding PaneDragOutKeepsEmpty}">
+                        <TextBlock Text="グループの外へドラッグしたタブのペインを空のペインとして残す（オフ：ペインを閉じる）" TextWrapping="Wrap" />
+                    </CheckBox>
                 </StackPanel>
             </Grid>
         </ScrollViewer>

@@ -20,8 +20,8 @@ public partial class SettingsWindow : Window
         InitializeComponent();
         _vm = vm;
         DataContext = vm;
-        _tabs = [TabView, TabActions, TabFolders, TabHistory, TabData];
-        _pages = [PageView, PageActions, PageFolders, PageHistory, PageData];
+        _tabs = [TabView, TabActions, TabFolders, TabHistory, TabData, TabPanes];
+        _pages = [PageView, PageActions, PageFolders, PageHistory, PageData, PagePanes];
         ShowPage(s_lastPage);
         PreviewKeyDown += OnWindowKeyDown;
         SourceInitialized += (_, _) => (Application.Current as App)?.Theme?.ApplyTitleBar(this);
@@ -65,6 +65,24 @@ public partial class SettingsWindow : Window
             ShowPage((_page + (back ? _pages.Length - 1 : 1)) % _pages.Length);
             _tabs[_page].Focus();
             e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Enter in the name of a new 登録ペイン registers it (when it can be) and never presses OK:
+    /// handled here, before the default button sees the key.
+    /// </summary>
+    private void OnPaneNameKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (_vm.RegisterPanesCommand.CanExecute(null))
+        {
+            _vm.RegisterPanesCommand.Execute(null);
         }
     }
 

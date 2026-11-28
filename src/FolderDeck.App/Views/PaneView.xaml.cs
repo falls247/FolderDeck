@@ -24,6 +24,9 @@ public partial class PaneView : UserControl
     public static readonly DependencyProperty SlotProperty =
         DependencyProperty.Register(nameof(Slot), typeof(int), typeof(PaneView), new PropertyMetadata(-1));
 
+    public static readonly DependencyProperty IsTabDropTargetProperty =
+        DependencyProperty.Register(nameof(IsTabDropTarget), typeof(bool), typeof(PaneView), new PropertyMetadata(false));
+
     public PaneView()
     {
         InitializeComponent();
@@ -58,6 +61,13 @@ public partial class PaneView : UserControl
     {
         get => (int)GetValue(SlotProperty);
         set => SetValue(SlotProperty, value);
+    }
+
+    /// <summary>A tab dragged from the strip would go in this pane if dropped now: the pane is marked.</summary>
+    public bool IsTabDropTarget
+    {
+        get => (bool)GetValue(IsTabDropTargetProperty);
+        set => SetValue(IsTabDropTargetProperty, value);
     }
 
     public CardGrid CardGrid => Grid;

@@ -57,12 +57,25 @@ public sealed class OpenTabSetting
     /// <see cref="AppSettings.Normalize"/> fills it from the kind's <see cref="AppSettings.SortModes"/>.
     /// </summary>
     public string? SortMode { get; set; }
+
+    /// <summary>A copy of every member (what <see cref="AppSettings.Clone"/> and <see cref="PaneNodeSetting.Clone"/> hand out).</summary>
+    public OpenTabSetting Clone() => new()
+    {
+        Kind = Kind,
+        Root = Root,
+        Path = Path,
+        FileId = FileId,
+        CardShape = CardShape,
+        SortMode = SortMode,
+    };
 }
 
 /// <summary>
-/// A node of <c>split_layout</c>: a leaf <c>{ "pane": 0 }</c> (an index into
-/// <see cref="AppSettings.OpenTabs"/>: the tab that pane shows) or a split <c>{ "split": "columns", "ratio": 0.5, "first": …, "second": … }</c>
-/// (<c>columns</c>: side by side, <c>rows</c>: stacked; <c>ratio</c> is the first part's share).
+/// A node of a pane layout (see <see cref="PaneLayoutSettings"/>): a split <c>{ "split": "columns", "ratio": 0.5, "first": …, "second": … }</c>
+/// (<c>columns</c>: side by side, <c>rows</c>: stacked; <c>ratio</c> is the first part's share) or a leaf
+/// holding exactly one of <c>{ "pane": 0 }</c> (an index into <see cref="AppSettings.OpenTabs"/>: the tab that
+/// pane shows; settings.json), <c>{ "tab": { … } }</c> (the tab itself; registered_panes.json) or
+/// <c>{ "empty": true }</c> (an empty pane; both files).
 /// </summary>
 public sealed class PaneNodeSetting
 {
@@ -78,19 +91,59 @@ public sealed class PaneNodeSetting
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Pane { get; set; }
 
+    /// <summary>Of a leaf: true for an empty pane (one that shows no tab). Not written otherwise.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Empty { get; set; }
+
+    /// <summary>Of a leaf of a registered pane: the tab the pane opens (its location and view).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OpenTabSetting? Tab { get; set; }
+
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PaneNodeSetting? First { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PaneNodeSetting? Second { get; set; }
 
+    /// <summary>A leaf for an empty pane: <c>{ "empty": true }</c>.</summary>
+    public static PaneNodeSetting EmptyLeaf() => new() { Empty = true };
+
     public PaneNodeSetting Clone() => new()
     {
         Split = Split,
         Ratio = Ratio,
         Pane = Pane,
+        Empty = Empty,
+        Tab = Tab?.Clone(),
         First = First?.Clone(),
         Second = Second?.Clone(),
+    };
+}
+
+/// <summary>
+/// One pane group of <c>pane_groups</c>: a window layout of 2 to <see cref="PaneRules.MaxPanes"/> panes, each
+/// showing an open tab (<c>pane</c>, a tab is in at most one group) or empty, at least one of them a tab.
+/// </summary>
+public sealed class PaneGroupSetting
+{
+    /// <summary>The tree (see <see cref="PaneLayoutSettings.IsValidGroup"/>).</summary>
+    public PaneNodeSetting? Layout { get; set; }
+
+    /// <summary>The active pane: its index among the leaves in reading order (0-based).</summary>
+    public int Active { get; set; }
+
+    /// <summary>
+    /// Id in registered_panes.json (<see cref="RegisteredPanesStore"/>) of the registered pane the group
+    /// was opened from; null when it was not (or is no longer known to come from one).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RegisteredPane { get; set; }
+
+    public PaneGroupSetting Clone() => new()
+    {
+        Layout = Layout?.Clone(),
+        Active = Active,
+        RegisteredPane = RegisteredPane,
     };
 }
 
@@ -103,10 +156,13 @@ public static class SidebarSections
     /// <summary>登録フォルダ.</summary>
     public const string Registered = "registered";
 
+    /// <summary>登録ペイン (registered_panes.json), below 登録フォルダ.</summary>
+    public const string Panes = "panes";
+
     /// <summary>PC: the drives.</summary>
     public const string Pc = "pc";
 
-    public static IReadOnlyList<string> All { get; } = [Quick, Registered, Pc];
+    public static IReadOnlyList<string> All { get; } = [Quick, Registered, Panes, Pc];
 }
 
 /// <summary>settings.json (§13.2). Missing keys keep these defaults.</summary>
@@ -136,8 +192,9 @@ public sealed class AppSettings
     public const double SidebarWidthDefault = 220;
 
     /// <summary>
-    /// Version of the file layout. 3: the window may be split into panes, each showing one open tab
-    /// (<see cref="SplitLayout"/>; a file without it is not split, so a version 2 file needs no conversion). 2: one tab
+    /// Version of the file layout. 3: the window may be split into panes, each showing one open tab or
+    /// empty (<see cref="PaneGroups"/>; 0.8.0 wrote one split as <see cref="SplitLayout"/>, migrated when
+    /// <c>pane_groups</c> is missing; a file with neither is not split, so a version 2 file needs no conversion). 2: one tab
     /// strip (<see cref="OpenTabs"/> holds every tab and <see cref="SelectedTab"/> says which is shown).
     /// 1: two fixed tabs plus folder tabs (<see cref="LastTab"/>, <see cref="Locations"/>, <see cref="SelectedFolderTab"/>).
     /// </summary>
@@ -174,13 +231,24 @@ public sealed class AppSettings
     public int SelectedTab { get; set; }
 
     /// <summary>
-    /// How the window is split (see <see cref="PaneLayoutSettings"/>): each leaf's <c>pane</c> is the
-    /// index in <see cref="OpenTabs"/> of the tab that pane shows, 2 to <see cref="PaneRules.MaxPanes"/>
-    /// of them; <see cref="SelectedTab"/> is one of them (the active pane). Null: not split. An exe
-    /// that does not know it drops the key and shows <see cref="SelectedTab"/> alone.
+    /// Read for migration only: how 0.8.0 split the window (each leaf's <c>pane</c> the index in
+    /// <see cref="OpenTabs"/> of the tab that pane shows, <see cref="SelectedTab"/> the active pane). When
+    /// <see cref="PaneGroups"/> is missing, <see cref="Normalize"/> turns it into the one group; after
+    /// <see cref="Normalize"/> it is always null, so it is no longer written.
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PaneNodeSetting? SplitLayout { get; set; }
+
+    /// <summary>
+    /// The pane groups, each a window layout of 2 to <see cref="PaneRules.MaxPanes"/> panes (see
+    /// <see cref="PaneGroupSetting"/>); a tab is in at most one of them. Null only until <see cref="Normalize"/>
+    /// (a file without the key migrates <see cref="SplitLayout"/>), then a list, empty when nothing is split.
+    /// An exe that does not know it drops the key and shows <see cref="SelectedTab"/> alone.
+    /// </summary>
+    public List<PaneGroupSetting>? PaneGroups { get; set; }
+
+    /// <summary>Index in <see cref="PaneGroups"/> of the group on screen; -1: none (<see cref="SelectedTab"/> is shown alone).</summary>
+    public int ShownGroup { get; set; } = -1;
 
     /// <summary>
     /// Version 1 only: which tab was shown (<see cref="TabRecent"/>, <see cref="TabFrequent"/> or
@@ -364,6 +432,27 @@ public sealed class AppSettings
     [JsonIgnore]
     public bool SearchesRecursively => SearchScope == SearchScopeRecursive;
 
+    /// <summary>
+    /// 登録ペインの内容を自動記録する: a pane group opened from a registered pane writes its layout back to
+    /// it whenever it changes (現在のペインを上書きする is then not needed). Off by default.
+    /// </summary>
+    public bool PaneAutoRecord { get; set; }
+
+    /// <summary>
+    /// 登録ペインを開くとき同じ場所のタブを使う: opening a registered pane uses an open folder tab at the same
+    /// location instead of opening a new one (最近の履歴 / よく使う項目 are always reused). On by default.
+    /// </summary>
+    public bool PaneReuseOpenTabs { get; set; } = true;
+
+    /// <summary>ペインを閉じたときにタブも閉じる: closing a pane closes its tab too (off: the tab stays on the strip).</summary>
+    public bool PaneCloseClosesTab { get; set; }
+
+    /// <summary>
+    /// グループの外へ出したタブのペインを空のペインとして残す: a group's tab dragged out of the group's block on
+    /// the strip leaves an empty pane (off: its pane closes).
+    /// </summary>
+    public bool PaneDragOutKeepsEmpty { get; set; }
+
     public static int ClampCardSize(int value) => Snap(value, CardSizeMin, CardSizeMax, CardSizeStep);
 
     public static int ClampTextScale(int value) => Snap(value, TextScaleMin, TextScaleMax, TextScaleStep);
@@ -453,7 +542,30 @@ public sealed class AppSettings
         Locations = null;
         SelectedFolderTab = null;
         SplitLayout = null; // its indexes were into the tabs that are now rebuilt
+        PaneGroups = null;
+        ShownGroup = -1;
         Version = CurrentVersion;
+    }
+
+    /// <summary>
+    /// Turns the split of 0.8.0 (<see cref="SplitLayout"/>) into one pane group when the file has no
+    /// <see cref="PaneGroups"/>: the selected tab's pane is the active one and the group is shown. 0.8.0 never
+    /// wrote a split without the selected tab; such a group is kept but not shown (the tab is shown alone, as
+    /// 0.8.0 did). Runs before the open tabs are normalized: the leaves are still indexes into the tabs as
+    /// written. <see cref="SplitLayout"/> is null afterwards in every case.
+    /// </summary>
+    private void MigrateSplitLayout()
+    {
+        var split = SplitLayout;
+        SplitLayout = null;
+        if (PaneGroups is not null || OpenTabs is null || !PaneLayoutSettings.IsValid(split, OpenTabs.Count))
+        {
+            return;
+        }
+
+        int active = PaneLayoutSettings.LeavesOf(split!).FindIndex(leaf => leaf.Pane == SelectedTab);
+        PaneGroups = [new PaneGroupSetting { Layout = split, Active = Math.Max(active, 0) }];
+        ShownGroup = active >= 0 ? 0 : -1;
     }
 
     /// <summary>
@@ -461,24 +573,6 @@ public sealed class AppSettings
     /// pointed at while entries are dropped (when that very entry goes: on the one after it). Returns,
     /// for each entry it was given, its index now (-1: dropped); null on a first run (there were none).
     /// </summary>
-    private static void CollectLeaves(PaneNodeSetting node, HashSet<int> into)
-    {
-        if (node.Pane is int pane)
-        {
-            into.Add(pane);
-        }
-
-        if (node.First is { } first)
-        {
-            CollectLeaves(first, into);
-        }
-
-        if (node.Second is { } second)
-        {
-            CollectLeaves(second, into);
-        }
-    }
-
     private int[]? NormalizeOpenTabs()
     {
         if (OpenTabs is null)
@@ -496,13 +590,21 @@ public sealed class AppSettings
         bool frequent = false;
         int folders = 0;
 
-        // The folder tabs on screen in the split are kept whatever their place: the cap of
-        // OpenTabsMax drops folder tabs from the right, which would otherwise take the split with them
-        // (a split adds its new tab right of the shown one). At most MaxPanes are reserved.
+        // The folder tabs in a pane group are kept whatever their place: the cap of OpenTabsMax drops
+        // folder tabs from the right, which would otherwise take the groups' panes with them.
         var shown = new HashSet<int>();
-        if (PaneLayoutSettings.IsValid(SplitLayout, OpenTabs.Count))
+        foreach (var group in PaneGroups ?? [])
         {
-            CollectLeaves(SplitLayout!, shown);
+            if (group is not null && PaneLayoutSettings.IsGroupShape(group.Layout))
+            {
+                foreach (var leaf in PaneLayoutSettings.LeavesOf(group.Layout!))
+                {
+                    if (leaf.Pane is int pane && pane >= 0 && pane < OpenTabs.Count)
+                    {
+                        shown.Add(pane);
+                    }
+                }
+            }
         }
 
         int reserved = shown.Count(i => OpenTabs[i] is { } t && !string.IsNullOrWhiteSpace(t.Root)
@@ -556,25 +658,45 @@ public sealed class AppSettings
     }
 
     /// <summary>
-    /// Keeps <see cref="SplitLayout"/> when it is a valid split of the entries <see cref="NormalizeOpenTabs"/>
-    /// was given (<paramref name="newIndex"/>: where each of them is now), every tab it shows is still
-    /// there and the selected tab is one of them; its indexes then point at the kept entries, its split
-    /// values are in their written form and its ratios in range. Anything else: not split.
+    /// Makes <see cref="PaneGroups"/> point at the entries <see cref="NormalizeOpenTabs"/> kept
+    /// (<paramref name="newIndex"/>: where each entry it was given is now; null on a first run: no groups).
+    /// A leaf whose tab was dropped, or whose tab an earlier group or leaf shows already, becomes an empty
+    /// pane; a group of the wrong shape or without any tab left is dropped (see
+    /// <see cref="PaneLayoutSettings.NormalizeGroup"/>). <see cref="PaneGroupSetting.Active"/> out of range is
+    /// the first pane, a blank <see cref="PaneGroupSetting.RegisteredPane"/> none, and <see cref="ShownGroup"/>
+    /// follows its group (-1 when that group was dropped).
     /// </summary>
-    private void NormalizeSplitLayout(int[]? newIndex)
+    private void NormalizePaneGroups(int[]? newIndex)
     {
-        var node = SplitLayout;
-        SplitLayout = null;
-        if (newIndex is null || !PaneLayoutSettings.IsValid(node, newIndex.Length)
-            || PaneLayoutSettings.Normalize(node!, newIndex) is not { } normalized)
+        var groups = PaneGroups ?? [];
+        int shownGroup = ShownGroup;
+        PaneGroups = [];
+        ShownGroup = -1;
+        if (newIndex is null)
         {
             return;
         }
 
-        bool Shows(PaneNodeSetting n, int tab) => n.Split is null ? n.Pane == tab : Shows(n.First!, tab) || Shows(n.Second!, tab);
-        if (Shows(normalized, SelectedTab))
+        var used = new HashSet<int>();
+        for (int i = 0; i < groups.Count; i++)
         {
-            SplitLayout = normalized;
+            if (groups[i] is not { } group || PaneLayoutSettings.NormalizeGroup(group.Layout, newIndex, used) is not { } layout)
+            {
+                continue;
+            }
+
+            int leaves = PaneLayoutSettings.LeavesOf(layout).Count;
+            if (i == shownGroup)
+            {
+                ShownGroup = PaneGroups.Count;
+            }
+
+            PaneGroups.Add(new PaneGroupSetting
+            {
+                Layout = layout,
+                Active = group.Active >= 0 && group.Active < leaves ? group.Active : 0,
+                RegisteredPane = string.IsNullOrWhiteSpace(group.RegisteredPane) ? null : group.RegisteredPane,
+            });
         }
     }
 
@@ -590,7 +712,8 @@ public sealed class AppSettings
         Locations = null;
         SelectedFolderTab = null;
         Version = CurrentVersion;
-        NormalizeSplitLayout(NormalizeOpenTabs());
+        MigrateSplitLayout(); // before the open tabs: its leaves are indexes into them as written
+        NormalizePaneGroups(NormalizeOpenTabs());
         Window ??= new WindowPlacementSetting();
         if (Window.Width < 200 || double.IsNaN(Window.Width))
         {
@@ -671,16 +794,9 @@ public sealed class AppSettings
         };
         copy.Locations = Locations?.ToDictionary(kv => kv.Key, kv => new LocationSetting { Root = kv.Value.Root, Path = kv.Value.Path });
         // Every member of OpenTabSetting: Current is handed out through this copy.
-        copy.OpenTabs = OpenTabs?.Select(t => new OpenTabSetting
-        {
-            Kind = t.Kind,
-            Root = t.Root,
-            Path = t.Path,
-            FileId = t.FileId,
-            CardShape = t.CardShape,
-            SortMode = t.SortMode,
-        }).ToList();
+        copy.OpenTabs = OpenTabs?.Select(t => t.Clone()).ToList();
         copy.SplitLayout = SplitLayout?.Clone();
+        copy.PaneGroups = PaneGroups?.Select(g => g?.Clone()!).ToList();
         copy.SidebarCollapsedSections = SidebarCollapsedSections?.ToList();
         copy.DetailsColumns = DetailsColumns is null ? null : new Dictionary<string, double>(DetailsColumns);
         copy.DetailsExtraColumns = DetailsExtraColumns?.ToList();

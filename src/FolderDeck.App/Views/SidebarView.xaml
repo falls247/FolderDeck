@@ -8,6 +8,8 @@
          クイック アクセス: 最近の履歴 / よく使う項目 (a click opens or shows that tab).
          登録フォルダ: one row per folder (name only). Resting on a row opens the cascade beside it,
          a click opens the folder in a new tab, a drag moves the row (or hands the folder to another app).
+         登録ペイン: one row per saved pane layout (registered_panes.json); a click opens it, a right-click its menu;
+         no hover, no drag. The header's button registers the pane group on screen.
          PC: one row per drive; the same hover and click, no drag; right-click on the header: エクスプローラーで開く. -->
     <UserControl.Resources>
         <!-- Header of a section (DataContext: SidebarSectionViewModel). The whole header folds or
@@ -143,6 +145,35 @@
                 </DataTrigger>
             </DataTemplate.Triggers>
         </DataTemplate>
+
+        <!-- A row of 登録ペイン: icon and name, filled while the pane group on screen came from it. -->
+        <DataTemplate x:Key="PaneRow" DataType="{x:Type vm:RegisteredPaneItemViewModel}">
+            <Border x:Name="Row" Height="{DynamicResource Size.Sidebar.Row}" CornerRadius="6" Padding="8,0,6,0" Background="Transparent" Cursor="Hand"
+                    ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="900" ToolTipService.Placement="Mouse"
+                    AutomationProperties.Name="{Binding Name}"
+                    MouseLeftButtonDown="OnPaneRowLeftDown" MouseLeftButtonUp="OnPaneRowLeftUp"
+                    MouseRightButtonUp="OnPaneRowRightUp">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="24" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="&#xE8A9;" FontFamily="{StaticResource Font.Icons}" FontSize="14" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.Accent}" />
+                    <TextBlock x:Name="NameText" Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+            <DataTemplate.Triggers>
+                <Trigger SourceName="Row" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Row" Property="Background" Value="{DynamicResource Brush.Surface3}" />
+                </Trigger>
+                <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                    <Setter TargetName="Row" Property="Background" Value="{DynamicResource Brush.AccentSoft}" />
+                    <Setter TargetName="NameText" Property="FontWeight" Value="SemiBold" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
     </UserControl.Resources>
 
     <Grid>
@@ -153,6 +184,9 @@
             <!-- 登録フォルダ: header, rows (the heights of the body rows and the filler are set in ApplyRowHeights) -->
             <RowDefinition Height="Auto" />
             <RowDefinition x:Name="RegisteredBodyRow" Height="*" />
+            <!-- 登録ペイン: header, rows (as high as the rows need, up to a share of the sidebar: ApplyRowHeights) -->
+            <RowDefinition Height="Auto" />
+            <RowDefinition x:Name="PanesBodyRow" Height="Auto" />
             <!-- PC: header, rows (as high as the drives need, up to a share of the sidebar: ApplyRowHeights) -->
             <RowDefinition Height="Auto" />
             <RowDefinition x:Name="PcBodyRow" Height="Auto" />
@@ -195,12 +229,32 @@
                     Visibility="Collapsed" IsHitTestVisible="False" />
         </Grid>
 
-        <Button Grid.Row="4" Margin="6,2,6,0" Style="{StaticResource SectionHeader}" DataContext="{Binding PcSection}"
+        <DockPanel Grid.Row="4" Margin="6,2,6,0">
+            <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="30" Height="28" FontSize="14" Content="&#xE710;" Margin="2,0,0,0"
+                    ToolTip="現在のペインを登録" ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="現在のペインを登録"
+                    Command="{Binding RegisterPanesFromSidebarCommand}" />
+            <Button Style="{StaticResource SectionHeader}" DataContext="{Binding PanesSection}"
+                    Tag="{Binding DataContext.RegisteredPanesCountText, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}" />
+        </DockPanel>
+
+        <!-- The rows of 登録ペイン (no drop target, no drag). -->
+        <Grid Grid.Row="5" Visibility="{Binding PanesSection.IsExpanded, Converter={StaticResource BoolToVis}}">
+            <ScrollViewer x:Name="PanesScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                <ItemsControl ItemsSource="{Binding RegisteredPanes}" ItemTemplate="{StaticResource PaneRow}" Focusable="False" Margin="6,2,6,8" />
+            </ScrollViewer>
+
+            <TextBlock Margin="14,4,12,8" VerticalAlignment="Top" TextWrapping="Wrap" FontSize="{DynamicResource Size.Sidebar.HintFont}"
+                       Foreground="{DynamicResource Brush.Muted}" IsHitTestVisible="False"
+                       Text="ペインを分割して、見出しの右のボタンで登録できます"
+                       Visibility="{Binding HasNoRegisteredPanes, Converter={StaticResource BoolToVis}}" />
+        </Grid>
+
+        <Button Grid.Row="6" Margin="6,2,6,0" Style="{StaticResource SectionHeader}" DataContext="{Binding PcSection}"
                 MouseRightButtonUp="OnPcHeaderRightUp" ToolTip="クリックで折りたたむ / 開く（右クリックでエクスプローラーで開く）" />
 
         <!-- The drives. Each row is a folder drop target (moved or copied into the drive's root, see MainWindow.FolderDropOf);
              a dragged 登録フォルダ row is refused here (the window's OnDragOver). -->
-        <ScrollViewer x:Name="PcScroller" Grid.Row="5" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False"
+        <ScrollViewer x:Name="PcScroller" Grid.Row="7" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False"
                       Visibility="{Binding PcSection.IsExpanded, Converter={StaticResource BoolToVis}}">
             <ItemsControl ItemsSource="{Binding DriveList.Drives}" ItemTemplate="{StaticResource SidebarRow}" Focusable="False" Margin="6,2,6,8" />
         </ScrollViewer>

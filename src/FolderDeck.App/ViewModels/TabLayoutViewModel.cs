@@ -46,12 +46,28 @@ public sealed partial class TabLayoutViewModel : ObservableObject, ICascadeAncho
     private bool _isOpen;
 
     /// <summary>
-    /// While the window is split and this tab is in a pane: that pane's colour (0 to
+    /// While this tab is in a pane group (on screen or not): its pane's colour (0 to
     /// <c>PaneRules.MaxPanes</c> − 1), the same on the tab and on the pane; −1 otherwise. Kept while the
-    /// pane stays on screen (set by <c>MainViewModel.UpdatePaneSlots</c>).
+    /// tab stays in its group (set by <c>MainViewModel.UpdatePaneSlots</c>).
     /// </summary>
     [ObservableProperty]
     private int _paneSlot = -1;
+
+    /// <summary>The tab is in the pane group on screen (its content is in a pane now).</summary>
+    [ObservableProperty]
+    private bool _isOnScreen;
+
+    /// <summary>The tab is the first (<see cref="IsGroupStart"/>) / last (<see cref="IsGroupEnd"/>) of its pane group on the strip (a gap marks the group).</summary>
+    [ObservableProperty]
+    private bool _isGroupStart;
+
+    [ObservableProperty]
+    private bool _isGroupEnd;
+
+    /// <summary>The tab is in a pane group (on screen or not): it has a pane colour.</summary>
+    public bool IsGrouped => PaneSlot >= 0;
+
+    partial void OnPaneSlotChanged(int value) => OnPropertyChanged(nameof(IsGrouped));
 
     private void OnPanePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -76,7 +92,7 @@ public sealed partial class TabLayoutViewModel : ObservableObject, ICascadeAncho
     /// there), the top list of 最近の履歴 / よく使う項目, an unknown root, or a tab whose last load
     /// failed (its banner says why; it is read again when shown).
     /// </summary>
-    bool ICascadeAnchor.IsDisabled => IsSelected || PaneSlot >= 0 || ActivePane.CurrentFolderPath is null || ActivePane.BannerText is not null;
+    bool ICascadeAnchor.IsDisabled => IsSelected || IsOnScreen || ActivePane.CurrentFolderPath is null || ActivePane.BannerText is not null;
 
     /// <summary>
     /// Outside the shown tab, as a sidebar row: picked folders open in a folder tab (an open tab of that

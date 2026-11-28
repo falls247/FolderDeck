@@ -24,6 +24,13 @@ public static class ItemKinds
 /// </summary>
 public sealed record RegisteredFolder(string Id, string Path, string AddedAt, string? FileId = null);
 
+/// <summary>
+/// One 登録ペイン (registered_panes.json): a saved pane group. <paramref name="Layout"/> is a tree whose leaves
+/// are tabs or empty panes (<see cref="PaneLayoutSettings.IsValidSaved"/>), <paramref name="Active"/> the index
+/// of the active pane among its leaves in reading order. The store hands out copies of the layout.
+/// </summary>
+public sealed record RegisteredPane(string Id, string Name, PaneNodeSetting Layout, int Active, string AddedAt, string UpdatedAt);
+
 /// <summary>One usage record (history.json). <see cref="RecentOpens"/> is newest first, at most 10.</summary>
 public sealed record HistoryItem(
     string Path,
@@ -56,6 +63,28 @@ public sealed class RegisteredFolderDto
     /// <summary>Not written while unknown: the file stays as imgtool writes it.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? FileId { get; set; }
+}
+
+public sealed class RegisteredPanesDocument
+{
+    public int Version { get; set; } = 1;
+
+    public List<RegisteredPaneDto>? Panes { get; set; } = [];
+}
+
+public sealed class RegisteredPaneDto
+{
+    public string? Id { get; set; }
+
+    public string? Name { get; set; }
+
+    public string? AddedAt { get; set; }
+
+    public string? UpdatedAt { get; set; }
+
+    public PaneNodeSetting? Layout { get; set; }
+
+    public int Active { get; set; }
 }
 
 public sealed class HistoryDocument
