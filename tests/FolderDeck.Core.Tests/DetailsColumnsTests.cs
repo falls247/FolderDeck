@@ -9,7 +9,8 @@ public class DetailsColumnsTests
     public void Normalize_FillsDefaults_Clamps_AndDropsUnknownKeys()
     {
         var defaults = DetailsColumns.Normalize(null);
-        Assert.Equal(4, defaults.Count);
+        Assert.Equal(4 + DetailsPropertyColumns.All.Count, defaults.Count); // the extra columns keep widths while hidden
+        Assert.Equal(140, defaults["date_taken"]);
         Assert.Equal(360, defaults[DetailsColumns.Name]);
         Assert.Equal(150, defaults[DetailsColumns.Modified]);
         Assert.Equal(170, defaults[DetailsColumns.Type]);
@@ -23,12 +24,49 @@ public class DetailsColumnsTests
             ["NAME"] = 50,                      // below the name's own minimum
             ["bogus"] = 300,                    // unknown key
         });
-        Assert.Equal(4, normalized.Count);
+        Assert.Equal(4 + DetailsPropertyColumns.All.Count, normalized.Count);
         Assert.Equal(DetailsColumns.NameMin, normalized[DetailsColumns.Name]);
         Assert.Equal(DetailsColumns.Min, normalized[DetailsColumns.Modified]);
         Assert.Equal(DetailsColumns.Max, normalized[DetailsColumns.Type]);
         Assert.Equal(96, normalized[DetailsColumns.Size]);
         Assert.False(normalized.ContainsKey("bogus"));
+    }
+
+    [Fact]
+    public void Fit_CountsOnlyTheShownExtraColumns_AndShrinksThemWithTheOthers()
+    {
+        var widths = DetailsColumns.Normalize(new Dictionary<string, double> { ["date_taken"] = 200, ["authors"] = 300 });
+        double baseSum = 360 + 150 + 170 + 96;
+
+        // Room for the base columns and 撮影日時: nothing changes; 作成者 (hidden) is not counted.
+        var fitted = DetailsColumns.Fit(baseSum + 200, widths, ["date_taken"]);
+        Assert.Equal(200, fitted["date_taken"]);
+        Assert.Equal(360, fitted[DetailsColumns.Name]);
+
+        // 100 too narrow: 名前 gives way first (down to its minimum), the shown extra keeps its width.
+        fitted = DetailsColumns.Fit(baseSum + 100, widths, ["date_taken"]);
+        Assert.Equal(260, fitted[DetailsColumns.Name]);
+        Assert.Equal(200, fitted["date_taken"]);
+
+        // Far too narrow: the extra column shrinks in proportion with 更新日時 / 種類 / サイズ, never below Min.
+        fitted = DetailsColumns.Fit(300, widths, ["date_taken"]);
+        Assert.True(fitted["date_taken"] < 200 && fitted["date_taken"] >= DetailsColumns.Min);
+        Assert.Equal(300, fitted["authors"]); // hidden: its stored width, untouched
+    }
+
+    [Fact]
+    public void NormalizeShown_KnownIdsOnce_InTheFixedOrder_AndTheSettingIsCopied()
+    {
+        Assert.Equal(
+            ["date_taken", "authors", "rating"],
+            DetailsPropertyColumns.NormalizeShown(["rating", " AUTHORS ", "bogus", null, "date_taken", "rating"]));
+
+        var settings = new FolderDeck.Core.Stores.AppSettings { DetailsExtraColumns = ["Rating", "x"] };
+        settings.Normalize();
+        Assert.Equal(["rating"], settings.DetailsExtraColumns);
+        var copy = settings.Clone();
+        copy.DetailsExtraColumns!.Add("authors");
+        Assert.Single(settings.DetailsExtraColumns);
     }
 
     [Fact]
@@ -66,6 +104,9 @@ public class DetailsColumnsTests
         Assert.Equal(500, DetailsColumns.Fit(1000, widths)[DetailsColumns.Name]);
     }
 
+    private static IEnumerable<KeyValuePair<string, double>> BaseOnly(IReadOnlyDictionary<string, double> widths) =>
+        widths.Where(pair => DetailsPropertyColumns.ById(pair.Key) is null);
+
     [Fact]
     public void Fit_ShrinksColumnsToLeaveTheNameWidth_ButNeverBelowMin()
     {
@@ -76,12 +117,12 @@ public class DetailsColumnsTests
         Assert.Equal(99, fitted[DetailsColumns.Modified]);
         Assert.Equal(109, fitted[DetailsColumns.Type]);
         Assert.Equal(72, fitted[DetailsColumns.Size]);
-        Assert.Equal(400, fitted.Values.Sum());
+        Assert.Equal(400, BaseOnly(fitted).Sum(pair => pair.Value)); // the hidden extra columns are not drawn
 
         var narrow = DetailsColumns.Fit(100, DetailsColumns.Defaults);
         Assert.Equal(DetailsColumns.NameMin, narrow[DetailsColumns.Name]);
         Assert.All(
-            narrow.Where(pair => pair.Key != DetailsColumns.Name),
+            BaseOnly(narrow).Where(pair => pair.Key != DetailsColumns.Name),
             pair => Assert.Equal(DetailsColumns.Min, pair.Value));
 
         // With no name minimum the same 416 px are enough for the stored widths.

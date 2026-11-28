@@ -142,3 +142,13 @@ NOTIFYICONDATAW
 RegisterWindowMessage
 LoadIconWithScaleDown
 GetSystemMetrics
+SHGetPropertyStoreFromParsingName
+GETPROPERTYSTOREFLAGS
+IPropertyStore
+PSGetPropertyKeyFromName
+PSFormatForDisplayAlloc
+PROPDESC_FORMAT_FLAGS
+PropVariantClear
+PSGetPropertyDescription
+IPropertyDescription
+CoTaskMemFree

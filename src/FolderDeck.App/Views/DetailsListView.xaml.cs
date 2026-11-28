@@ -31,6 +31,21 @@ public sealed partial class DetailsMetrics : ObservableObject
     /// <summary>The last column: room for the × of a removable row, otherwise a little padding.</summary>
     [ObservableProperty]
     private GridLength _endWidth = new(DetailsListView.EndPadding);
+
+    /// <summary>One slot per extra column (<see cref="DetailsPropertyColumns.All"/>, in order): its width, 0 while hidden.</summary>
+    public IReadOnlyList<DetailsColumnSlot> Extras { get; } = DetailsPropertyColumns.All.Select(c => new DetailsColumnSlot(c.Id)).ToList();
+}
+
+/// <summary>An extra column of the details view as drawn: its width (0 while hidden) and whether it is shown (the rows bind their values only then).</summary>
+public sealed partial class DetailsColumnSlot(string id) : ObservableObject
+{
+    public string Id { get; } = id;
+
+    [ObservableProperty]
+    private GridLength _width = new(0);
+
+    [ObservableProperty]
+    private bool _isShown;
 }
 
 /// <summary>
@@ -81,6 +96,87 @@ public partial class DetailsListView : UserControl, IItemsView
         nameof(Columns), typeof(IReadOnlyDictionary<string, double>), typeof(DetailsListView),
         new PropertyMetadata(null, (d, _) => ((DetailsListView)d).UpdateColumns()));
 
+    public static readonly DependencyProperty ExtraColumnsProperty = DependencyProperty.Register(
+        nameof(ExtraColumns), typeof(IReadOnlyList<string>), typeof(DetailsListView),
+        new PropertyMetadata(null, (d, _) => ((DetailsListView)d).UpdateColumns()));
+
+    /// <summary>The extra columns shown (ids of <see cref="DetailsPropertyColumns"/>), after サイズ.</summary>
+    public IReadOnlyList<string>? ExtraColumns
+    {
+        get => (IReadOnlyList<string>?)GetValue(ExtraColumnsProperty);
+        set => SetValue(ExtraColumnsProperty, value);
+    }
+
+    /// <summary>The header was right-clicked: the column chooser (the element to open it at).</summary>
+    public event Action<FrameworkElement>? HeaderMenuRequested;
+
+    /// <summary>The extra columns' titles and grips in the header (index = <see cref="DetailsPropertyColumns.All"/>).</summary>
+    private readonly List<(ColumnDefinition Column, Button Title, TextBlock Text, Thumb Grip)> _extraHeaders = [];
+
+    /// <summary>
+    /// The extra columns' header cells, after サイズ (before the empty * column): a title that does not
+    /// sort (the values arrive late) and a grip; collapsed and 0 wide while the column is hidden.
+    /// </summary>
+    private void BuildExtraHeaders()
+    {
+        var cellStyle = (Style)Resources["HeaderCell"];
+        var gripStyle = (Style)Resources["HeaderGrip"];
+        var columns = DetailsPropertyColumns.All;
+        for (int i = 0; i < columns.Count; i++)
+        {
+            var column = columns[i];
+            var definition = new ColumnDefinition { Width = new GridLength(0) };
+            HeaderGrid.ColumnDefinitions.Insert(DetailsRowView.FirstExtraColumn + i, definition);
+            var text = new TextBlock { Text = column.Title };
+            var title = new Button
+            {
+                Style = cellStyle,
+                Content = text,
+                Cursor = Cursors.Arrow,
+                ToolTip = "右クリックで表示する列を選択（この列では並べ替えできません）",
+                HorizontalContentAlignment = column.AlignRight ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+                Visibility = Visibility.Collapsed,
+            };
+            System.Windows.Automation.AutomationProperties.SetName(title, column.Title);
+            Grid.SetColumn(title, DetailsRowView.FirstExtraColumn + i);
+            HeaderGrid.Children.Add(title);
+            var grip = new Thumb { Style = gripStyle, Tag = column.Id, Visibility = Visibility.Collapsed };
+            grip.DragStarted += OnGripDragStarted;
+            grip.DragDelta += OnGripDragDelta;
+            grip.DragCompleted += OnGripDragCompleted;
+            Grid.SetColumn(grip, DetailsRowView.FirstExtraColumn + i);
+            HeaderGrid.Children.Add(grip);
+            _extraHeaders.Add((definition, title, text, grip));
+        }
+
+        // Every grip above every title: a grip reaches 4 px into the column on its right (its margin),
+        // and the titles added here after the grips of the XAML would otherwise cover that half.
+        foreach (var grip in HeaderGrid.Children.OfType<Thumb>())
+        {
+            Panel.SetZIndex(grip, 1);
+        }
+    }
+
+    /// <summary>Windows' own names of the extra columns (as Explorer's headers), once they are read.</summary>
+    public void SetExtraTitles(IReadOnlyDictionary<string, string> titles)
+    {
+        var columns = DetailsPropertyColumns.All;
+        for (int i = 0; i < columns.Count && i < _extraHeaders.Count; i++)
+        {
+            if (titles.TryGetValue(columns[i].Id, out string? title) && title.Length > 0)
+            {
+                _extraHeaders[i].Text.Text = title;
+                System.Windows.Automation.AutomationProperties.SetName(_extraHeaders[i].Title, title);
+            }
+        }
+    }
+
+    private void OnHeaderRightUp(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true; // not the blank area's menu (MainWindow.OnContentRightUp)
+        HeaderMenuRequested?.Invoke(HeaderBar);
+    }
+
     private readonly DispatcherTimer _autoScrollTimer;
     private ScrollViewer? _scroll;
     private double? _pendingOffset;
@@ -91,6 +187,7 @@ public partial class DetailsListView : UserControl, IItemsView
     public DetailsListView()
     {
         InitializeComponent();
+        BuildExtraHeaders();
         SizeChanged += (_, _) => UpdateColumns();
 
         // While collapsed (card modes) the width reads 0, and the items arrive before the list is
@@ -334,10 +431,22 @@ public partial class DetailsListView : UserControl, IItemsView
         // Every item of a list comes from the same place, so the first one tells whether rows have a ×.
         double end = Items is { Count: > 0 } items && items[0].CanRemove ? CloseColumn : EndPadding;
         var widths = _resize?.Widths ?? Columns ?? DetailsColumns.Defaults;
+        var extras = ExtraColumns ?? [];
         double available = ActualWidth - HorizontalChrome - end;
         var shown = available > 0
-            ? DetailsColumns.Fit(available, widths)
+            ? DetailsColumns.Fit(available, widths, extras)
             : DetailsColumns.Normalize(widths); // not laid out yet
+
+        var columns = DetailsPropertyColumns.All;
+        for (int i = 0; i < columns.Count && i < _extraHeaders.Count; i++)
+        {
+            bool on = extras.Contains(columns[i].Id);
+            var width = new GridLength(on ? shown[columns[i].Id] : 0);
+            var slot = Metrics.Extras[i];
+            slot.Width = _extraHeaders[i].Column.Width = width;
+            slot.IsShown = on;
+            _extraHeaders[i].Title.Visibility = _extraHeaders[i].Grip.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        }
 
         Metrics.NameWidth = HeaderName.Width = new GridLength(shown[DetailsColumns.Name]);
         Metrics.ModifiedWidth = HeaderModified.Width = new GridLength(shown[DetailsColumns.Modified]);
@@ -403,6 +512,11 @@ public partial class DetailsListView : UserControl, IItemsView
             [DetailsColumns.Type] = Metrics.TypeWidth.Value,
             [DetailsColumns.Size] = Metrics.SizeWidth.Value,
         };
+        foreach (var slot in Metrics.Extras.Where(s => s.IsShown))
+        {
+            shown[slot.Id] = slot.Width.Value; // the shown extra columns take room too
+        }
+
         if (shown.TryGetValue(key, out double start))
         {
             double filler = Math.Max(0, ActualWidth - HorizontalChrome - Metrics.EndWidth.Value - shown.Values.Sum());

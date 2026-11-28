@@ -181,6 +181,12 @@ public sealed class AppSettings
     /// </summary>
     public Dictionary<string, double>? DetailsColumns { get; set; }
 
+    /// <summary>
+    /// The extra columns shown in the details view (ids of <see cref="Layout.DetailsPropertyColumns"/>,
+    /// chosen with the header's right-click menu). Empty by default: only the four base columns.
+    /// </summary>
+    public List<string>? DetailsExtraColumns { get; set; }
+
     /// <summary>Colour theme: <c>system</c> (follow Windows), <c>light</c> or <c>dark</c>.</summary>
     public string? Theme { get; set; } = AppThemes.System;
 
@@ -516,6 +522,7 @@ public sealed class AppSettings
         CardSize = ClampCardSize(CardSize);
         CardShape = CardShapes.ToSetting(CardShapes.FromSetting(CardShape));
         DetailsColumns = Layout.DetailsColumns.Normalize(DetailsColumns);
+        DetailsExtraColumns = Layout.DetailsPropertyColumns.NormalizeShown(DetailsExtraColumns);
         Theme = AppThemes.ToSetting(AppThemes.FromSetting(Theme));
         TextScale = ClampTextScale(TextScale);
         ItemMenu = ItemMenuStyles.ToSetting(ItemMenuStyles.FromSetting(ItemMenu));
@@ -568,6 +575,7 @@ public sealed class AppSettings
         }).ToList();
         copy.SidebarCollapsedSections = SidebarCollapsedSections?.ToList();
         copy.DetailsColumns = DetailsColumns is null ? null : new Dictionary<string, double>(DetailsColumns);
+        copy.DetailsExtraColumns = DetailsExtraColumns?.ToList();
         copy.SortModes = SortModes is null ? null : new Dictionary<string, string>(SortModes);
         copy.FilterModes = FilterModes is null ? null : new Dictionary<string, string>(FilterModes);
         return copy;

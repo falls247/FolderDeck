@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Layout;
 using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
 using FolderDeck.Core.Transfer;
@@ -570,6 +571,32 @@ public sealed class ContextMenuFactory
     }
 
     /// <summary>The menu of the PC section header: エクスプローラーで開く (This PC).</summary>
+    /// <summary>
+    /// The details view's header menu, as Explorer's column chooser: 名前 / 更新日時 / 種類 / サイズ
+    /// (always shown, checked and greyed), then the extra columns (<see cref="DetailsPropertyColumns"/>)
+    /// to show or hide, with <paramref name="titles"/> (Windows' names, when read). One pick closes it.
+    /// </summary>
+    public void ShowDetailsColumns(FrameworkElement target, IReadOnlyDictionary<string, string>? titles)
+    {
+        var entries = new List<MenuEntry>();
+        foreach (string fixedTitle in new[] { "名前", "更新日時", "種類", "サイズ" })
+        {
+            entries.Add(new(fixedTitle, CheckGlyph, false, null, Checked: true));
+        }
+
+        entries.Add(MenuEntry.Separator);
+        var shownNow = _vm.DetailsExtraColumns;
+        foreach (var column in DetailsPropertyColumns.All)
+        {
+            bool shown = shownNow.Contains(column.Id);
+            string id = column.Id;
+            string title = titles is not null && titles.TryGetValue(id, out string? t) && t.Length > 0 ? t : column.Title;
+            entries.Add(new(title, shown ? CheckGlyph : string.Empty, true, () => _vm.SetDetailsColumnShown(id, !shown), Checked: shown));
+        }
+
+        Open(Render(entries, target));
+    }
+
     public void ShowPcSection(FrameworkElement target)
     {
         var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };

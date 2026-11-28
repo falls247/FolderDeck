@@ -182,7 +182,8 @@ public class FileDragTests
     [InlineData(@"E:\b", DropKeys.Shift, DropEffects.Copy | DropEffects.Link, DropEffects.None)] // a forced move stays refused
     [InlineData(@"E:\b", DropKeys.Control, DropEffects.Copy | DropEffects.Link, DropEffects.Copy)]
     [InlineData(@"F:\b", DropKeys.None, DropEffects.Move, DropEffects.None)]                     // a copy that is not offered
-    [InlineData(@"E:\b", DropKeys.Alt, All, DropEffects.None)]
+    [InlineData(@"E:\b", DropKeys.Alt, All, DropEffects.Link)]                                   // Alt: a shortcut, as Explorer
+    [InlineData(@"E:\b", DropKeys.Alt, DropEffects.Copy | DropEffects.Move, DropEffects.None)]   // linking not offered: no copy instead
     [InlineData(@"E:\b", DropKeys.Control | DropKeys.Shift, All, DropEffects.None)]
     [InlineData(@"E:\b", DropKeys.RightButton, All, DropEffects.None)]
     public void DropEffectFor_Keys_OverrideTheDefault_WithinTheAllowedEffects(string target, DropKeys keys, DropEffects allowed, DropEffects expected)
@@ -239,10 +240,23 @@ public class FileDragTests
         Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"E:\a\x.txt"], @"E:\a", DropKeys.Control, All));
     }
 
+    [Fact]
+    public void AltDrop_LinksIntoTheSameFolderAndInsideItself_NotOntoItselfOrFromTheRecycleBin()
+    {
+        Assert.Equal(DropEffects.Link, FileDrag.DropEffectFor([@"E:\a\x.txt"], @"E:\a", DropKeys.Alt, All)); // "x.txt - ショートカット" beside it
+        Assert.Equal(DropEffects.Link, FileDrag.DropEffectFor([@"E:\a\dir"], @"E:\a\dir\sub", DropKeys.Alt, All));
+        Assert.Equal(DropEffects.Link, FileDrag.DropEffectForShownFolder([@"E:\a\x.txt"], @"E:\a", DropKeys.Alt | DropKeys.Control, All));
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"E:\a\dir"], @"E:\a\dir\", DropKeys.Alt, All));
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"C:\$Recycle.Bin\S-1\$R1.txt"], @"E:\a", DropKeys.Alt, All));
+        Assert.Equal(DropEffects.None, FileDrag.DropEffectFor([@"E:\a\x.txt"], @"E:\b", DropKeys.Alt | DropKeys.RightButton, All));
+        Assert.False(FileDrag.CopiesInPlace(DropKeys.Alt | DropKeys.Control));
+    }
+
     [Theory]
     [InlineData(DropEffects.None, DropEffects.None)]
     [InlineData(DropEffects.Copy, DropEffects.Copy)]
     [InlineData(DropEffects.Move, DropEffects.Copy)]
+    [InlineData(DropEffects.Link, DropEffects.Link)]
     public void DropResult_IsNeverMove(DropEffects chosen, DropEffects expected)
     {
         Assert.Equal(expected, FileDrag.DropResult(chosen));

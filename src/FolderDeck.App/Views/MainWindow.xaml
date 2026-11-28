@@ -360,7 +360,7 @@
                 </views:CardGrid.Style>
             </views:CardGrid>
 
-            <views:DetailsListView x:Name="Details" SortMode="{Binding SelectedTab.SortMode}" Columns="{Binding DetailsColumns}">
+            <views:DetailsListView x:Name="Details" SortMode="{Binding SelectedTab.SortMode}" Columns="{Binding DetailsColumns}" ExtraColumns="{Binding DetailsExtraColumns}">
                 <views:DetailsListView.Style>
                     <Style TargetType="{x:Type views:DetailsListView}">
                         <Setter Property="Visibility" Value="Collapsed" />

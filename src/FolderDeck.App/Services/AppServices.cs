@@ -15,6 +15,9 @@ public sealed class AppServices : IDisposable
     public const string ThumbCacheFolderName = "thumbs";
 
     private readonly StaWorkerPool _typeNameWorker = new(1, "TypeNames");
+
+    /// <summary>Property handlers open the files and may hang: two workers of their own, below normal.</summary>
+    private readonly StaWorkerPool _propertyWorker = new(2, "Properties", ThreadPriority.BelowNormal);
     private volatile ListingFilter _filter;
 
     public AppServices(DataStores stores)
@@ -26,7 +29,11 @@ public sealed class AppServices : IDisposable
             Path.Combine(stores.DataDirectory, ThumbCacheFolderName),
             stores.Settings.Current.ThumbCacheMb * 1024L * 1024L);
         TypeNames = new TypeNameCache(_typeNameWorker);
+        Properties = new ShellPropertyCache(_propertyWorker);
     }
+
+    /// <summary>The values of the details view's extra columns (撮影日時, 作成者…).</summary>
+    public ShellPropertyCache Properties { get; }
 
     public DataStores Stores { get; }
 
@@ -102,5 +109,6 @@ public sealed class AppServices : IDisposable
         Icons.Dispose();
         Shell.Dispose();
         _typeNameWorker.Dispose();
+        _propertyWorker.Dispose();
     }
 }

@@ -24,6 +24,7 @@ public enum ShortcutId
     Up,
     Refresh,
     CloseTab,
+    ReopenTab,
     Search,
     Address,
     ShortcutHelp,
@@ -95,6 +96,7 @@ public static class ShortcutCatalog
             new("Ctrl + 1〜8", "左から n 番目のタブ"), // same switch: D1..D9, NumPad1..9 → SelectTabAt
             new("Ctrl + 9", "最後のタブ"), // same branch
             new("Ctrl + W", "表示中のタブを閉じる", ShortcutId.CloseTab), // same switch: Key.W → CloseTabCommand
+            new("Ctrl + Shift + T", "閉じたタブを開き直す（タブの右クリックのメニューにも。複製は「タブを複製」）", ShortcutId.ReopenTab), // same switch: Key.T → ReopenClosedTabCommand
         ]),
         new("検索・アドレス",
         [

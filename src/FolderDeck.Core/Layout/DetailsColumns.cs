@@ -3,9 +3,10 @@ using System.Collections.ObjectModel;
 namespace FolderDeck.Core.Layout;
 
 /// <summary>
-/// Widths of the columns of the details view (名前 / 更新日時 / 種類 / サイズ), saved in settings.json
-/// under <c>details_columns</c>. Every column has its own stored width, as in Explorer: the space
-/// right of the last column stays empty.
+/// Widths of the columns of the details view (名前 / 更新日時 / 種類 / サイズ and the extra columns of
+/// <see cref="DetailsPropertyColumns"/>), saved in settings.json under <c>details_columns</c>. Every
+/// column has its own stored width, as in Explorer (a hidden extra column keeps its width for when it
+/// is shown again): the space right of the last column stays empty.
 /// </summary>
 public static class DetailsColumns
 {
@@ -18,20 +19,30 @@ public static class DetailsColumns
     public const double NameMin = 120, NameMax = 2000;
 
     /// <summary>The column keys in display order (left to right); also the order of the normalized dictionary.</summary>
-    private static readonly string[] Keys = [Name, Modified, Type, Size];
+    private static readonly string[] Keys = [Name, Modified, Type, Size, .. DetailsPropertyColumns.All.Select(c => c.Id)];
 
     /// <summary>The columns <see cref="Fit"/> shrinks in proportion once 名前 is down to its minimum.</summary>
     private static readonly string[] Resizable = [Modified, Type, Size];
 
-    /// <summary>Default widths: 名前 360, 更新日時 150, 種類 170, サイズ 96.</summary>
-    public static IReadOnlyDictionary<string, double> Defaults { get; } =
-        new ReadOnlyDictionary<string, double>(new Dictionary<string, double>(StringComparer.Ordinal)
+    /// <summary>Default widths: 名前 360, 更新日時 150, 種類 170, サイズ 96, and each extra column's own.</summary>
+    public static IReadOnlyDictionary<string, double> Defaults { get; } = BuildDefaults();
+
+    private static ReadOnlyDictionary<string, double> BuildDefaults()
+    {
+        var defaults = new Dictionary<string, double>(StringComparer.Ordinal)
         {
             [Name] = 360,
             [Modified] = 150,
             [Type] = 170,
             [Size] = 96,
-        });
+        };
+        foreach (var column in DetailsPropertyColumns.All)
+        {
+            defaults[column.Id] = column.DefaultWidth;
+        }
+
+        return new ReadOnlyDictionary<string, double>(defaults);
+    }
 
     /// <summary>The smallest stored width of the column <paramref name="key"/>.</summary>
     public static double MinOf(string key) => key == Name ? NameMin : Min;
@@ -40,7 +51,7 @@ public static class DetailsColumns
     public static double MaxOf(string key) => key == Name ? NameMax : Max;
 
     /// <summary>
-    /// Returns a new dictionary that holds exactly the four known keys, in display order.
+    /// Returns a new dictionary that holds exactly the known keys (the four base columns, then the extra ones), in display order.
     /// A missing key or a non-finite value becomes the default (so a file written before 名前 had a
     /// width loads with the default), any other value is clamped into <see cref="MinOf"/>..<see cref="MaxOf"/>,
     /// and unknown keys are dropped. Keys are matched ignoring case and surrounding white space (the
@@ -85,7 +96,16 @@ public static class DetailsColumns
     /// window grows again.
     /// </summary>
     public static IReadOnlyDictionary<string, double> Fit(
-        double available, IReadOnlyDictionary<string, double> widths, double minName = NameMin)
+        double available, IReadOnlyDictionary<string, double> widths, double minName = NameMin) =>
+        Fit(available, widths, [], minName);
+
+    /// <summary>
+    /// As the other <see cref="Fit(double, IReadOnlyDictionary{string, double}, double)"/>, with the extra
+    /// columns <paramref name="shownExtras"/> shown after サイズ: they count and shrink as 更新日時 / 種類 /
+    /// サイズ do. The hidden ones keep their stored widths in the result and are not counted (the caller draws them 0 wide).
+    /// </summary>
+    public static IReadOnlyDictionary<string, double> Fit(
+        double available, IReadOnlyDictionary<string, double> widths, IReadOnlyCollection<string> shownExtras, double minName = NameMin)
     {
         var result = Normalize(widths);
         if (!double.IsFinite(available) || !double.IsFinite(minName))
@@ -93,12 +113,14 @@ public static class DetailsColumns
             return result;
         }
 
+        var resizable = Resizable.Concat(DetailsPropertyColumns.All.Select(c => c.Id).Where(shownExtras.Contains)).ToArray();
+
         // 名前 shrinks to minName before the others give anything (it never grows here).
         double nameFloor = Math.Min(result[Name], Math.Max(0, minName));
         double budget = available - nameFloor;
         double sum = 0;
         double totalSlack = 0;
-        foreach (string key in Resizable)
+        foreach (string key in resizable)
         {
             sum += result[key];
             totalSlack += result[key] - Min;
@@ -108,7 +130,7 @@ public static class DetailsColumns
         if (excess > 0)
         {
             sum = 0;
-            foreach (string key in Resizable)
+            foreach (string key in resizable)
             {
                 double slack = result[key] - Min;
                 result[key] = excess >= totalSlack

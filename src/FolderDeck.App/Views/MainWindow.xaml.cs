@@ -131,6 +131,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
         Details.HeaderClicked += column => vm.SetSortMode(CardSortModes.Next(vm.SelectedTab.SortMode, column));
         Details.ColumnResized += (key, width) => vm.SetDetailsColumnWidth(key, width);
 
+        // The header's right click: Explorer's column chooser. Windows' names of the extra columns are
+        // read once off the UI thread (the built-in titles show until then).
+        Details.HeaderMenuRequested += target =>
+        {
+            _cascade.CloseAll();
+            _menus.ShowDetailsColumns(target, _columnTitles);
+        };
+        _ = LoadColumnTitlesAsync();
+
         // A sidebar row is one element: the pointer rests on it and its list goes beside it.
         Sidebar.ItemEntered += (row, item) => _cascade.AnchorMouseEnter(row, row, item);
         Sidebar.ItemMoved += (row, item, position) => _cascade.AnchorMouseMove(row, row, item, position);
@@ -262,6 +271,22 @@ public partial class MainWindow : Window, IMainView, ICardHost
     }
 
     // ---- 常駐モード: hidden in the notification area ------------------------------------------
+
+    /// <summary>Windows' names of the details view's extra columns, once read (null until then).</summary>
+    private IReadOnlyDictionary<string, string>? _columnTitles;
+
+    private async Task LoadColumnTitlesAsync()
+    {
+        try
+        {
+            _columnTitles = await _vm.Services.Properties.TitlesAsync();
+            Details.SetExtraTitles(_columnTitles);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn("The titles of the extra details columns could not be read", ex);
+        }
+    }
 
     /// <summary>The next close quits (終了 in the tray, a request of another program).</summary>
     private bool _exitRequested;
@@ -484,7 +509,19 @@ public partial class MainWindow : Window, IMainView, ICardHost
             _menuKeyDown = Key.None;
             e.Handled = true;
         }
+
+        if (_altDropUp && key is Key.LeftAlt or Key.RightAlt)
+        {
+            // The Alt of an Alt + drop (a shortcut) is released after the drop: unhandled, its
+            // WM_SYSKEYUP reaches DefWindowProc, which enters the system menu's mode, and the next
+            // press only leaves that mode (the next drag did not start).
+            _altDropUp = false;
+            e.Handled = true;
+        }
     }
+
+    /// <summary>An Alt + drop just made shortcuts: the release of its Alt is swallowed (<see cref="OnPreviewKeyUp"/>).</summary>
+    private bool _altDropUp;
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
@@ -614,6 +651,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
             case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
                 e.Handled = true; // like Explorer: closes the shown tab, whatever its kind
                 _vm.CloseTabCommand.Execute(_vm.SelectedTab);
+                break;
+            case Key.T when Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && !IsMenuTakingKeys():
+                e.Handled = true; // as the browsers: the last closed tab comes back (also with no tab open)
+                if (!e.IsRepeat)
+                {
+                    EndAddressEdit();
+                    _vm.ReopenClosedTabCommand.Execute(null);
+                }
+
                 break;
             case Key.N when !inTextBox && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift):
                 e.Handled = true; // like Explorer: a new folder in the folder shown, in its edit box
@@ -1361,6 +1407,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
             {
                 DropEffects.Move => $"「{name}」へ移動",
                 DropEffects.Copy => $"「{name}」へコピー",
+                DropEffects.Link => $"「{name}」にショートカットを作成",
                 _ => null,
             });
             e.Handled = true;
@@ -1388,9 +1435,26 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 _crumbQuiet = true; // the pointer rests on the crumb after the drop: no list under it until it leaves (OnCrumbMouseLeave)
             }
 
-            if (d.Effect is not (DropEffects.Move or DropEffects.Copy))
+            if (d.Effect is not (DropEffects.Move or DropEffects.Copy or DropEffects.Link))
             {
                 e.Effects = DragDropEffects.None;
+                return;
+            }
+
+            if (d.Effect == DropEffects.Link)
+            {
+                // Alt: shortcuts, made by the app after the drop (the source keeps its items).
+                e.Effects = DragDropEffects.Link;
+                _altDropUp = Keyboard.IsKeyDown(Key.LeftAlt) || Keyboard.IsKeyDown(Key.RightAlt);
+                if (FileDragOut.Current is { } linker)
+                {
+                    linker.Dropped = new InAppDrop(d.Target.Folder, TransferKind.Copy, Link: true);
+                    return;
+                }
+
+                string[] linked = [.. d.Sources];
+                string linkFolder = d.Target.Folder;
+                _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, () => _ = _vm.LinkDropAsync(linked, linkFolder, fromOtherApp: true));
                 return;
             }
 

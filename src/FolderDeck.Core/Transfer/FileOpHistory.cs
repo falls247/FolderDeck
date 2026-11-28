@@ -12,6 +12,9 @@ public enum FileOpKind
     Move,
     MoveAndCopy,
     Delete,
+
+    /// <summary>Shortcuts made by Alt + drop (undone: the .lnk files go to the Recycle Bin).</summary>
+    Shortcut,
 }
 
 /// <summary>The item now at <see cref="Target"/> was at <see cref="Path"/> (a rename or a move).</summary>
@@ -45,6 +48,7 @@ public sealed record FileOpStep(FileOpKind Kind, IReadOnlyList<PathMove> Moved, 
         FileOpKind.Copy => "コピー",
         FileOpKind.Move => "移動",
         FileOpKind.MoveAndCopy => "移動・コピー",
+        FileOpKind.Shortcut => "ショートカットの作成",
         _ => "削除",
     };
 
@@ -52,6 +56,10 @@ public sealed record FileOpStep(FileOpKind Kind, IReadOnlyList<PathMove> Moved, 
     public static FileOpStep Renamed(IEnumerable<PathMove> moves) => new(FileOpKind.Rename, moves.ToList(), [], []);
 
     public static FileOpStep NewFolder(string path) => new(FileOpKind.NewFolder, [], [path], []);
+
+    /// <summary>The shortcuts an Alt + drop made (each a new file).</summary>
+    public static FileOpStep ShortcutsMade(IEnumerable<string> paths) =>
+        new(FileOpKind.Shortcut, [], paths.Distinct(PathTools.Comparer).ToList(), []);
 
     public static FileOpStep Deleted(IEnumerable<BinEntry> binned) => new(FileOpKind.Delete, [], [], binned.ToList());
 

@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
+using FolderDeck.Core.Layout;
 using FolderDeck.ViewModels;
 
 namespace FolderDeck.Views;
@@ -36,6 +38,7 @@ public partial class DetailsRowView : UserControl
     public DetailsRowView()
     {
         InitializeComponent();
+        BuildExtraCells();
         _pointer = new ItemPointerTracker(this, () => _vm);
 
         // Tunnelling, handled or not: every press on the row counts, also one on its buttons.
@@ -49,6 +52,52 @@ public partial class DetailsRowView : UserControl
             handledEventsToo: true);
         AddHandler(PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler((_, _) => _noRearm = true), handledEventsToo: true);
         DataContextChanged += OnDataContextChanged;
+    }
+
+    /// <summary>Where the extra columns go in the row's grid: after 名前 / 更新日時 / 種類 / サイズ.</summary>
+    internal const int FirstExtraColumn = 4;
+
+    /// <summary>
+    /// The extra columns (<see cref="DetailsPropertyColumns"/>) after サイズ: a column per entry whose
+    /// width follows <see cref="DetailsMetrics.Extras"/> (0 while hidden) and a cell whose text is
+    /// bound to <c>Props[id]</c> only while the column is shown (a trigger sets the binding: a
+    /// collapsed cell's binding would still be read and open the file's property store). The ×
+    /// column and the selection frame move right by as many columns.
+    /// </summary>
+    private void BuildExtraCells()
+    {
+        var columns = DetailsPropertyColumns.All;
+        foreach (UIElement child in RowGrid.Children)
+        {
+            int column = Grid.GetColumn(child);
+            if (column >= FirstExtraColumn)
+            {
+                Grid.SetColumn(child, column + columns.Count);
+            }
+            else if (Grid.GetColumnSpan(child) > FirstExtraColumn)
+            {
+                Grid.SetColumnSpan(child, Grid.GetColumnSpan(child) + columns.Count);
+            }
+        }
+
+        var listView = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(DetailsListView), 1);
+        var cellStyle = (Style)Resources["Cell"];
+        for (int i = 0; i < columns.Count; i++)
+        {
+            var definition = new ColumnDefinition();
+            BindingOperations.SetBinding(definition, ColumnDefinition.WidthProperty, new Binding($"Metrics.Extras[{i}].Width") { RelativeSource = listView });
+            RowGrid.ColumnDefinitions.Insert(FirstExtraColumn + i, definition);
+
+            var shown = new DataTrigger { Binding = new Binding($"Metrics.Extras[{i}].IsShown") { RelativeSource = listView }, Value = true };
+            shown.Setters.Add(new Setter(VisibilityProperty, Visibility.Visible));
+            shown.Setters.Add(new Setter(TextBlock.TextProperty, new Binding($"Props[{columns[i].Id}]")));
+            var style = new Style(typeof(TextBlock), cellStyle);
+            style.Setters.Add(new Setter(VisibilityProperty, Visibility.Collapsed));
+            style.Triggers.Add(shown);
+            var cell = new TextBlock { Style = style, TextAlignment = columns[i].AlignRight ? TextAlignment.Right : TextAlignment.Left };
+            Grid.SetColumn(cell, FirstExtraColumn + i);
+            RowGrid.Children.Add(cell);
+        }
     }
 
     protected override void OnMouseLeave(MouseEventArgs e)
@@ -142,6 +191,8 @@ public partial class DetailsRowView : UserControl
         {
             CardView.Host?.RowMouseLeave(NameCell);
         }
+
+        (e.OldValue as CardViewModel)?.CancelPropertyReads(); // a recycled row: the old item's reads are not wanted
 
         _pointer.ItemChanged();
         _vm = e.NewValue as CardViewModel;

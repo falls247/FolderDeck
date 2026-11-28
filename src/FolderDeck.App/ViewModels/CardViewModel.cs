@@ -253,6 +253,14 @@ public sealed partial class CardViewModel : ObservableObject
         }
     }
 
+    private DetailsPropertyValues? _props;
+
+    /// <summary>The values of the details view's extra columns (<see cref="DetailsPropertyValues"/>), bound as Props[id]; made on first use.</summary>
+    public DetailsPropertyValues Props => _props ??= new DetailsPropertyValues(this, _services.Properties);
+
+    /// <summary>The details row showing this item shows another one now: its property reads not started yet are dropped.</summary>
+    public void CancelPropertyReads() => _props?.CancelPending();
+
     /// <summary>サイズ column: whole kilobytes as in Explorer; empty for a folder and while the size is not known.</summary>
     public string SizeColumnText => IsFile && Length is { } l ? DetailsText.FileSizeKb(l) : string.Empty;
 

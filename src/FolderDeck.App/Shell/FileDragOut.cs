@@ -8,9 +8,10 @@ namespace FolderDeck.Shell;
 /// <summary>
 /// Where a drop on a folder of the app landed (recorded by the window's Drop; the transfer starts
 /// once the drag has ended). <paramref name="CopyInPlace"/>: a Ctrl drop on the shown folder's
-/// list, which duplicates items already in it (<see cref="FileDrag.CopiesInPlace"/>).
+/// list, which duplicates items already in it (<see cref="FileDrag.CopiesInPlace"/>). <paramref name="Link"/>:
+/// an Alt drop, which makes shortcuts instead (<see cref="FileDrag.MakesLink"/>; <paramref name="Kind"/> is then unused).
 /// </summary>
-public readonly record struct InAppDrop(string Folder, TransferKind Kind, bool CopyInPlace = false);
+public readonly record struct InAppDrop(string Folder, TransferKind Kind, bool CopyInPlace = false, bool Link = false);
 
 /// <summary>
 /// One drag the app started: the data, the long-path spelling of what it carries (the file drop
@@ -111,7 +112,7 @@ public static class FileDragOut
         try
         {
             var effect = DragDrop.DoDragDrop(source, drag.Data, drag.AllowedEffects);
-            string where = drag.Dropped is { } d ? $"into app {d.Kind}" : "out";
+            string where = drag.Dropped is { } d ? $"into app {(d.Link ? "link" : d.Kind.ToString())}" : "out";
             AppLog.Info($"drag-out: {origin}, effect {effect}, move {(drag.MoveAllowed ? "offered" : "not offered")}, {where} ({Environment.TickCount64 - started} ms)");
             return effect;
         }
