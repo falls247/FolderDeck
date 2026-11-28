@@ -130,6 +130,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
         BuildPanes();
         WatchCrumbs(vm.ActivePane);
 
+        // A closed tab's kept views go with it, not at the next change of the screen (they hold its cards).
+        vm.Tabs.CollectionChanged += (_, e) =>
+        {
+            if (e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Move)
+            {
+                TrimKeptScreens();
+            }
+        };
+
         // Windows' names of the details view's extra columns are read once off the UI thread (the
         // built-in titles show until then; NewPaneView gives them to every pane's list).
         _ = LoadColumnTitlesAsync();
@@ -2883,100 +2892,162 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _crumbs = next;
     }
 
-    // ---- panes: one PaneView per pane of the shown tab --------------------------------------------
+    // ---- panes: one PaneView per pane of the shown tab; the layouts shown before stay built ----------
 
-    /// <summary>Every pane view made so far (at most <see cref="PaneRules.MaxPanes"/>), kept for the window's life.</summary>
+    /// <summary>
+    /// A layout as it was built: the views of its panes under one root. The one on screen is
+    /// <see cref="_screen"/>. When another tab or group comes on screen it is hidden, not taken apart
+    /// (<see cref="_keptScreens"/>), and comes back as it was left: showing it takes about a
+    /// millisecond, building it again 60 ms and more (its cards are made anew). As Explorer keeps a
+    /// window per tab.
+    /// </summary>
+    private sealed class PaneScreen
+    {
+        /// <summary>The root in <c>PaneArea</c>: visible on screen, collapsed while kept.</summary>
+        public required PaneScreenHost Host { get; init; }
+
+        /// <summary>The layout the views are laid out by (to tell a moved splitter from a new shape).</summary>
+        public required PaneLayout<PaneViewModel> Layout { get; set; }
+
+        public required Dictionary<PaneViewModel, PaneView> Views { get; init; }
+
+        /// <summary>The split each of its splitters drags.</summary>
+        public Dictionary<GridSplitter, PaneSplit<PaneViewModel>> Splits { get; } = [];
+    }
+
+    /// <summary>
+    /// The pane views kept hidden at most: past it, the screens left longest ago are taken apart
+    /// (their tabs are built again when shown). A view holds the cards of about two screenfuls and
+    /// their thumbnails.
+    /// </summary>
+    private const int KeptViewBudget = 12;
+
+    /// <summary>Every pane view made so far: on screen, kept hidden, or free (empty, outside the tree).</summary>
     private readonly List<PaneView> _paneViews = [];
 
-    /// <summary>The views on screen, by the pane they show (the panes of <see cref="MainViewModel.ShownLayout"/>).</summary>
+    /// <summary>The screen shown (null only before the first one is built).</summary>
+    private PaneScreen? _screen;
+
+    /// <summary>The screens hidden, oldest first: each still the layout of a tab or a group that can come back.</summary>
+    private readonly List<PaneScreen> _keptScreens = [];
+
+    /// <summary>The views on screen, by the pane they show (the panes of <see cref="MainViewModel.ShownLayout"/>): <see cref="_screen"/>'s.</summary>
     private Dictionary<PaneViewModel, PaneView> _shownViews = [];
 
-    /// <summary>The layout the views are laid out by (to tell a moved splitter from a new shape).</summary>
-    private PaneLayout<PaneViewModel>? _builtLayout;
-
-    /// <summary>The split each splitter on screen drags (rebuilt with the layout).</summary>
-    private readonly Dictionary<GridSplitter, PaneSplit<PaneViewModel>> _splitOf = [];
+    /// <summary>The split each splitter on screen drags: <see cref="_screen"/>'s.</summary>
+    private Dictionary<GridSplitter, PaneSplit<PaneViewModel>> _splitOf = [];
 
     /// <summary>The view of the active pane (the first view while nothing is built yet).</summary>
     private PaneView ActivePaneView =>
-        _shownViews.TryGetValue(_vm.ActivePane, out var view) ? view : _paneViews.Count > 0 ? _paneViews[0] : NewPaneView();
+        _shownViews.TryGetValue(_vm.ActivePane, out var view) ? view
+        : _shownViews.Count > 0 ? _shownViews.Values.First()
+        : _paneViews.Count > 0 ? _paneViews[0] : NewPaneView();
 
     /// <summary>
-    /// Lays the views out by the shown tab's layout (<see cref="MainViewModel.ShownLayout"/>). A view
-    /// stays with its pane while the pane stays on screen; a pane new on screen gets a free view (a
-    /// tab of one pane always the same one, without moving it: as the one grid of the window before
-    /// panes). Only a moved splitter (the same panes, the same shape) updates the sizes in place;
-    /// anything else rebuilds the splits, and the views that moved get their scroll positions back.
-    /// A view that is placed anew takes its pane only after the layout (its cards are made once, for
-    /// the width it has there).
+    /// Shows the views of the shown tab's layout (<see cref="MainViewModel.ShownLayout"/>).
+    /// <list type="bullet">
+    /// <item>The same panes in the same shape as on screen (a moved splitter): the sizes change in place.</item>
+    /// <item>A layout shown before and still built (<see cref="_keptScreens"/>): the screen on screen is
+    /// hidden and that one is shown, cards, scroll positions and all.</item>
+    /// <item>The layout on screen changed (a split, a pane closed or filled): its views stay with their
+    /// panes and move to the new splits; they get their scroll positions back.</item>
+    /// <item>Anything else is built: the screen on screen is hidden and kept, each pane gets a free
+    /// view, and takes it only after the layout (its cards are made once, for the width it has there).</item>
+    /// </list>
     /// </summary>
     private void BuildPanes()
     {
         var layout = _vm.ShownLayout;
-        if (_builtLayout is { } built && SameShape(built.Root, layout.Root))
+        if (_screen is { } on && SameShape(on.Layout.Root, layout.Root))
         {
-            _builtLayout = layout;
-            UpdateSplits(layout.Root);
+            on.Layout = layout;
+            UpdateSplits(on);
             MarkActivePane();
             return;
         }
 
-        var shown = new Dictionary<PaneViewModel, PaneView>();
-        foreach (var pane in layout.Panes)
+        if (_keptScreens.Find(k => SameShape(k.Layout.Root, layout.Root)) is { } back)
         {
-            if (_shownViews.TryGetValue(pane, out var kept))
-            {
-                shown[pane] = kept;
-            }
+            _keptScreens.Remove(back);
+            back.Layout = layout;
+            UpdateSplits(back); // the layout's nodes are new objects
+            HideScreen();
+            _screen = back;
+            _shownViews = back.Views;
+            _splitOf = back.Splits;
+            back.Host.Visibility = Visibility.Visible;
+            MarkActivePane();
+            TrimKeptScreens();
+            return;
         }
 
-        var free = new Queue<PaneView>(_paneViews.Where(v => !shown.ContainsValue(v)));
+        // A kept screen that has a pane of this layout has another shape (its group changed while it
+        // was hidden): it cannot come back, and a pane has one view.
+        foreach (var stale in _keptScreens.Where(k => layout.Panes.Any(k.Views.ContainsKey)).ToList())
+        {
+            _keptScreens.Remove(stale);
+            TakeApart(stale);
+        }
+
+        var shown = new Dictionary<PaneViewModel, PaneView>();
+        var offsets = new Dictionary<PaneViewModel, double>();
+        PaneScreen? changed = null;
+        if (_screen is { } before && layout.Panes.Any(before.Views.ContainsKey))
+        {
+            // The layout on screen changed: the views of the panes that stay move with them. Views
+            // that move to another split lose their layout: their positions come back after it.
+            changed = before;
+            foreach (var (pane, view) in before.Views)
+            {
+                if (layout.Contains(pane))
+                {
+                    shown[pane] = view;
+                    offsets[pane] = view.ActiveList.VerticalOffset;
+                }
+                else
+                {
+                    Detach(view);
+                    view.DataContext = null; // its cards go with its pane
+                }
+            }
+
+            _screen = null;
+        }
+        else
+        {
+            HideScreen();
+        }
+
+        var free = new Queue<PaneView>(_paneViews.Where(v => !shown.ContainsValue(v) && !_keptScreens.Any(k => k.Views.ContainsValue(v))));
         var arriving = new List<(PaneViewModel Pane, PaneView View)>(); // the panes new on screen: given to their views below
         foreach (var pane in layout.Panes.Where(p => !shown.ContainsKey(p)))
         {
             var view = free.Count > 0 ? free.Dequeue() : NewPaneView();
+            view.DataContext = null; // a free view is empty already; a new one must not take the window's
             arriving.Add((pane, view));
             shown[pane] = view;
         }
 
-        // Views that move to another split lose their layout: their positions come back after it.
-        var offsets = shown.Where(s => _shownViews.ContainsKey(s.Key)).ToDictionary(s => s.Key, s => s.Value.ActiveList.VerticalOffset);
-
+        var screen = new PaneScreen { Host = new PaneScreenHost(), Layout = layout, Views = shown };
+        _screen = screen;
         _shownViews = shown;
-        _builtLayout = layout;
-        _splitOf.Clear();
-        foreach (var view in free)
+        _splitOf = screen.Splits;
+        screen.Host.Child = Build(layout.Root); // takes the views that stay out of the old splits
+        if (changed is not null)
         {
-            Detach(view);
-            view.DataContext = null; // its cards go with its pane
+            PaneArea.Children.Remove(changed.Host);
+            changed.Host.Child = null;
         }
 
-        if (layout.Root is PaneLeaf<PaneViewModel> { Pane: var only } && ReferenceEquals(PaneArea.Child, shown[only]))
-        {
-            // the same view as before, the same place: only its pane changed (a tab switch)
-        }
-        else
-        {
-            // A view that takes another pane here also takes another size. Its card grid counts its
-            // columns from the width it has: given the pane first, it would make the cards for the old
-            // width and make them again after the layout. So the view is emptied, laid out in its new
-            // place (cheap: no items), and only then given its pane.
-            foreach (var (_, view) in arriving)
-            {
-                view.DataContext = null;
-            }
+        PaneArea.Children.Add(screen.Host);
 
-            var root = Build(layout.Root);
-            if (!ReferenceEquals(PaneArea.Child, root))
-            {
-                Detach(root);
-                PaneArea.Child = root;
-            }
-
-            if (PaneArea.IsLoaded)
-            {
-                PaneArea.UpdateLayout();
-            }
+        // A view that takes a pane here also takes a size. Its card grid counts its columns from the
+        // width it has: given the pane first, it would make the cards for the old width and make them
+        // again after the layout. So the views are laid out in their places while empty (cheap: no
+        // items), and only then given their panes.
+        if (PaneArea.IsLoaded)
+        {
+            PaneArea.UpdateLayout();
         }
 
         foreach (var (pane, view) in arriving)
@@ -2990,6 +3061,56 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         MarkActivePane();
+        TrimKeptScreens();
+    }
+
+    /// <summary>The screen on screen leaves it as it is, to come back (<see cref="_keptScreens"/>).</summary>
+    private void HideScreen()
+    {
+        if (_screen is not { } screen)
+        {
+            return;
+        }
+
+        _cascade.CloseCardCascade(); // it hangs on an item of a view that leaves the screen (the item stays, unlike before)
+        screen.Host.Visibility = Visibility.Collapsed;
+        _keptScreens.Add(screen);
+        _screen = null;
+        _shownViews = [];
+        _splitOf = [];
+    }
+
+    /// <summary>A screen that will not be shown again: its views are emptied and free for other panes.</summary>
+    private void TakeApart(PaneScreen screen)
+    {
+        PaneArea.Children.Remove(screen.Host);
+        foreach (var view in screen.Views.Values)
+        {
+            Detach(view);
+            view.DataContext = null; // its cards go with its pane
+        }
+
+        screen.Host.Child = null;
+    }
+
+    /// <summary>
+    /// Drops the kept screens that cannot come back (a pane of theirs is closed: the view would hold
+    /// its cards for nothing) and, over <see cref="KeptViewBudget"/>, the ones left longest ago.
+    /// </summary>
+    private void TrimKeptScreens()
+    {
+        foreach (var gone in _keptScreens.Where(k => k.Views.Keys.Any(p => !_vm.IsOpenPane(p))).ToList())
+        {
+            _keptScreens.Remove(gone);
+            TakeApart(gone);
+        }
+
+        while (_keptScreens.Count > 0 && _keptScreens.Sum(k => k.Views.Count) > KeptViewBudget)
+        {
+            var oldest = _keptScreens[0];
+            _keptScreens.RemoveAt(0);
+            TakeApart(oldest);
+        }
     }
 
     private UIElement Build(PaneNode<PaneViewModel> node)
@@ -3079,12 +3200,13 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _ => false,
     };
 
-    /// <summary>A splitter moved: the grids on screen take the new layout's nodes and ratios (they are new objects).</summary>
-    private void UpdateSplits(PaneNode<PaneViewModel> root)
+    /// <summary>A splitter moved, or a kept screen comes back: its grids take the layout's nodes and ratios (they are new objects).</summary>
+    private static void UpdateSplits(PaneScreen screen)
     {
-        var byGrid = _splitOf.ToDictionary(s => (Grid)s.Key.Parent, s => s.Key);
-        _splitOf.Clear();
-        Walk(PaneArea.Child, root);
+        var splits = screen.Splits;
+        var byGrid = splits.ToDictionary(s => (Grid)s.Key.Parent, s => s.Key);
+        splits.Clear();
+        Walk(screen.Host.Child, screen.Layout.Root);
 
         void Walk(UIElement? element, PaneNode<PaneViewModel> node)
         {
@@ -3093,7 +3215,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 return;
             }
 
-            _splitOf[splitter] = split;
+            splits[splitter] = split;
             SetRatio(grid, split);
             Walk(grid.Children[0], split.First);
             Walk(grid.Children[2], split.Second);

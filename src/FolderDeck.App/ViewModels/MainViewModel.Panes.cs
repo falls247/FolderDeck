@@ -90,6 +90,14 @@ public sealed partial class MainViewModel
     /// <summary><paramref name="pane"/> is an empty pane of a group (no tab in it).</summary>
     public bool IsEmptyPane(PaneViewModel pane) => _emptyTabs.ContainsKey(pane);
 
+    /// <summary>
+    /// <paramref name="pane"/> can come on screen again as it is: the pane of a tab of the strip, an
+    /// empty pane, the placeholder's. The window keeps the views of these panes after they leave the
+    /// screen (<c>MainWindow.BuildPanes</c>) and drops the views of the others.
+    /// </summary>
+    public bool IsOpenPane(PaneViewModel pane) =>
+        Tabs.Any(t => ReferenceEquals(t.ActivePane, pane)) || _emptyTabs.ContainsKey(pane) || ReferenceEquals(pane, NoTab.ActivePane);
+
     /// <summary>The tab whose pane <paramref name="pane"/> is (a closed fixed tab too, an empty pane's stand-in).</summary>
     private TabLayoutViewModel? TabOf(PaneViewModel pane) =>
         Tabs.FirstOrDefault(t => ReferenceEquals(t.ActivePane, pane))

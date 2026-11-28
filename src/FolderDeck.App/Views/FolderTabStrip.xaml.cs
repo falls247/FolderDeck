@@ -18,8 +18,12 @@ namespace FolderDeck.Views;
 /// of a neighbour), dragging it down onto a pane of the group on screen puts it in that pane
 /// (<see cref="TabDraggedOverPanes"/> / <see cref="TabDroppedOnPanes"/>), a middle click or × closes it.
 /// A press on a tab that is not on screen (outside the group on screen, or any other tab than the one
-/// shown alone) shows it only when the button is released without a drag (shown at once, what is on
-/// screen would leave it before the tab could be dropped on a pane or a snap layout).
+/// shown alone) shows it at once too; when the press becomes a drag down to the panes, what was on
+/// screen at the press comes back (<see cref="_shownAtPress"/>), so that the tab can be dropped on a
+/// pane of it or on a snap layout, and the tab is then shown on release as far as the drop leaves it
+/// to. While an empty pane, the blank page or no tab is on screen, and for a drag by a group's bar,
+/// the tab is shown on release only (a press must not fill the empty pane before a drag is told
+/// from a click).
 /// The bar over a pane group's tabs, dragged, moves the whole group past the tabs and groups beside it.
 /// A drag shows a see-through picture of what it holds under the pointer (<see cref="DragGhost"/>). When the tabs do not fit, ◀ / ▶ appear on the
 /// left (next to the sidebar button) and step one tab at a time, and the wheel (vertical or
@@ -33,8 +37,14 @@ public partial class FolderTabStrip : UserControl
     private Point _pressedAt;
     private bool _moving;
 
-    /// <summary>The pressed tab is shown on release (it is outside the group on screen; see the class summary).</summary>
+    /// <summary>The pressed tab is shown on release (see the class summary).</summary>
     private bool _selectOnRelease;
+
+    /// <summary>
+    /// The tab that was shown when the press showed the pressed one instead (null: the press did not
+    /// change the screen). A drag down to the panes brings it back, with its group.
+    /// </summary>
+    private TabLayoutViewModel? _shownAtPress;
 
     /// <summary>The dragged tab is over the panes (not the strip): moving it does not reorder the strip.</summary>
     private bool _overPanes;
@@ -73,6 +83,7 @@ public partial class FolderTabStrip : UserControl
             _moving = false;
             _pressed = null;
             _selectOnRelease = false;
+            _shownAtPress = null;
             _groupDrag = false;
         };
         Tabs.PreviewMouseDown += OnMouseDown;
@@ -390,12 +401,30 @@ public partial class FolderTabStrip : UserControl
         _overPanes = false;
         Interacted?.Invoke();
         _groupDrag = tab.IsGrouped && OnGroupHandle(e.OriginalSource);
-        // A tab that is not on screen is shown on release: what is on screen at the press (a group, or the
-        // tab shown alone) stays for a drop on a pane or a snap layout, which lays it out with the dragged tab.
-        // A click still fills an active empty pane (on release).
-        _selectOnRelease = _groupDrag || (!tab.IsOnScreen && !ReferenceEquals(tab, _vm.SelectedTab));
-        if (!_selectOnRelease)
+        _shownAtPress = null;
+        bool offScreen = !tab.IsOnScreen && !ReferenceEquals(tab, _vm.SelectedTab);
+        if (_groupDrag)
         {
+            _selectOnRelease = true;
+        }
+        else if (offScreen && _vm.Tabs.Contains(_vm.SelectedTab))
+        {
+            // Shown at the press, as a click expects (the time the button is held is not waited for).
+            // What is on screen now is needed again if this becomes a drag down to the panes: a drop on
+            // a pane or a snap layout lays it out with the dragged tab (OnMouseMove brings it back).
+            _selectOnRelease = false;
+            _shownAtPress = _vm.SelectedTab;
+            _vm.SelectTabCommand.Execute(tab);
+        }
+        else if (offScreen)
+        {
+            // An empty pane is active (the tab would fill it), the blank page or no tab is on screen:
+            // nothing to bring back to as it was, so the tab is shown on release, a click only.
+            _selectOnRelease = true;
+        }
+        else
+        {
+            _selectOnRelease = false;
             _vm.SelectTabCommand.Execute(tab);
         }
     }
@@ -432,6 +461,15 @@ public partial class FolderTabStrip : UserControl
         bool overPanes = p.Y > Tabs.ActualHeight + DragOutMargin;
         if (overPanes)
         {
+            if (_shownAtPress is { } before)
+            {
+                // The press showed the tab; the drop is on what was on screen then: it comes back
+                // (kept built: MainWindow.BuildPanes), and the tab is shown on release, as before.
+                _shownAtPress = null;
+                _selectOnRelease = true;
+                _vm.RestoreShown(before);
+            }
+
             _overPanes = true;
             bool target = TabDraggedOverPanes?.Invoke(tab, Tabs.PointToScreen(p)) ?? false;
             Tabs.Cursor = target ? Cursors.Hand : Cursors.No;
@@ -599,6 +637,7 @@ public partial class FolderTabStrip : UserControl
         _moving = false; // before the capture goes: LostMouseCapture must not end the drag a second time
         _pressed = null;
         _selectOnRelease = false;
+        _shownAtPress = null;
         EndDragVisuals();
         _groupDrag = false;
         if (tab is null || _vm is null)

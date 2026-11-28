@@ -609,6 +609,23 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
+    /// A press on the strip showed another tab and the press became a drag towards the panes: what
+    /// was on screen at the press (<paramref name="tab"/>, with its group) comes back as it was, for
+    /// the drop (<c>FolderTabStrip</c>). Not a switch to it: a fixed tab's list is not rebuilt.
+    /// </summary>
+    public void RestoreShown(TabLayoutViewModel tab)
+    {
+        if (ReferenceEquals(tab, SelectedTab) || !Tabs.Contains(tab))
+        {
+            return;
+        }
+
+        View?.CloseCascade();
+        _ = ShowTabAsync(tab, stayedOnScreen: true);
+        SaveLocations();
+    }
+
+    /// <summary>
     /// The shown tab is about to be replaced: it remembers where it was scrolled to. Not a tab that
     /// was just closed (a fixed tab starts fresh when it is opened again), nor the placeholder.
     /// </summary>
