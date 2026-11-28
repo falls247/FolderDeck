@@ -115,20 +115,20 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 ApplySidebarLayout();
                 _sidebarJustToggled = true;
             }
-            else if (e.PropertyName == nameof(MainViewModel.SelectedTab))
+            else if (e.PropertyName == nameof(MainViewModel.ActivePane))
             {
                 EndAddressEdit(); // the path in the box is the other tab's
-                WatchCrumbs(vm.SelectedTab); // the other tab's crumbs replace these
+                WatchCrumbs(vm.ActivePane); // the other tab's crumbs replace these
             }
         };
-        WatchCrumbs(vm.SelectedTab);
+        WatchCrumbs(vm.ActivePane);
 
         Grid.Scrolled += (_, _) => _cascade.CloseCardCascade();
         Grid.CardSizeStepRequested += step => vm.StepCardSize(step);
 
         // The details list: like the grid, its scrolling only concerns what hangs on its own rows.
         Details.Scrolled += (_, _) => _cascade.CloseCardCascade();
-        Details.HeaderClicked += column => vm.SetSortMode(CardSortModes.Next(vm.SelectedTab.SortMode, column));
+        Details.HeaderClicked += column => vm.SetSortMode(CardSortModes.Next(vm.ActivePane.SortMode, column));
         Details.ColumnResized += (key, width) => vm.SetDetailsColumnWidth(key, width);
 
         // The header's right click: Explorer's column chooser. Windows' names of the extra columns are
@@ -161,11 +161,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
         };
         TabStrip.Interacted += () => _cascade.CloseAll();
 
-        // A tab that is not shown is an anchor too: resting on its header lists its folder under it (TabViewModel as ICascadeAnchor).
+        // A tab that is not shown is an anchor too: resting on its header lists its folder under it (TabLayoutViewModel as ICascadeAnchor).
         TabStrip.TabEntered += (element, tab) => _cascade.AnchorMouseEnter(element, element, tab);
         TabStrip.TabMoved += (element, tab, position) => _cascade.AnchorMouseMove(element, element, tab, position);
         TabStrip.TabLeft += element => _cascade.AnchorMouseLeave(element);
-        TabStrip.TabsShifted += () => _cascade.AnchorsMoved<TabViewModel>();
+        TabStrip.TabsShifted += () => _cascade.AnchorsMoved<TabLayoutViewModel>();
 
         // §9.6 rule 5: these close every flyout at once (Popups are topmost windows).
         Deactivated += (_, _) => _cascade.CloseAll();
@@ -977,7 +977,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 }
                 else
                 {
-                    _vm.Message.Info(_vm.HasTab && _vm.SelectedTab.FolderTargetPath is not null && _vm.SelectedTab.IsLoading
+                    _vm.Message.Info(_vm.HasTab && _vm.ActivePane.FolderTargetPath is not null && _vm.ActivePane.IsLoading
                         ? "フォルダの読み込みが終わってから貼り付けてください。"
                         : "この一覧には貼り付けできません。");
                 }
@@ -1075,11 +1075,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// The tab and the cursor item of the last Ctrl + arrow (Ctrl without Shift): while the cursor is
     /// still there, in that tab, with its frame drawn, a plain Space adds instead of replacing.
     /// </summary>
-    private (TabViewModel Tab, string Path)? _ctrlMovedTo;
+    private (PaneViewModel Tab, string Path)? _ctrlMovedTo;
 
     private bool IsCtrlMoveMode() =>
-        _ctrlMovedTo is { } moved && ReferenceEquals(moved.Tab, _vm.SelectedTab) && _vm.SelectedTab.ShowsCursor
-        && _vm.SelectedTab.Selection.Cursor is { } cursor && PathTools.PathEquals(cursor, moved.Path);
+        _ctrlMovedTo is { } moved && ReferenceEquals(moved.Tab, _vm.ActivePane) && _vm.ActivePane.ShowsCursor
+        && _vm.ActivePane.Selection.Cursor is { } cursor && PathTools.PathEquals(cursor, moved.Path);
 
     /// <summary>
     /// Moves the cursor of the shown list: a plain key selects the target alone, Shift the range from
@@ -1101,8 +1101,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         _ctrlMovedTo = (modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == ModifierKeys.Control
-            && _vm.SelectedTab.Selection.Cursor is { } at
-            ? (_vm.SelectedTab, at)
+            && _vm.ActivePane.Selection.Cursor is { } at
+            ? (_vm.ActivePane, at)
             : null;
     }
 
@@ -1130,7 +1130,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         var list = ActiveList;
         // Any press (a quick second one too: nothing on the blank part reacts to a double click).
         if (e.RightButton == MouseButtonState.Pressed || !_vm.HasTab
-            || _vm.SelectedTab.IsLoading || IsNameBusy || list.IsMarqueeRunning
+            || _vm.ActivePane.IsLoading || IsNameBusy || list.IsMarqueeRunning
             || list.RealizedItemAt(e) is not null
             || _vm.BeginMarquee(modifiers) is not { } marquee)
         {
@@ -1181,7 +1181,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
             // No path in the log: the type of the source and the load state tell why it fell through.
             FolderDeck.Core.Infrastructure.AppLog.Info(
                 $"Item right click reached the blank area: source {e.OriginalSource?.GetType().Name ?? "null"}, "
-                + $"view {view.GetType().Name}, loading {_vm.SelectedTab.IsLoading}");
+                + $"view {view.GetType().Name}, loading {_vm.ActivePane.IsLoading}");
             ItemContextMenu(item, view);
             return;
         }
@@ -1274,7 +1274,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     private void OnFilterClick(object sender, RoutedEventArgs e)
     {
         _cascade.CloseAll();
-        var current = _vm.SelectedTab.Filter;
+        var current = _vm.ActivePane.Filter;
         var menu = new ContextMenu
         {
             PlacementTarget = (UIElement)sender,
@@ -1304,7 +1304,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     private void OnSortClick(object sender, RoutedEventArgs e)
     {
         _cascade.CloseAll();
-        var current = _vm.SelectedTab.SortMode;
+        var current = _vm.ActivePane.SortMode;
         var menu = new ContextMenu
         {
             PlacementTarget = (UIElement)sender,
@@ -1586,7 +1586,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         // a real folder's list that takes no drop now refuses it; only the top lists (最近の履歴 /
         // よく使う項目 / PC) and the placeholder keep the old null (a registration for Explorer drags)
         FolderTarget? RefusedInFolder() =>
-            _vm.HasTab && _vm.SelectedTab.FolderTargetPath is { } real ? new FolderTarget(real, null, Refused: true) : null;
+            _vm.HasTab && _vm.ActivePane.FolderTargetPath is { } real ? new FolderTarget(real, null, Refused: true) : null;
     }
 
     /// <summary>The paths of another app's file drop (null when it carries none or cannot be read).</summary>
@@ -1952,7 +1952,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     {
         var item = vm.ToItemRef();
         var targets = _vm.SelectionTargets(item);
-        if (targets.Count == 1 && !_vm.SelectedTab.Selection.Contains(vm.Path))
+        if (targets.Count == 1 && !_vm.ActivePane.Selection.Contains(vm.Path))
         {
             _vm.ClearSelection();
         }
@@ -1970,7 +1970,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     private void ShowMenuFromKeys()
     {
         _cascade.CloseAll(); // the menu is the list's, not the row a list's keys highlight
-        var tab = _vm.SelectedTab;
+        var tab = _vm.ActivePane;
         var selected = tab.SelectedCards();
         if (selected.Count > 0)
         {
@@ -2325,7 +2325,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     private bool IsSearchEditing => SearchBox.Visibility == Visibility.Visible;
 
     /// <summary>The tab the box searches: when it moves or another tab is shown, the box closes.</summary>
-    private TabViewModel? _searchTab;
+    private PaneViewModel? _searchTab;
 
     /// <summary>The box is being closed (its lost focus must not close it a second time).</summary>
     private bool _searchEnding;
@@ -2350,7 +2350,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _cascade.SetEditing(true); // no hover opens a list over the items, and Esc reaches the box
         if (!IsSearchEditing)
         {
-            _searchTab = _vm.SelectedTab;
+            _searchTab = _vm.ActivePane;
             _searchTab.PropertyChanged += OnSearchTabChanged;
             _vm.PropertyChanged += OnSearchMainChanged;
             SearchEdit.Text = _searchTab.SearchText;
@@ -2450,7 +2450,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// <summary>The searched tab moved (another folder: its search is cleared) or changed its search otherwise.</summary>
     private void OnSearchTabChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(TabViewModel.Location))
+        if (e.PropertyName == nameof(PaneViewModel.Location))
         {
             EndSearch();
         }
@@ -2458,7 +2458,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private void OnSearchMainChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainViewModel.SelectedTab))
+        if (e.PropertyName == nameof(MainViewModel.ActivePane))
         {
             EndSearch();
         }
@@ -2479,7 +2479,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         EndSearch();
         if (_vm.HasTab)
         {
-            _vm.SelectedTab.SearchText = string.Empty;
+            _vm.ActivePane.SearchText = string.Empty;
         }
     }
 
@@ -2489,7 +2489,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     private bool IsAddressEditing => AddressEdit.Visibility == Visibility.Visible;
 
     /// <summary>The tab whose path the edit box holds: when it moves, the edit ends.</summary>
-    private TabViewModel? _addressTab;
+    private PaneViewModel? _addressTab;
 
     /// <summary>The edit box is being closed (its lost focus must not close it a second time).</summary>
     private bool _addressEnding;
@@ -2529,7 +2529,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         if (!IsAddressEditing)
         {
             _addressSession++;
-            _addressTab = _vm.SelectedTab;
+            _addressTab = _vm.ActivePane;
             _addressTab.PropertyChanged += OnAddressTabChanged;
             AddressEdit.Text = _addressTab.CurrentFolderPath ?? string.Empty;
 
@@ -2584,7 +2584,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// <summary>The tab of the edit box moved (a navigation, a reload that followed a rename): its path in the box is stale.</summary>
     private void OnAddressTabChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(TabViewModel.Location))
+        if (e.PropertyName == nameof(PaneViewModel.Location))
         {
             EndAddressEdit();
         }
@@ -2710,7 +2710,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     private bool _crumbQuiet;
 
     /// <summary>The tab whose crumbs are watched (<see cref="WatchCrumbs"/>).</summary>
-    private TabViewModel? _crumbTab;
+    private PaneViewModel? _crumbTab;
 
     /// <summary>The crumbs last shown: when they are replaced, each is an anchor that went away.</summary>
     private IReadOnlyList<BreadcrumbItem> _crumbs = [];
@@ -2759,7 +2759,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// changes), and an element that goes away raises no MouseLeave: the list under it, or a hover
     /// waiting to open it, is called off here instead.
     /// </summary>
-    private void WatchCrumbs(TabViewModel tab)
+    private void WatchCrumbs(PaneViewModel tab)
     {
         if (_crumbTab is { } old)
         {
@@ -2773,7 +2773,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private void OnCrumbTabChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(TabViewModel.Breadcrumbs) && sender is TabViewModel tab)
+        if (e.PropertyName == nameof(PaneViewModel.Breadcrumbs) && sender is PaneViewModel tab)
         {
             DropCrumbs(tab.Breadcrumbs);
         }

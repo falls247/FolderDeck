@@ -55,7 +55,7 @@
                 </ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
-                <DataTemplate DataType="{x:Type vm:TabViewModel}">
+                <DataTemplate DataType="{x:Type vm:TabLayoutViewModel}">
                     <Grid x:Name="Tab" Height="38" MinWidth="76" MaxWidth="200" Margin="0,0,2,0" Background="Transparent" Cursor="Hand"
                           ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700"
                           MouseEnter="OnTabEnter" MouseMove="OnTabMove" MouseLeave="OnTabLeave">

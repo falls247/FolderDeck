@@ -167,7 +167,7 @@ public sealed partial class MainViewModel
     /// <summary>Selects what came back into the folder shown (as ReloadAndSelectArrivedAsync; only what the reloaded list shows).</summary>
     private void SelectArrived(IReadOnlyList<string> paths)
     {
-        var tab = SelectedTab;
+        var tab = ActivePane;
         if (tab.TransferTargetPath is not { } shown)
         {
             return;

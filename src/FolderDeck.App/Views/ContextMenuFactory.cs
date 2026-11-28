@@ -112,7 +112,7 @@ public sealed class ContextMenuFactory
         // on another item clears the selection first; a cascade row or sidebar row is never selected,
         // but a details row's preview carries the tab's own card, maybe one of several selected).
         bool keys = card is not null && _vm.HasTab
-            && _vm.SelectedTab.Selection is { Count: 1 } selection && selection.Contains(card.Path);
+            && _vm.ActivePane.Selection is { Count: 1 } selection && selection.Contains(card.Path);
 
         // The default entry of Explorer's menu (in place of the shell's open).
         entries.Add(new("開く", OpenGlyph, !disabled, () =>
@@ -515,7 +515,7 @@ public sealed class ContextMenuFactory
     /// </summary>
     private MenuEntry SortEntry()
     {
-        var tab = _vm.SelectedTab;
+        var tab = _vm.ActivePane;
         var current = tab.SortMode;
         var children = new List<MenuEntry>();
         foreach (var mode in CardSortModes.All)
@@ -523,7 +523,7 @@ public sealed class ContextMenuFactory
             bool selected = mode == current;
             children.Add(new(SortModeLabels.Long(mode), selected ? CheckGlyph : string.Empty, true, () =>
             {
-                if (ReferenceEquals(tab, _vm.SelectedTab))
+                if (ReferenceEquals(tab, _vm.ActivePane))
                 {
                     _vm.SetSortMode(mode);
                 }
@@ -535,7 +535,7 @@ public sealed class ContextMenuFactory
             children.Add(MenuEntry.Separator);
             children.Add(new(SortModeLabels.ResetManual, UndoGlyph, _vm.CanResetManualOrder, () =>
             {
-                if (ReferenceEquals(tab, _vm.SelectedTab))
+                if (ReferenceEquals(tab, _vm.ActivePane))
                 {
                     _ = _vm.ResetManualOrderAsync();
                 }
@@ -552,7 +552,7 @@ public sealed class ContextMenuFactory
     /// </summary>
     private MenuEntry TypeSelectEntry()
     {
-        var tab = _vm.SelectedTab;
+        var tab = _vm.ActivePane;
         var children = new List<MenuEntry>();
         foreach (var group in _vm.TypeGroupsShown())
         {
@@ -560,7 +560,7 @@ public sealed class ContextMenuFactory
             string key = group.Key;
             children.Add(new($"{label}（{group.Count}）", group.IsFolder ? FolderGlyph : FileGlyph, true, () =>
             {
-                if (ReferenceEquals(tab, _vm.SelectedTab))
+                if (ReferenceEquals(tab, _vm.ActivePane))
                 {
                     _vm.SelectByType(key);
                 }
