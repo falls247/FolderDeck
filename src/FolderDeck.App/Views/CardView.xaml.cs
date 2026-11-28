@@ -91,6 +91,9 @@ public partial class CardView : UserControl
     private CardViewModel? _realized;
     private CardViewModel? _subscribed;
     private CardGrid? _grid;
+
+    /// <summary>The first measure took the grid's metrics (<see cref="MeasureOverride"/>).</summary>
+    private bool _sizedFromGrid;
     private bool _hot;
 
     /// <summary>
@@ -193,6 +196,29 @@ public partial class CardView : UserControl
     /// <summary>A press on the rows of the overlay belongs to their list.</summary>
     private bool IsOnOverlay(DependencyObject? source) =>
         CurrentOverlay is not null && FindAncestor<OverlayView>(source) is not null;
+
+    /// <summary>
+    /// The card's width and the height of its thumbnail row come from the grid's metrics through
+    /// bindings that look the grid up in the tree, and a card just made is measured before they
+    /// resolve: about 80 px high instead of 400. The rows panel then fills the viewport with rows of
+    /// that height, 8 rows of cards where 3 fit, every time a list is shown. The first measure takes
+    /// the metrics itself; the bindings stay (SetCurrentValue) and follow the card size and shape.
+    /// </summary>
+    protected override Size MeasureOverride(Size constraint)
+    {
+        if (!_sizedFromGrid)
+        {
+            _grid ??= FindAncestor<CardGrid>(this);
+            if (_grid is not null)
+            {
+                _sizedFromGrid = true;
+                SetCurrentValue(WidthProperty, _grid.Metrics.CardWidth);
+                ThumbRow.SetCurrentValue(RowDefinition.HeightProperty, new GridLength(_grid.Metrics.ThumbHeight));
+            }
+        }
+
+        return base.MeasureOverride(constraint);
+    }
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {

@@ -2907,6 +2907,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// tab of one pane always the same one, without moving it: as the one grid of the window before
     /// panes). Only a moved splitter (the same panes, the same shape) updates the sizes in place;
     /// anything else rebuilds the splits, and the views that moved get their scroll positions back.
+    /// A view that is placed anew takes its pane only after the layout (its cards are made once, for
+    /// the width it has there).
     /// </summary>
     private void BuildPanes()
     {
@@ -2929,10 +2931,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         var free = new Queue<PaneView>(_paneViews.Where(v => !shown.ContainsValue(v)));
+        var arriving = new List<(PaneViewModel Pane, PaneView View)>(); // the panes new on screen: given to their views below
         foreach (var pane in layout.Panes.Where(p => !shown.ContainsKey(p)))
         {
             var view = free.Count > 0 ? free.Dequeue() : NewPaneView();
-            view.DataContext = pane;
+            arriving.Add((pane, view));
             shown[pane] = view;
         }
 
@@ -2954,12 +2957,31 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
         else
         {
+            // A view that takes another pane here also takes another size. Its card grid counts its
+            // columns from the width it has: given the pane first, it would make the cards for the old
+            // width and make them again after the layout. So the view is emptied, laid out in its new
+            // place (cheap: no items), and only then given its pane.
+            foreach (var (_, view) in arriving)
+            {
+                view.DataContext = null;
+            }
+
             var root = Build(layout.Root);
             if (!ReferenceEquals(PaneArea.Child, root))
             {
                 Detach(root);
                 PaneArea.Child = root;
             }
+
+            if (PaneArea.IsLoaded)
+            {
+                PaneArea.UpdateLayout();
+            }
+        }
+
+        foreach (var (pane, view) in arriving)
+        {
+            view.DataContext = pane;
         }
 
         foreach (var (pane, offset) in offsets)
