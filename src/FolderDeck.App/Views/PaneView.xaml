@@ -23,21 +23,35 @@
         </Grid.RowDefinitions>
 
         <!--
-          The active pane of a split tab: a faint accent tint under the whole pane (the lists' backgrounds are
-          transparent), with the frame below. A tab of one pane keeps the window's background.
+          While the window is split: the pane's colour under the whole pane (the lists' backgrounds are
+          transparent), the same as its tab's (Slot = TabLayoutViewModel.PaneSlot). The active pane has it
+          in full with the frame below; the others lighter. A window of one pane keeps its background.
         -->
-        <Border Grid.RowSpan="3" Background="{DynamicResource Brush.AccentSoft}" Opacity="0.45" IsHitTestVisible="False">
+        <Border Grid.RowSpan="3" IsHitTestVisible="False">
             <Border.Style>
                 <Style TargetType="{x:Type Border}">
                     <Setter Property="Visibility" Value="Collapsed" />
+                    <Setter Property="Opacity" Value="0.55" />
                     <Style.Triggers>
-                        <MultiDataTrigger>
-                            <MultiDataTrigger.Conditions>
-                                <Condition Binding="{Binding IsSplit, ElementName=Root}" Value="True" />
-                                <Condition Binding="{Binding IsActive, ElementName=Root}" Value="True" />
-                            </MultiDataTrigger.Conditions>
+                        <DataTrigger Binding="{Binding Slot, ElementName=Root}" Value="0">
+                            <Setter Property="Background" Value="{DynamicResource Brush.Pane0}" />
                             <Setter Property="Visibility" Value="Visible" />
-                        </MultiDataTrigger>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Slot, ElementName=Root}" Value="1">
+                            <Setter Property="Background" Value="{DynamicResource Brush.Pane1}" />
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Slot, ElementName=Root}" Value="2">
+                            <Setter Property="Background" Value="{DynamicResource Brush.Pane2}" />
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Slot, ElementName=Root}" Value="3">
+                            <Setter Property="Background" Value="{DynamicResource Brush.Pane3}" />
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsActive, ElementName=Root}" Value="True">
+                            <Setter Property="Opacity" Value="1" />
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </Border.Style>
@@ -56,16 +70,6 @@
                     <Button.Style>
                         <Style TargetType="{x:Type Button}" BasedOn="{StaticResource Btn}">
                             <Setter Property="Content" Value="{Binding BackText}" />
-                            <Style.Triggers>
-                                <!-- a folder pane of a split tab closes alone (MainViewModel.ClosePaneOrTabAsync) -->
-                                <MultiDataTrigger>
-                                    <MultiDataTrigger.Conditions>
-                                        <Condition Binding="{Binding IsSplit, ElementName=Root}" Value="True" />
-                                        <Condition Binding="{Binding IsFolderTab}" Value="True" />
-                                    </MultiDataTrigger.Conditions>
-                                    <Setter Property="Content" Value="ペインを閉じる" />
-                                </MultiDataTrigger>
-                            </Style.Triggers>
                         </Style>
                     </Button.Style>
                 </Button>

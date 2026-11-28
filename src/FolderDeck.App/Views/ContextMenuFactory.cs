@@ -478,28 +478,33 @@ public sealed class ContextMenuFactory
     }
 
     /// <summary>
-    /// The pane entries of the blank area of a folder tab: 「左右に分割」 / 「上下に分割」 of the pane
-    /// of the right click (it is the active one: the press made it so), and 「ペインを閉じる」 while
-    /// the tab is split. For that pane only (RunEntry may run the action after the menu closed).
+    /// The pane entries of the blank area: 「左右に分割」 / 「上下に分割」 of the pane of the right click
+    /// (it is the active one: the press made it so; a folder tab's pane only), and 「ペインを閉じる」
+    /// while the window is split (the tab stays on the strip). For that pane only (RunEntry may run
+    /// the action after the menu closed).
     /// </summary>
     private void AddPaneEntries(List<MenuEntry> entries)
     {
-        if (!_vm.HasTab || !_vm.SelectedTab.IsFolderTab)
+        if (!_vm.HasTab || (!_vm.SelectedTab.IsFolderTab && !_vm.IsSplit))
         {
-            return; // a fixed tab is never split
+            return; // a fixed tab's pane does not split
         }
 
         var pane = _vm.ActivePane;
         entries.Add(MenuEntry.Separator);
-        entries.Add(new("左右に分割", SplitColumnsGlyph, _vm.CanSplit, () => Split(SplitAxis.Columns), Keys: ShortcutId.SplitColumns));
-        entries.Add(new("上下に分割", SplitRowsGlyph, _vm.CanSplit, () => Split(SplitAxis.Rows), Keys: ShortcutId.SplitRows));
-        if (_vm.SelectedTab.IsSplit)
+        if (_vm.SelectedTab.IsFolderTab)
+        {
+            entries.Add(new("左右に分割", SplitColumnsGlyph, _vm.CanSplit, () => Split(SplitAxis.Columns), Keys: ShortcutId.SplitColumns));
+            entries.Add(new("上下に分割", SplitRowsGlyph, _vm.CanSplit, () => Split(SplitAxis.Rows), Keys: ShortcutId.SplitRows));
+        }
+
+        if (_vm.IsSplit)
         {
             entries.Add(new("ペインを閉じる", ClosePaneGlyph, true, () =>
             {
                 BeforeNavigate?.Invoke(); // the panes are laid out again
-                _ = _vm.ClosePaneAsync(pane);
-            }, Keys: ShortcutId.CloseTab));
+                _vm.ClosePane(pane);
+            }));
         }
 
         void Split(SplitAxis axis)

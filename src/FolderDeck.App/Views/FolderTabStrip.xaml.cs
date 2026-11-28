@@ -447,23 +447,30 @@ public partial class FolderTabStrip : UserControl
         duplicate.Click += (_, _) => _ = vm.DuplicateTabAsync(tab);
         menu.Items.Add(duplicate);
 
-        // Panes (folder tabs only): the tab's active pane splits (the tab is shown first), or closes.
-        if (tab.IsFolderTab)
+        // Panes: a folder tab splits (it is shown first, in the active pane); a tab in a pane of the
+        // split can leave it (the tab stays on the strip).
+        bool inSplit = tab.PaneSlot >= 0;
+        if (tab.IsFolderTab || inSplit)
         {
             menu.Items.Add(new Separator());
-            bool canSplit = tab.Panes.Count < PaneRules.MaxPanes;
+        }
+
+        if (tab.IsFolderTab)
+        {
+            bool canSplit = vm.ShownLayout.Panes.Count < PaneRules.MaxPanes;
             var columns = new MenuItem { Header = "左右に分割", IsEnabled = canSplit, InputGestureText = ShortcutCatalog.MainKeysOf(ShortcutId.SplitColumns) };
             columns.Click += (_, _) => _ = vm.SplitTabAsync(tab, SplitAxis.Columns);
             menu.Items.Add(columns);
             var rows = new MenuItem { Header = "上下に分割", IsEnabled = canSplit, InputGestureText = ShortcutCatalog.MainKeysOf(ShortcutId.SplitRows) };
             rows.Click += (_, _) => _ = vm.SplitTabAsync(tab, SplitAxis.Rows);
             menu.Items.Add(rows);
-            if (tab.IsSplit)
-            {
-                var closePane = new MenuItem { Header = "ペインを閉じる" };
-                closePane.Click += (_, _) => _ = vm.ClosePaneAsync(tab.ActivePane);
-                menu.Items.Add(closePane);
-            }
+        }
+
+        if (inSplit)
+        {
+            var closePane = new MenuItem { Header = "ペインを閉じる" };
+            closePane.Click += (_, _) => vm.ClosePane(tab.ActivePane);
+            menu.Items.Add(closePane);
         }
 
         menu.Items.Add(new Separator());

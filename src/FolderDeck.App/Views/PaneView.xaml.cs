@@ -21,6 +21,9 @@ public partial class PaneView : UserControl
     public static readonly DependencyProperty IsSplitProperty =
         DependencyProperty.Register(nameof(IsSplit), typeof(bool), typeof(PaneView), new PropertyMetadata(false));
 
+    public static readonly DependencyProperty SlotProperty =
+        DependencyProperty.Register(nameof(Slot), typeof(int), typeof(PaneView), new PropertyMetadata(-1));
+
     public PaneView()
     {
         InitializeComponent();
@@ -43,11 +46,18 @@ public partial class PaneView : UserControl
         set => SetValue(IsActiveProperty, value);
     }
 
-    /// <summary>The tab has more than one pane (the frame and the banner's 「ペインを閉じる」).</summary>
+    /// <summary>The window is split (more than one pane on screen): the frame of the active pane is drawn.</summary>
     public bool IsSplit
     {
         get => (bool)GetValue(IsSplitProperty);
         set => SetValue(IsSplitProperty, value);
+    }
+
+    /// <summary>The pane's colour while the window is split (its tab's <c>PaneSlot</c>, 0–3); −1 for none.</summary>
+    public int Slot
+    {
+        get => (int)GetValue(SlotProperty);
+        set => SetValue(SlotProperty, value);
     }
 
     public CardGrid CardGrid => Grid;

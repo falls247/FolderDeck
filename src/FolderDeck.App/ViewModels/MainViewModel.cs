@@ -109,24 +109,112 @@ public sealed partial class MainViewModel : ObservableObject
     private TabLayoutViewModel _selectedTab;
 
     /// <summary>
-    /// The pane of the shown tab that the toolbar, the address bar, the keys and the menus act on
-    /// (<see cref="TabLayoutViewModel.ActivePane"/>); never null: the placeholder's pane while no tab is open.
-    /// Announced with <see cref="SelectedTab"/>, and when another pane of the shown tab becomes active
-    /// (<see cref="ActivatePane"/>, a split, a closed pane): always after the toolbar's copy of its view
-    /// (<see cref="CardShape"/>) was set.
+    /// The pane the toolbar, the address bar, the keys and the menus act on: the shown tab's
+    /// (<see cref="TabLayoutViewModel.ActivePane"/>; while the window is split, the tab in the active
+    /// pane is the shown tab). Never null: the placeholder's pane while no tab is open. Announced with
+    /// <see cref="SelectedTab"/>, always after the toolbar's copy of its view (<see cref="CardShape"/>) was set.
     /// </summary>
     public PaneViewModel ActivePane => SelectedTab.ActivePane;
 
     /// <summary>
-    /// The layout of the shown tab: the view builds the panes from it. Announced with
-    /// <see cref="SelectedTab"/> (before <see cref="ActivePane"/>) and when the shown tab's layout changes.
+    /// The window's split: the panes of the tabs on screen (each pane shows one tab of the strip), or
+    /// null while one tab fills the items area. When not null it holds 2 to <see cref="PaneRules.MaxPanes"/>
+    /// panes and always <see cref="ActivePane"/>. Changed only through <see cref="SetSplit"/>.
     /// </summary>
-    public PaneLayout<PaneViewModel> ShownLayout => SelectedTab.Layout;
+    private PaneLayout<PaneViewModel>? _split;
 
-    /// <summary>The panes on screen: every pane of the shown tab (none while no tab is open).</summary>
-    public IReadOnlyList<PaneViewModel> VisiblePanes => HasTab ? SelectedTab.Panes : [];
+    /// <summary>
+    /// What the items area shows: the split, or the shown tab's pane alone. The view builds the panes
+    /// from it. Announced with <see cref="SelectedTab"/> (before <see cref="ActivePane"/>) and when the split changes.
+    /// </summary>
+    public PaneLayout<PaneViewModel> ShownLayout => _split ?? PaneLayout<PaneViewModel>.Single(ActivePane);
 
-    private bool IsVisible(PaneViewModel pane) => HasTab && SelectedTab.Layout.Contains(pane);
+    /// <summary>The window is split (more than one tab on screen).</summary>
+    public bool IsSplit => _split is not null;
+
+    /// <summary>The panes on screen: every pane of the split, or the shown tab's (none while no tab is open).</summary>
+    public IReadOnlyList<PaneViewModel> VisiblePanes => !HasTab ? [] : _split?.Panes ?? [ActivePane];
+
+    private bool IsVisible(PaneViewModel pane) => HasTab && (_split?.Contains(pane) ?? ReferenceEquals(pane, ActivePane));
+
+    /// <summary>The tab whose pane <paramref name="pane"/> is (a closed fixed tab too).</summary>
+    private TabLayoutViewModel? TabOf(PaneViewModel pane) =>
+        Tabs.FirstOrDefault(t => ReferenceEquals(t.ActivePane, pane))
+        ?? new[] { RecentTab, FrequentTab }.FirstOrDefault(t => ReferenceEquals(t.ActivePane, pane));
+
+    /// <summary>
+    /// Sets the split (a layout of one pane, or null, is no split) and gives the tabs on screen their
+    /// colours. Does not announce <see cref="ShownLayout"/>: the caller does, or sets <see cref="SelectedTab"/>, which does.
+    /// </summary>
+    private void SetSplit(PaneLayout<PaneViewModel>? layout)
+    {
+        _split = layout is { Panes.Count: > 1 } ? layout : null;
+        UpdatePaneSlots();
+        OnPropertyChanged(nameof(IsSplit));
+        OnPropertyChanged(nameof(CanSplit));
+        SplitPaneCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// The colour of each pane of the split, the same on its tab (<see cref="TabLayoutViewModel.PaneSlot"/>):
+    /// a tab keeps its colour while it stays on screen, a tab new on screen takes the lowest free one;
+    /// −1 for every tab while the window is not split.
+    /// </summary>
+    private void UpdatePaneSlots()
+    {
+        var shown = _split?.Panes ?? [];
+        var everyTab = Tabs.Concat(new[] { RecentTab, FrequentTab }.Where(t => !t.IsOpen)).ToList();
+        var used = new HashSet<int>();
+        foreach (var tab in everyTab)
+        {
+            if (!shown.Contains(tab.ActivePane) || !used.Add(tab.PaneSlot))
+            {
+                tab.PaneSlot = -1;
+            }
+        }
+
+        used.Remove(-1);
+        foreach (var pane in shown)
+        {
+            if (TabOf(pane) is { PaneSlot: < 0 } tab)
+            {
+                int slot = 0;
+                while (!used.Add(slot))
+                {
+                    slot++;
+                }
+
+                tab.PaneSlot = slot;
+            }
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="tab"/> is about to be the shown tab: while the window is split, a tab that is not
+    /// on screen takes the active pane's place (the tab there stays on the strip); the placeholder ends the split.
+    /// </summary>
+    private void PlaceInSplit(TabLayoutViewModel tab)
+    {
+        if (_split is not { } split)
+        {
+            return;
+        }
+
+        if (tab.IsPlaceholder)
+        {
+            SetSplit(null);
+        }
+        else if (!split.Contains(tab.ActivePane))
+        {
+            SetSplit(split.Replace(ActivePane, tab.ActivePane));
+        }
+    }
+
+    /// <summary>
+    /// The pane being activated is on screen already (a press in it, F6): its view does not change,
+    /// so a cascade on it stays when its view mode differs from the one the toolbar showed.
+    /// </summary>
+    private bool _activatingShownPane;
 
     [ObservableProperty]
     private int _cardSize = AppSettings.CardSizeDefault;
@@ -255,10 +343,10 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>
     /// Every pane that holds data: the panes of the two fixed tabs (open or not: a closed one is
-    /// reloaded when it is opened again, so it has to go stale with the others), then every pane of
-    /// the open folder tabs.
+    /// reloaded when it is opened again, so it has to go stale with the others), then the panes of
+    /// the open folder tabs (one per tab).
     /// </summary>
-    private IEnumerable<PaneViewModel> AllTabs => new[] { RecentPane, FrequentPane }.Concat(Tabs.Where(t => t.IsFolderTab).SelectMany(t => t.Panes));
+    private IEnumerable<PaneViewModel> AllTabs => new[] { RecentPane, FrequentPane }.Concat(Tabs.Where(t => t.IsFolderTab).Select(t => t.ActivePane));
 
     private void Watch(PaneViewModel tab)
     {
@@ -315,7 +403,11 @@ public sealed partial class MainViewModel : ObservableObject
         _lastSortMode = pane.SortMode;
         if (CardShape != pane.CardShape)
         {
-            View?.CloseCardCascade(); // the overlay was sized for the other shape
+            if (!_activatingShownPane)
+            {
+                View?.CloseCardCascade(); // the overlay was sized for the other shape (the one view of an unsplit window changes)
+            }
+
             SyncCardShape(pane.CardShape);
         }
     }
@@ -365,6 +457,7 @@ public sealed partial class MainViewModel : ObservableObject
         // dropped; the selection then moves to the tab after it.
         int selected = -1;
         var open = settings.OpenTabs ?? [];
+        var restoredOf = new PaneViewModel?[open.Count]; // for the split: the pane of each entry, null when it did not come back
         for (int i = 0; i < open.Count; i++)
         {
             if (i == settings.SelectedTab)
@@ -379,7 +472,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 if (located)
                 {
-                    RestoreFolderTab(entry);
+                    restoredOf[i] = RestoreFolderTab(entry).ActivePane;
                 }
 
                 continue;
@@ -401,12 +494,22 @@ public sealed partial class MainViewModel : ObservableObject
 
             RestoreViewState(tab, entry);
             AddToStrip(fixedTab);
+            restoredOf[i] = tab;
         }
 
         RefreshRegistered();
         _ = DriveList.RefreshAsync(recheck: false); // not awaited: a drive that does not answer must not delay the first tab
         OpenInTools.Refresh(); // in the background: the right-click menus' 「… で開く」
-        SelectedTab =Tabs.Count == 0 ? NoTab : Tabs[Math.Clamp(selected, 0, Tabs.Count - 1)];
+        var shown = Tabs.Count == 0 ? NoTab : Tabs[Math.Clamp(selected, 0, Tabs.Count - 1)];
+
+        // The split as it was (Normalize checked it against open_tabs), when every tab of it came back
+        // and the shown tab is in it.
+        if (PaneLayoutSettings.FromSetting(settings.SplitLayout, restoredOf) is { } split && split.Contains(shown.ActivePane))
+        {
+            SetSplit(split);
+        }
+
+        SelectedTab = shown;
         _tabsRestored = true; // before the first await: what the user does while the first tab loads is saved too
         ApplyAutoRefreshSetting(settings);
         if (HasTab)
@@ -415,75 +518,29 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// A folder tab of open_tabs comes back: split as it was (its panes, their layout and the active
-    /// one; Normalize checked them), or as one pane at the entry's location (an entry that is not
-    /// split, or whose panes cannot all be located).
-    /// </summary>
-    private void RestoreFolderTab(OpenTabSetting entry)
+    /// <summary>A folder tab of open_tabs comes back at the entry's location, with its view and sort mode.</summary>
+    private TabLayoutViewModel RestoreFolderTab(OpenTabSetting entry)
     {
-        if (entry is { Panes: { Count: > 1 } settings, Layout: { } node, ActivePane: int activeIndex }
-            && activeIndex < settings.Count
-            && settings.All(s => s.Root.Length > 0 && PathTools.IsSafeRel(s.Path)))
-        {
-            var panes = settings.Select(s =>
-            {
-                var at = new NavLocation(TabKind.Folder, s.Root, s.Path);
-                var pane = NewFolderPane(at);
-                pane.SetIdentity(at, s.FileId);
-                pane.SetViewState(CardShapes.FromSetting(s.CardShape), CardSortModes.FromSetting(s.SortMode));
-                return pane;
-            }).ToList();
-            if (PaneLayoutSettings.FromSetting(node, panes) is { } layout)
-            {
-                AddFolderTab(layout, panes[activeIndex]);
-                return;
-            }
-
-            foreach (var pane in panes)
-            {
-                pane.PropertyChanged -= OnTabPropertyChanged; // not used after all
-            }
-        }
-
         var location = new NavLocation(TabKind.Folder, entry.Root, entry.Path);
-        var restored = AddFolderTab(location).ActivePane;
-        restored.SetIdentity(location, entry.FileId);
-        RestoreViewState(restored, entry);
+        var tab = AddFolderTab(location);
+        tab.ActivePane.SetIdentity(location, entry.FileId);
+        RestoreViewState(tab.ActivePane, entry);
+        return tab;
     }
 
-    /// <summary>
-    /// A tab's open_tabs entry: its own keys are the active pane's (what an older exe, which drops
-    /// the rest, opens); a split tab adds every pane, the layout and the active pane's index.
-    /// </summary>
+    /// <summary>A tab's open_tabs entry (its pane's location, identity, view and sort mode).</summary>
     private static OpenTabSetting TabSetting(TabLayoutViewModel tab)
     {
-        var active = tab.ActivePane;
-        var entry = new OpenTabSetting
+        var pane = tab.ActivePane;
+        return new OpenTabSetting
         {
-            Kind = TabKinds.ToSetting(active.Kind),
-            Root = active.Location.Root,
-            Path = active.Location.Rel,
-            FileId = active.Identity,
-            CardShape = CardShapes.ToSetting(active.CardShape),
-            SortMode = CardSortModes.ToSetting(active.SortMode),
+            Kind = TabKinds.ToSetting(pane.Kind),
+            Root = pane.Location.Root,
+            Path = pane.Location.Rel,
+            FileId = pane.Identity,
+            CardShape = CardShapes.ToSetting(pane.CardShape),
+            SortMode = CardSortModes.ToSetting(pane.SortMode),
         };
-        if (tab.IsSplit)
-        {
-            var panes = tab.Panes;
-            entry.Panes = panes.Select(p => new PaneSetting
-            {
-                Root = p.Location.Root,
-                Path = p.Location.Rel,
-                FileId = p.Identity,
-                CardShape = CardShapes.ToSetting(p.CardShape),
-                SortMode = CardSortModes.ToSetting(p.SortMode),
-            }).ToList();
-            entry.Layout = PaneLayoutSettings.ToSetting(tab.Layout, panes);
-            entry.ActivePane = Enumerable.Range(0, panes.Count).First(i => ReferenceEquals(panes[i], active));
-        }
-
-        return entry;
     }
 
     public void SaveState(WindowPlacementSetting? window)
@@ -491,6 +548,7 @@ public sealed partial class MainViewModel : ObservableObject
         bool tabs = _tabsRestored;
         int selectedTab = Tabs.IndexOf(SelectedTab); // -1: no tab is open
         var openTabs = Tabs.Select(TabSetting).ToList();
+        var splitLayout = _split is { } split ? PaneLayoutSettings.ToSetting(split, Tabs.Select(t => t.ActivePane).ToList()) : null;
         string lastShape = CardShapes.ToSetting(HasTab ? ActivePane.CardShape : CardShape);
         string lastSort = CardSortModes.ToSetting(HasTab ? ActivePane.SortMode : _lastSortMode);
         _services.Stores.Settings.Update(s =>
@@ -504,6 +562,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 s.OpenTabs = openTabs;
                 s.SelectedTab = selectedTab;
+                s.SplitLayout = splitLayout; // its leaves are positions in open_tabs; the shown tab is the active pane
 
                 // The view of the tab used last: before the tabs are restored it is not known yet (defaults).
                 s.CardShape = lastShape;
@@ -567,14 +626,36 @@ public sealed partial class MainViewModel : ObservableObject
     /// 最近の履歴 / よく使う項目 are rebuilt each time they are shown, a folder is listed again only
     /// when it went stale and otherwise comes back where it was scrolled to.
     /// </summary>
-    private async Task ShowTabAsync(TabLayoutViewModel tab)
+    /// <param name="stayedOnScreen">
+    /// The tab was in a pane that stays on screen (the split lost another pane): it is not a switch to
+    /// it, so a fixed tab's list is not rebuilt and stays where it is scrolled to.
+    /// </param>
+    private async Task ShowTabAsync(TabLayoutViewModel tab, bool stayedOnScreen = false)
     {
         bool switched = !ReferenceEquals(tab, SelectedTab);
-        var panes = tab.Panes;
-        var offsets = panes.Select(p => switched ? p.SavedScrollOffset : View?.GetScrollOffset(p) ?? 0).ToList();
+        var pane = tab.ActivePane;
+        if (switched && IsVisible(pane))
+        {
+            // In a pane of the split already: it becomes the active pane (nothing to load or scroll).
+            _activatingShownPane = true;
+            try
+            {
+                LeaveSelectedTab();
+                SelectedTab = tab;
+            }
+            finally
+            {
+                _activatingShownPane = false;
+            }
+
+            return;
+        }
+
+        double offset = switched ? pane.SavedScrollOffset : View?.GetScrollOffset(pane) ?? 0;
         if (switched)
         {
             LeaveSelectedTab();
+            PlaceInSplit(tab); // a split shows it in the active pane
             SelectedTab = tab;
         }
 
@@ -583,26 +664,16 @@ public sealed partial class MainViewModel : ObservableObject
             return; // nothing to load, nothing to scroll
         }
 
-        // Each pane loads on its own: a folder that does not answer keeps no other pane waiting.
-        await Task.WhenAll(panes.Select((p, i) => ShowPaneAsync(tab, p, switched, offsets[i])).ToList());
-    }
-
-    /// <summary>
-    /// One pane of the tab being shown: listed again when stale (a fixed tab's list each time the tab
-    /// is switched to), then back where it was scrolled to.
-    /// </summary>
-    private async Task ShowPaneAsync(TabLayoutViewModel tab, PaneViewModel pane, bool switched, double offset)
-    {
-        bool top = pane.IsTop && !pane.IsFolderTab;
-        bool reload = pane.IsStale || (top && switched);
+        bool fresh = pane.IsTop && !pane.IsFolderTab && switched && !stayedOnScreen; // a fixed tab's list, switched to
+        bool reload = pane.IsStale || fresh;
         if (reload)
         {
             await LoadTabAsync(pane);
         }
 
-        if ((switched || reload) && ReferenceEquals(tab, SelectedTab) && tab.Layout.Contains(pane))
+        if ((switched || reload) && IsVisible(pane))
         {
-            View?.ScrollTo(pane, top && switched ? 0 : offset);
+            View?.ScrollTo(pane, fresh ? 0 : offset);
         }
     }
 
@@ -614,10 +685,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         if (SelectedTab.IsOpen)
         {
-            foreach (var pane in SelectedTab.Panes)
-            {
-                pane.SavedScrollOffset = View?.GetScrollOffset(pane) ?? 0;
-            }
+            ActivePane.SavedScrollOffset = View?.GetScrollOffset(ActivePane) ?? 0;
         }
     }
 
@@ -677,22 +745,11 @@ public sealed partial class MainViewModel : ObservableObject
 
         View?.CloseCascade();
         Message.ClearPersistent();
-        var (tab, pane) = FolderPaneShowing(target);
+        var tab = FolderTabShowing(target);
         if (tab is null)
         {
             tab = AddFolderTab(target with { Tab = TabKind.Folder });
             InheritViewState(tab.ActivePane); // SelectedTab is still the tab used last
-        }
-        else if (pane is not null && !ReferenceEquals(pane, tab.ActivePane))
-        {
-            if (ReferenceEquals(tab, SelectedTab))
-            {
-                ActivatePane(pane);
-            }
-            else
-            {
-                tab.Activate(pane); // announced when the tab is shown
-            }
         }
 
         await ShowTabAsync(tab);
@@ -705,25 +762,13 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The folder tab and pane that show <paramref name="target"/>: a tab's active pane first, then
-    /// its other panes, tab by tab from the left. (null, null) when none does.
+    /// The folder tab that shows <paramref name="target"/>: one on screen (a pane of the split) first,
+    /// then from the left. Null when none does.
     /// </summary>
-    private (TabLayoutViewModel? Tab, PaneViewModel? Pane) FolderPaneShowing(NavLocation target)
+    private TabLayoutViewModel? FolderTabShowing(NavLocation target)
     {
-        foreach (var tab in Tabs.Where(t => t.IsFolderTab))
-        {
-            if (SameLocation(tab.ActivePane.Location, target))
-            {
-                return (tab, tab.ActivePane);
-            }
-
-            if (tab.Panes.FirstOrDefault(p => SameLocation(p.Location, target)) is { } pane)
-            {
-                return (tab, pane);
-            }
-        }
-
-        return (null, null);
+        var showing = Tabs.Where(t => t.IsFolderTab && SameLocation(t.ActivePane.Location, target)).ToList();
+        return showing.FirstOrDefault(t => IsVisible(t.ActivePane)) ?? showing.FirstOrDefault();
     }
 
     private TabLayoutViewModel AddFolderTab(NavLocation location, int? at = null)
@@ -733,13 +778,6 @@ public sealed partial class MainViewModel : ObservableObject
         return tab;
     }
 
-    /// <summary>A split folder tab (restored, reopened): its panes are watched already (<see cref="NewFolderPane"/>).</summary>
-    private TabLayoutViewModel AddFolderTab(PaneLayout<PaneViewModel> layout, PaneViewModel active, int? at = null)
-    {
-        var tab = new TabLayoutViewModel(layout, active);
-        AddToStrip(tab, at);
-        return tab;
-    }
 
     /// <summary>A pane of a folder tab at <paramref name="location"/>, watched, with the pending cut dimmed.</summary>
     private PaneViewModel NewFolderPane(NavLocation location)
@@ -774,9 +812,9 @@ public sealed partial class MainViewModel : ObservableObject
     /// history and scroll position too). Not its search or selection (a move clears those as well).
     /// Kept in memory only, as Explorer and the browsers do.
     /// </summary>
-    private sealed record ClosedTab(PaneLayout<PaneSnapshot> Layout, PaneSnapshot Active)
+    private sealed record ClosedTab(PaneSnapshot Pane)
     {
-        public TabKind Kind => Active.Kind;
+        public TabKind Kind => Pane.Kind;
     }
 
     /// <summary>
@@ -801,25 +839,15 @@ public sealed partial class MainViewModel : ObservableObject
     private void RecordClosed(TabLayoutViewModel closing, int index)
     {
         var tab = closing.ActivePane;
-        if (tab.IsPlaceholder || (!closing.IsSplit && !tab.IsFolderTab && tab.Location.IsTop && tab.BackStack.Count == 0 && tab.ForwardStack.Count == 0))
+        if (tab.IsPlaceholder || (!tab.IsFolderTab && tab.Location.IsTop && tab.BackStack.Count == 0 && tab.ForwardStack.Count == 0))
         {
             return;
         }
 
-        bool shown = ReferenceEquals(closing, SelectedTab);
-        PaneSnapshot? active = null;
-        var layout = closing.Layout.Map(p =>
-        {
-            double offset = shown ? View?.GetScrollOffset(p) ?? 0 : p.SavedScrollOffset;
-            var snapshot = new PaneSnapshot(p.Kind, p.Location, p.Identity, p.CardShape, p.SortMode, [.. p.BackStack], [.. p.ForwardStack], offset);
-            if (ReferenceEquals(p, tab))
-            {
-                active = snapshot;
-            }
-
-            return snapshot;
-        });
-        _closedTabs.Push(new ClosedTab(layout, active!), index);
+        double offset = IsVisible(tab) ? View?.GetScrollOffset(tab) ?? 0 : tab.SavedScrollOffset;
+        _closedTabs.Push(
+            new ClosedTab(new PaneSnapshot(tab.Kind, tab.Location, tab.Identity, tab.CardShape, tab.SortMode, [.. tab.BackStack], [.. tab.ForwardStack], offset)),
+            index);
     }
 
     /// <summary>
@@ -841,32 +869,18 @@ public sealed partial class MainViewModel : ObservableObject
         View?.CloseCascade();
         Message.ClearPersistent();
         TabLayoutViewModel tab;
-        var panes = new List<(PaneViewModel Pane, PaneSnapshot State)>();
         if (closed.Kind == TabKind.Folder)
         {
-            PaneViewModel? active = null;
-            var layout = closed.Layout.Map(state =>
-            {
-                var pane = NewFolderPane(state.Location);
-                panes.Add((pane, state));
-                if (ReferenceEquals(state, closed.Active))
-                {
-                    active = pane;
-                }
-
-                return pane;
-            });
-            tab = AddFolderTab(layout, active!, index);
+            tab = AddFolderTab(closed.Pane.Location, index);
         }
         else
         {
             tab = FixedTabOf(closed.Kind);
-            tab.ActivePane.Location = closed.Active.Location;
+            tab.ActivePane.Location = closed.Pane.Location;
             AddToStrip(tab, index);
-            panes.Add((tab.ActivePane, closed.Active));
         }
 
-        await ShowRestoredTabAsync(tab, panes);
+        await ShowRestoredTabAsync(tab, [(tab.ActivePane, closed.Pane)]);
     }
 
     /// <summary>「タブを複製」 can copy <paramref name="tab"/>: a folder tab, or a fixed tab inside a folder (its list exists once).</summary>
@@ -889,8 +903,8 @@ public sealed partial class MainViewModel : ObservableObject
 
         View?.CloseCascade();
         Message.ClearPersistent();
-        var source = sourceTab.ActivePane; // one pane per tab: the copy is of that pane
-        double offset = ReferenceEquals(source, ActivePane) ? View?.GetScrollOffset() ?? 0 : source.SavedScrollOffset;
+        var source = sourceTab.ActivePane;
+        double offset = IsVisible(source) ? View?.GetScrollOffset(source) ?? 0 : source.SavedScrollOffset;
         bool folderTab = source.IsFolderTab;
         var location = folderTab ? source.Location : new NavLocation(TabKind.Folder, source.Location.Root, source.Location.Rel);
         var tab = AddFolderTab(location, index + 1);
@@ -931,25 +945,20 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     private void RemoveFromStrip(TabLayoutViewModel tab)
     {
-        foreach (var pane in tab.Panes)
-        {
-            pane.CancelLoad();
-        }
-
+        var pane = tab.ActivePane;
+        pane.CancelLoad();
         RecordClosed(tab, Tabs.IndexOf(tab));
         Tabs.Remove(tab);
         tab.IsOpen = false;
-        foreach (var pane in tab.Panes)
+        tab.PaneSlot = -1;
+        if (pane.IsFolderTab)
         {
-            if (pane.IsFolderTab)
-            {
-                pane.PropertyChanged -= OnTabPropertyChanged;
-            }
-            else
-            {
-                _restoring.Remove(pane);
-                pane.ResetToTop();
-            }
+            pane.PropertyChanged -= OnTabPropertyChanged;
+        }
+        else
+        {
+            _restoring.Remove(pane);
+            pane.ResetToTop();
         }
     }
 
@@ -977,10 +986,31 @@ public sealed partial class MainViewModel : ObservableObject
             Message.ClearPersistent();
         }
 
+        // A tab on screen in the split: its pane leaves the split, the rest take its space, and the
+        // nearest pane's tab is the next one shown (they come back where they are scrolled to).
+        TabLayoutViewModel? nearest = null;
+        bool splitChanged = false;
+        if (_split is { } split && split.Contains(tab.ActivePane))
+        {
+            foreach (var shown in split.Panes)
+            {
+                shown.SavedScrollOffset = View?.GetScrollOffset(shown) ?? 0;
+            }
+
+            var rest = split.Close(tab.ActivePane, out var next);
+            nearest = next is null ? null : TabOf(next);
+            SetSplit(rest);
+            splitChanged = true;
+        }
+
         RemoveFromStrip(tab);
         if (wasSelected)
         {
-            await ShowTabAsync(Tabs.Count > 0 ? Tabs[Math.Min(index, Tabs.Count - 1)] : NoTab);
+            await ShowTabAsync(nearest ?? (Tabs.Count > 0 ? Tabs[Math.Min(index, Tabs.Count - 1)] : NoTab), stayedOnScreen: nearest is not null);
+        }
+        else if (splitChanged)
+        {
+            AnnounceLayout();
         }
 
         SaveLocations();
@@ -995,6 +1025,16 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         View?.CloseCascade();
+        bool wasSplit = IsSplit;
+        if (_split is { } split)
+        {
+            foreach (var shown in split.Panes)
+            {
+                shown.SavedScrollOffset = View?.GetScrollOffset(shown) ?? 0; // keep, and the tabs recorded as closed
+            }
+        }
+
+        SetSplit(null); // only keep is left
         foreach (var tab in Tabs.Where(t => !ReferenceEquals(t, keep)).ToList())
         {
             RemoveFromStrip(tab);
@@ -1004,6 +1044,10 @@ public sealed partial class MainViewModel : ObservableObject
         {
             Message.ClearPersistent();
             await ShowTabAsync(keep);
+        }
+        else if (wasSplit)
+        {
+            AnnounceLayout();
         }
 
         SaveLocations();
@@ -1023,21 +1067,25 @@ public sealed partial class MainViewModel : ObservableObject
         SaveLocations();
     }
 
-    // ---- panes: split, close, activate ------------------------------------------------------------
+    // ---- panes: the window's split ------------------------------------------------------------
 
-    /// <summary>The shown tab can take another pane: a folder tab below <see cref="PaneRules.MaxPanes"/> (the size is checked on the split).</summary>
-    public bool CanSplit => HasTab && SelectedTab.IsFolderTab && SelectedTab.Panes.Count < PaneRules.MaxPanes;
+    /// <summary>
+    /// The active pane can split: it shows a folder tab and the window has fewer than
+    /// <see cref="PaneRules.MaxPanes"/> panes (the size is checked on the split).
+    /// </summary>
+    public bool CanSplit => HasTab && SelectedTab.IsFolderTab && (_split?.Panes.Count ?? 1) < PaneRules.MaxPanes;
 
-    /// <summary>The toolbar's split buttons, Ctrl + \ / Ctrl + Shift + \ and the menus: the active pane splits.</summary>
+    /// <summary>The toolbar's split buttons (and the menus): the active pane splits.</summary>
     [RelayCommand(CanExecute = nameof(CanSplit), AllowConcurrentExecutions = true)]
     private Task SplitPane(SplitAxis axis) => SplitActivePaneAsync(axis);
 
     /// <summary>
-    /// Splits the active pane of the shown tab along <paramref name="axis"/>: a new pane right of it
-    /// (<see cref="SplitAxis.Columns"/>) or below it (<see cref="SplitAxis.Rows"/>) opens the same
-    /// folder with the same view and sort mode (no history), and becomes the active pane. Refused,
-    /// with a message, on a fixed tab, at <see cref="PaneRules.MaxPanes"/> panes, and when the two
-    /// halves would be smaller than a pane may be (<see cref="PaneRules.CanSplit"/>).
+    /// Splits the active pane along <paramref name="axis"/>: a new folder tab of the same folder, with
+    /// the same view and sort mode (no history), joins the strip right of the shown tab and takes the
+    /// new pane, right of the active one (<see cref="SplitAxis.Columns"/>) or below it
+    /// (<see cref="SplitAxis.Rows"/>), and becomes the active pane. Picking another tab then shows that
+    /// tab there instead. Refused, with a message, on a fixed tab, at <see cref="PaneRules.MaxPanes"/>
+    /// panes, and when the two halves would be smaller than a pane may be (<see cref="PaneRules.CanSplit"/>).
     /// </summary>
     public async Task SplitActivePaneAsync(SplitAxis axis)
     {
@@ -1049,15 +1097,15 @@ public sealed partial class MainViewModel : ObservableObject
         var tab = SelectedTab;
         if (!tab.IsFolderTab)
         {
-            Message.Info("最近の履歴・よく使う項目のタブは分割できません（フォルダのタブだけ分割できます）。");
+            Message.Info("最近の履歴・よく使う項目を表示しているペインは分割できません（フォルダのタブで分割できます）。");
             return;
         }
 
         var source = tab.ActivePane;
         var size = View?.PaneSize(source) ?? default;
-        string? refusal = PaneRules.CanSplit(tab.Panes.Count, size.Width, size.Height, axis) switch
+        string? refusal = PaneRules.CanSplit(_split?.Panes.Count ?? 1, size.Width, size.Height, axis) switch
         {
-            SplitRefusal.TooManyPanes => $"1 つのタブに開けるペインは {PaneRules.MaxPanes} 個までです。",
+            SplitRefusal.TooManyPanes => $"ペインは {PaneRules.MaxPanes} 個まで並べられます。",
             SplitRefusal.TooNarrow => "ペインの幅が足りないため、左右に分割できません。",
             SplitRefusal.TooLow => "ペインの高さが足りないため、上下に分割できません。",
             _ => null,
@@ -1070,18 +1118,18 @@ public sealed partial class MainViewModel : ObservableObject
 
         View?.CloseCascade();
         Message.ClearPersistent();
-        var pane = NewFolderPane(source.Location);
+        var added = AddFolderTab(source.Location, Tabs.IndexOf(tab) + 1);
+        var pane = added.ActivePane;
         pane.SetIdentity(source.Location, source.Identity);
         pane.SetViewState(source.CardShape, source.SortMode);
-        tab.SetLayout(tab.Layout.Split(source, axis, pane), pane);
-        MirrorPane(pane);
-        AnnounceLayout();
-        AnnounceActivePane();
+        LeaveSelectedTab(); // the source stays on screen; its position is kept all the same
+        SetSplit((_split ?? PaneLayout<PaneViewModel>.Single(source)).Split(source, axis, pane));
+        SelectedTab = added; // announces the layout, then the new active pane
         SaveLocations();
         await LoadTabAsync(pane);
     }
 
-    /// <summary>The tab strip's menu: <paramref name="tab"/> is shown first, then its active pane splits.</summary>
+    /// <summary>The tab strip's menu: <paramref name="tab"/> is shown first (in the active pane), then its pane splits.</summary>
     public async Task SplitTabAsync(TabLayoutViewModel tab, SplitAxis axis)
     {
         if (!Tabs.Contains(tab))
@@ -1102,60 +1150,46 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Closes <paramref name="pane"/>: the rest of its tab takes its space, and when it was the active
-    /// pane the one nearest to it becomes active (<see cref="PaneLayout{T}.Close"/>). The last pane
-    /// of a tab closes the tab (<see cref="CloseTabCommand"/>). A closed pane is not recorded:
-    /// 「閉じたタブを開き直す」 brings tabs back, not panes.
+    /// Closes the pane of <paramref name="pane"/>'s tab: the rest of the split takes its space, and when
+    /// it was the active pane the nearest pane becomes active (<see cref="PaneLayout{T}.Close"/>). The
+    /// tab stays on the strip (not shown); with one pane left the window is no longer split.
     /// </summary>
-    public async Task ClosePaneAsync(PaneViewModel pane)
+    public void ClosePane(PaneViewModel pane)
     {
-        var tab = Tabs.FirstOrDefault(t => t.Layout.Contains(pane));
-        if (tab is null)
+        if (_split is not { } split || !split.Contains(pane))
         {
             return;
         }
 
-        if (!tab.IsSplit)
+        View?.CloseCascade();
+        Message.ClearPersistent();
+        pane.SavedScrollOffset = View?.GetScrollOffset(pane) ?? 0; // its tab comes back where it was
+        var rest = split.Close(pane, out var next);
+        bool wasActive = ReferenceEquals(pane, ActivePane);
+        SetSplit(rest);
+        if (wasActive && next is not null && TabOf(next) is { } nextTab)
         {
-            await CloseTab(tab);
-            return;
-        }
-
-        bool shown = ReferenceEquals(tab, SelectedTab);
-        if (shown)
-        {
-            View?.CloseCascade();
-            Message.ClearPersistent();
-        }
-
-        pane.CancelLoad();
-        pane.PropertyChanged -= OnTabPropertyChanged;
-        var layout = tab.Layout.Close(pane, out var next)!; // not null: the tab has another pane
-        bool wasActive = ReferenceEquals(pane, tab.ActivePane);
-        var active = wasActive ? next! : tab.ActivePane;
-        tab.SetLayout(layout, active);
-        if (shown)
-        {
-            MirrorPane(active);
-            AnnounceLayout();
-            if (wasActive)
+            _activatingShownPane = true;
+            try
             {
-                AnnounceActivePane();
+                SelectedTab = nextTab; // announces the layout, then the active pane
             }
+            finally
+            {
+                _activatingShownPane = false;
+            }
+        }
+        else
+        {
+            AnnounceLayout();
         }
 
         SaveLocations();
     }
 
-    /// <summary>Ctrl + W and the banner's button: the active pane of a split tab, else the tab.</summary>
-    public Task ClosePaneOrTabAsync() =>
-        !HasTab ? Task.CompletedTask
-        : SelectedTab.IsSplit ? ClosePaneAsync(ActivePane)
-        : CloseTab(SelectedTab);
-
     /// <summary>
-    /// A press in <paramref name="pane"/> (or a click in a cascade opened from it): it becomes the
-    /// active pane of the shown tab. The toolbar's view is mirrored before the pane is announced.
+    /// A press in <paramref name="pane"/> (or a click in a cascade opened from it): its tab becomes the
+    /// shown tab, which is what an active pane is. Nothing is loaded or scrolled: it is on screen.
     /// </summary>
     /// <param name="closeCardCascade">
     /// False from the cascade itself (a right click on its row opens a menu over it): the cascade
@@ -1163,8 +1197,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// </param>
     public void ActivatePane(PaneViewModel pane, bool closeCardCascade = true)
     {
-        var tab = SelectedTab;
-        if (ReferenceEquals(pane, tab.ActivePane) || !tab.Layout.Contains(pane))
+        if (ReferenceEquals(pane, ActivePane) || !IsVisible(pane) || TabOf(pane) is not { } tab)
         {
             return;
         }
@@ -1174,62 +1207,72 @@ public sealed partial class MainViewModel : ObservableObject
             View?.CloseCardCascade(); // the cards' lists hang on the pane that was active
         }
 
-        tab.Activate(pane);
-        MirrorPane(pane);
-        AnnounceActivePane();
+        _activatingShownPane = true;
+        try
+        {
+            LeaveSelectedTab();
+            SelectedTab = tab;
+        }
+        finally
+        {
+            _activatingShownPane = false;
+        }
+
         SaveLocations();
     }
 
-    /// <summary>F6 / Shift + F6: the next / previous pane of the shown tab (reading order, wrapping). False without a split.</summary>
+    /// <summary>F6 / Shift + F6: the next / previous pane of the split (reading order, wrapping). False without a split.</summary>
     public bool SelectAdjacentPane(bool back)
     {
-        if (!HasTab || !SelectedTab.IsSplit)
+        if (!HasTab || _split is not { } split)
         {
             return false;
         }
 
-        ActivatePane(SelectedTab.Layout.Next(ActivePane, back));
+        ActivatePane(split.Next(ActivePane, back));
         return true;
     }
 
-    /// <summary>A splitter of the shown tab was dragged: <paramref name="split"/> (a node of <see cref="ShownLayout"/>) keeps <paramref name="ratio"/>.</summary>
+    /// <summary>Alt + Shift + an arrow: the pane next to the active one that way (none at the edge). False without a split.</summary>
+    public bool MoveToPane(PaneDirection direction)
+    {
+        if (!HasTab || _split is not { } split)
+        {
+            return false;
+        }
+
+        if (split.Neighbor(ActivePane, direction) is { } next)
+        {
+            ActivatePane(next);
+        }
+
+        return true;
+    }
+
+    /// <summary>A splitter was dragged: <paramref name="split"/> (a node of <see cref="ShownLayout"/>) keeps <paramref name="ratio"/>.</summary>
     public void SetSplitRatio(PaneSplit<PaneViewModel> split, double ratio)
     {
-        if (!HasTab)
+        if (_split is not { } layout)
         {
             return;
         }
 
-        var tab = SelectedTab;
-        PaneLayout<PaneViewModel> layout;
+        PaneLayout<PaneViewModel> changed;
         try
         {
-            layout = tab.Layout.WithRatio(split, ratio);
+            changed = layout.WithRatio(split, ratio);
         }
         catch (ArgumentException)
         {
             return; // the layout changed meanwhile
         }
 
-        tab.SetLayout(layout, tab.ActivePane);
+        SetSplit(changed);
         AnnounceLayout();
         SaveLocations();
     }
 
-    private void AnnounceLayout()
-    {
-        OnPropertyChanged(nameof(ShownLayout));
-        OnPropertyChanged(nameof(CanSplit));
-        SplitPaneCommand.NotifyCanExecuteChanged();
-    }
-
-    private void AnnounceActivePane()
-    {
-        OnPropertyChanged(nameof(ActivePane));
-        OnPropertyChanged(nameof(CanGoBack));
-        OnPropertyChanged(nameof(CanGoForward));
-        GoUpCommand.NotifyCanExecuteChanged();
-    }
+    private void AnnounceLayout() => OnPropertyChanged(nameof(ShownLayout));
 
     [RelayCommand(CanExecute = nameof(CanGoUpNow), AllowConcurrentExecutions = true)]
     private Task GoUp()
@@ -1298,7 +1341,7 @@ public sealed partial class MainViewModel : ObservableObject
     private Task BackToTop() => ActivePane.Kind switch
     {
         TabKind.None => Task.CompletedTask,
-        TabKind.Folder => ClosePaneOrTabAsync(),
+        TabKind.Folder => CloseTab(SelectedTab),
         _ => NavigateAsync(NavLocation.Top(ActivePane.Kind), NavMode.New),
     };
 
@@ -1368,6 +1411,7 @@ public sealed partial class MainViewModel : ObservableObject
             }
 
             LeaveSelectedTab();
+            PlaceInSplit(owner);
             SelectedTab = owner;
         }
 
@@ -1599,26 +1643,12 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         // The closed tabs follow too (their history has no identity to be found by).
-        _closedTabs.ReplaceAll(c =>
+        _closedTabs.ReplaceAll(c => new ClosedTab(c.Pane with
         {
-            PaneSnapshot? active = null;
-            var layout = c.Layout.Map(p =>
-            {
-                var moved = p with
-                {
-                    Location = Rebased(p.Location) ?? p.Location,
-                    Back = p.Back.Select(e => Rebased(e.Location) is { } at ? e with { Location = at } : e).ToList(),
-                    Forward = p.Forward.Select(e => Rebased(e.Location) is { } at ? e with { Location = at } : e).ToList(),
-                };
-                if (ReferenceEquals(p, c.Active))
-                {
-                    active = moved;
-                }
-
-                return moved;
-            });
-            return new ClosedTab(layout, active!);
-        });
+            Location = Rebased(c.Pane.Location) ?? c.Pane.Location,
+            Back = c.Pane.Back.Select(e => Rebased(e.Location) is { } at ? e with { Location = at } : e).ToList(),
+            Forward = c.Pane.Forward.Select(e => Rebased(e.Location) is { } at ? e with { Location = at } : e).ToList(),
+        }));
 
         if (moved)
         {
@@ -2232,9 +2262,12 @@ public sealed partial class MainViewModel : ObservableObject
     {
         RecentPane.IsStale = true;
         FrequentPane.IsStale = true;
-        if (ActivePane.IsTop && ActivePane.Kind is TabKind.Recent or TabKind.Frequent && !ActivePane.IsLoading)
+        foreach (var pane in VisiblePanes) // a fixed tab's list may be in a pane that is not the active one
         {
-            _ = ActivePane.LoadAsync();
+            if (pane.IsTop && pane.Kind is TabKind.Recent or TabKind.Frequent && !pane.IsLoading)
+            {
+                _ = pane.LoadAsync();
+            }
         }
     }
 

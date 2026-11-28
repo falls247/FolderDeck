@@ -650,8 +650,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
                 break;
             case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
-                e.Handled = true; // like Explorer: closes the shown tab, whatever its kind; of a split tab, the active pane
-                _ = _vm.ClosePaneOrTabAsync();
+                e.Handled = true; // like Explorer: closes the shown tab (in a split, the active pane's tab), whatever its kind
+                _vm.CloseTabCommand.Execute(_vm.SelectedTab);
                 break;
             case Key.Oem5 or Key.OemBackslash when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
                 // Ctrl + \ (the ¥ key and the ろ key of a Japanese keyboard, \ of others): left | right;
@@ -666,14 +666,26 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
                 break;
             case Key.F6 when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.None && _vm.HasTab && !IsMenuTakingKeys():
-                // the next / previous pane of a split tab (as Windows Terminal's focus moves); nothing otherwise
-                if (_vm.SelectedTab.IsSplit)
+                // the next / previous pane of the split (as Windows Terminal's focus moves); nothing otherwise
+                if (_vm.IsSplit)
                 {
                     e.Handled = true;
                     EndAddressEdit();
                     _vm.SelectAdjacentPane(back: (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
                 }
 
+                break;
+            case Key.Left or Key.Right or Key.Up or Key.Down when Keyboard.Modifiers == (ModifierKeys.Alt | ModifierKeys.Shift) && _vm.IsSplit && !IsMenuTakingKeys():
+                // the pane that way (Windows Terminal's Alt + arrow; here with Shift: Alt + ← → ↑ ↓ are back / forward / up / into)
+                e.Handled = true;
+                EndAddressEdit();
+                _vm.MoveToPane(key switch
+                {
+                    Key.Left => PaneDirection.Left,
+                    Key.Right => PaneDirection.Right,
+                    Key.Up => PaneDirection.Up,
+                    _ => PaneDirection.Down,
+                });
                 break;
             case Key.T when Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && !IsMenuTakingKeys():
                 e.Handled = true; // as the browsers: the last closed tab comes back (also with no tab open)
@@ -3056,7 +3068,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
         return view;
     }
 
-    /// <summary>The frame of the active pane, and whether the tab is split (each view's look).</summary>
+    /// <summary>
+    /// Each view's look: whether the window is split, the frame of the active pane, and the pane's
+    /// colour, the same as its tab's (<see cref="TabLayoutViewModel.PaneSlot"/>).
+    /// </summary>
     private void MarkActivePane()
     {
         bool split = _shownViews.Count > 1;
@@ -3064,6 +3079,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             view.IsSplit = split;
             view.IsActive = ReferenceEquals(pane, _vm.ActivePane);
+            view.Slot = split ? _vm.Tabs.FirstOrDefault(t => ReferenceEquals(t.ActivePane, pane))?.PaneSlot ?? -1 : -1;
         }
     }
 

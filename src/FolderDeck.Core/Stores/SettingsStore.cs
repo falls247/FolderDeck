@@ -57,54 +57,11 @@ public sealed class OpenTabSetting
     /// <see cref="AppSettings.Normalize"/> fills it from the kind's <see cref="AppSettings.SortModes"/>.
     /// </summary>
     public string? SortMode { get; set; }
-
-    /// <summary>
-    /// The panes of a split folder tab (2 to <see cref="PaneRules.MaxPanes"/>, indexed by the leaves of
-    /// <see cref="Layout"/>); null for a tab that is not split. Root / Path / FileId / CardShape /
-    /// SortMode of the entry itself are always those of the pane <see cref="ActivePane"/>, so an exe
-    /// that does not know panes (and drops these keys) opens the tab at the pane worked in last.
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<PaneSetting>? Panes { get; set; }
-
-    /// <summary>How <see cref="Panes"/> are arranged (see <see cref="PaneLayoutSettings"/>); null when not split.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public PaneNodeSetting? Layout { get; set; }
-
-    /// <summary>Index in <see cref="Panes"/> of the pane worked in; null when not split.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public int? ActivePane { get; set; }
-}
-
-/// <summary>One pane of a split tab (<c>open_tabs[].panes</c>): the same location and view keys as a tab.</summary>
-public sealed class PaneSetting
-{
-    public string Root { get; set; } = string.Empty;
-
-    public string Path { get; set; } = string.Empty;
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? FileId { get; set; }
-
-    /// <summary>Null: the tab entry's (<see cref="OpenTabSetting.CardShape"/>), filled by <see cref="AppSettings.Normalize"/>.</summary>
-    public string? CardShape { get; set; }
-
-    /// <summary>Null: the tab entry's (<see cref="OpenTabSetting.SortMode"/>), filled by <see cref="AppSettings.Normalize"/>.</summary>
-    public string? SortMode { get; set; }
-
-    public PaneSetting Clone() => new()
-    {
-        Root = Root,
-        Path = Path,
-        FileId = FileId,
-        CardShape = CardShape,
-        SortMode = SortMode,
-    };
 }
 
 /// <summary>
-/// A node of <c>open_tabs[].layout</c>: a leaf <c>{ "pane": 0 }</c> (an index into
-/// <see cref="OpenTabSetting.Panes"/>) or a split <c>{ "split": "columns", "ratio": 0.5, "first": …, "second": … }</c>
+/// A node of <c>split_layout</c>: a leaf <c>{ "pane": 0 }</c> (an index into
+/// <see cref="AppSettings.OpenTabs"/>: the tab that pane shows) or a split <c>{ "split": "columns", "ratio": 0.5, "first": …, "second": … }</c>
 /// (<c>columns</c>: side by side, <c>rows</c>: stacked; <c>ratio</c> is the first part's share).
 /// </summary>
 public sealed class PaneNodeSetting
@@ -117,7 +74,7 @@ public sealed class PaneNodeSetting
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? Ratio { get; set; }
 
-    /// <summary>Of a leaf: the index of its pane in <see cref="OpenTabSetting.Panes"/>.</summary>
+    /// <summary>Of a leaf: the index in <see cref="AppSettings.OpenTabs"/> of the tab the pane shows.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Pane { get; set; }
 
@@ -179,8 +136,8 @@ public sealed class AppSettings
     public const double SidebarWidthDefault = 220;
 
     /// <summary>
-    /// Version of the file layout. 3: a folder tab may be split into panes (<see cref="OpenTabSetting.Panes"/>;
-    /// an entry without them is a tab of one pane, so a version 2 file needs no conversion). 2: one tab
+    /// Version of the file layout. 3: the window may be split into panes, each showing one open tab
+    /// (<see cref="SplitLayout"/>; a file without it is not split, so a version 2 file needs no conversion). 2: one tab
     /// strip (<see cref="OpenTabs"/> holds every tab and <see cref="SelectedTab"/> says which is shown).
     /// 1: two fixed tabs plus folder tabs (<see cref="LastTab"/>, <see cref="Locations"/>, <see cref="SelectedFolderTab"/>).
     /// </summary>
@@ -215,6 +172,15 @@ public sealed class AppSettings
 
     /// <summary>Index in <see cref="OpenTabs"/> of the shown tab; -1 when no tab is open.</summary>
     public int SelectedTab { get; set; }
+
+    /// <summary>
+    /// How the window is split (see <see cref="PaneLayoutSettings"/>): each leaf's <c>pane</c> is the
+    /// index in <see cref="OpenTabs"/> of the tab that pane shows, 2 to <see cref="PaneRules.MaxPanes"/>
+    /// of them; <see cref="SelectedTab"/> is one of them (the active pane). Null: not split. An exe
+    /// that does not know it drops the key and shows <see cref="SelectedTab"/> alone.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PaneNodeSetting? SplitLayout { get; set; }
 
     /// <summary>
     /// Version 1 only: which tab was shown (<see cref="TabRecent"/>, <see cref="TabFrequent"/> or
@@ -486,27 +452,61 @@ public sealed class AppSettings
         LastTab = null;
         Locations = null;
         SelectedFolderTab = null;
+        SplitLayout = null; // its indexes were into the tabs that are now rebuilt
         Version = CurrentVersion;
     }
 
     /// <summary>
     /// Brings <see cref="OpenTabs"/> into shape and keeps <see cref="SelectedTab"/> on the entry it
-    /// pointed at while entries are dropped (when that very entry goes: on the one after it).
+    /// pointed at while entries are dropped (when that very entry goes: on the one after it). Returns,
+    /// for each entry it was given, its index now (-1: dropped); null on a first run (there were none).
     /// </summary>
-    private void NormalizeOpenTabs()
+    private static void CollectLeaves(PaneNodeSetting node, HashSet<int> into)
+    {
+        if (node.Pane is int pane)
+        {
+            into.Add(pane);
+        }
+
+        if (node.First is { } first)
+        {
+            CollectLeaves(first, into);
+        }
+
+        if (node.Second is { } second)
+        {
+            CollectLeaves(second, into);
+        }
+    }
+
+    private int[]? NormalizeOpenTabs()
     {
         if (OpenTabs is null)
         {
             OpenTabs = [new OpenTabSetting { Kind = TabRecent }]; // first run
             SelectedTab = 0;
-            return;
+            return null;
         }
 
+        var newIndex = new int[OpenTabs.Count];
+        Array.Fill(newIndex, -1);
         var kept = new List<OpenTabSetting>(OpenTabs.Count);
         int selected = -1;
         bool recent = false;
         bool frequent = false;
         int folders = 0;
+
+        // The folder tabs on screen in the split are kept whatever their place: the cap of
+        // OpenTabsMax drops folder tabs from the right, which would otherwise take the split with them
+        // (a split adds its new tab right of the shown one). At most MaxPanes are reserved.
+        var shown = new HashSet<int>();
+        if (PaneLayoutSettings.IsValid(SplitLayout, OpenTabs.Count))
+        {
+            CollectLeaves(SplitLayout!, shown);
+        }
+
+        int reserved = shown.Count(i => OpenTabs[i] is { } t && !string.IsNullOrWhiteSpace(t.Root)
+            && t.Kind?.Trim().ToLowerInvariant() is not (TabRecent or TabFrequent));
         for (int i = 0; i < OpenTabs.Count; i++)
         {
             if (i == SelectedTab)
@@ -527,13 +527,12 @@ public sealed class AppSettings
                 TabFrequent => TabFrequent,
                 _ => TabFolder,
             };
-            NormalizePanes(tab, kind); // first: the active pane's location is the entry's
             bool blankRoot = string.IsNullOrWhiteSpace(tab.Root);
             bool keep = kind switch
             {
                 TabRecent => !recent,
                 TabFrequent => !frequent,
-                _ => !blankRoot && folders < OpenTabsMax,
+                _ => !blankRoot && (shown.Contains(i) || folders < OpenTabsMax - reserved),
             };
             if (!keep)
             {
@@ -542,50 +541,41 @@ public sealed class AppSettings
 
             recent |= kind == TabRecent;
             frequent |= kind == TabFrequent;
-            folders += kind == TabFolder ? 1 : 0;
+            folders += kind == TabFolder && !shown.Contains(i) ? 1 : 0;
             tab.Kind = kind;
             tab.Root = blankRoot ? string.Empty : tab.Root;
             tab.Path = blankRoot ? string.Empty : tab.Path ?? string.Empty;
             tab.FileId = blankRoot || string.IsNullOrWhiteSpace(tab.FileId) ? null : tab.FileId;
+            newIndex[i] = kept.Count;
             kept.Add(tab);
         }
 
         OpenTabs = kept;
         SelectedTab = kept.Count == 0 ? -1 : Math.Clamp(selected < 0 ? SelectedTab : selected, 0, kept.Count - 1);
+        return newIndex;
     }
 
     /// <summary>
-    /// Keeps the panes of a split folder tab when they are all usable, with the entry's location set to
-    /// the active pane's (the panes win: the entry is the copy for an exe without panes). Anything
-    /// invalid, or a fixed tab, makes it a tab of one pane: the entry as it is.
+    /// Keeps <see cref="SplitLayout"/> when it is a valid split of the entries <see cref="NormalizeOpenTabs"/>
+    /// was given (<paramref name="newIndex"/>: where each of them is now), every tab it shows is still
+    /// there and the selected tab is one of them; its indexes then point at the kept entries, its split
+    /// values are in their written form and its ratios in range. Anything else: not split.
     /// </summary>
-    private static void NormalizePanes(OpenTabSetting tab, string kind)
+    private void NormalizeSplitLayout(int[]? newIndex)
     {
-        var panes = tab.Panes;
-        bool valid = kind == TabFolder
-            && panes is not null
-            && panes.All(p => p is not null && !string.IsNullOrWhiteSpace(p.Root))
-            && tab.ActivePane is int active && active >= 0 && active < panes.Count
-            && PaneLayoutSettings.IsValid(tab.Layout, panes.Count);
-        if (!valid)
+        var node = SplitLayout;
+        SplitLayout = null;
+        if (newIndex is null || !PaneLayoutSettings.IsValid(node, newIndex.Length)
+            || PaneLayoutSettings.Normalize(node!, newIndex) is not { } normalized)
         {
-            tab.Panes = null;
-            tab.Layout = null;
-            tab.ActivePane = null;
             return;
         }
 
-        foreach (var pane in panes!)
+        bool Shows(PaneNodeSetting n, int tab) => n.Split is null ? n.Pane == tab : Shows(n.First!, tab) || Shows(n.Second!, tab);
+        if (Shows(normalized, SelectedTab))
         {
-            pane.Path ??= string.Empty;
-            pane.FileId = string.IsNullOrWhiteSpace(pane.FileId) ? null : pane.FileId;
+            SplitLayout = normalized;
         }
-
-        tab.Layout = PaneLayoutSettings.Normalize(tab.Layout!);
-        var shown = panes[tab.ActivePane!.Value];
-        tab.Root = shown.Root;
-        tab.Path = shown.Path;
-        tab.FileId = shown.FileId;
     }
 
     /// <summary>Fills gaps and pulls out-of-range values back into range.</summary>
@@ -600,7 +590,7 @@ public sealed class AppSettings
         Locations = null;
         SelectedFolderTab = null;
         Version = CurrentVersion;
-        NormalizeOpenTabs();
+        NormalizeSplitLayout(NormalizeOpenTabs());
         Window ??= new WindowPlacementSetting();
         if (Window.Width < 200 || double.IsNaN(Window.Width))
         {
@@ -662,18 +652,6 @@ public sealed class AppSettings
         {
             tab.CardShape = CardShapes.ToSetting(CardShapes.FromSetting(string.IsNullOrWhiteSpace(tab.CardShape) ? CardShape : tab.CardShape));
             tab.SortMode = CardSortModes.ToSetting(tab.SortMode is null ? SortModeOf(tab.Kind!) : CardSortModes.FromSetting(tab.SortMode));
-            if (tab.Panes is { } panes)
-            {
-                // A pane without its own values takes the entry's; then the entry is the active pane again.
-                foreach (var pane in panes)
-                {
-                    pane.CardShape = CardShapes.ToSetting(CardShapes.FromSetting(string.IsNullOrWhiteSpace(pane.CardShape) ? tab.CardShape : pane.CardShape));
-                    pane.SortMode = CardSortModes.ToSetting(CardSortModes.FromSetting(pane.SortMode ?? tab.SortMode));
-                }
-
-                tab.CardShape = panes[tab.ActivePane!.Value].CardShape;
-                tab.SortMode = panes[tab.ActivePane!.Value].SortMode;
-            }
         }
 
         LastSortMode ??= SelectedTab >= 0 && SelectedTab < OpenTabs.Count ? OpenTabs[SelectedTab].SortMode : SortModes![TabFolder];
@@ -701,10 +679,8 @@ public sealed class AppSettings
             FileId = t.FileId,
             CardShape = t.CardShape,
             SortMode = t.SortMode,
-            Panes = t.Panes?.Select(p => p?.Clone()!).ToList(),
-            Layout = t.Layout?.Clone(),
-            ActivePane = t.ActivePane,
         }).ToList();
+        copy.SplitLayout = SplitLayout?.Clone();
         copy.SidebarCollapsedSections = SidebarCollapsedSections?.ToList();
         copy.DetailsColumns = DetailsColumns is null ? null : new Dictionary<string, double>(DetailsColumns);
         copy.DetailsExtraColumns = DetailsExtraColumns?.ToList();

@@ -113,6 +113,27 @@
                             </MultiDataTrigger.Conditions>
                             <Setter TargetName="Chip" Property="Background" Value="{DynamicResource Brush.AccentSoft}" />
                         </MultiDataTrigger>
+                        <!-- last: a tab on screen in the split has the colour of its pane (PaneView), selected or not -->
+                        <DataTrigger Binding="{Binding PaneSlot}" Value="0">
+                            <Setter TargetName="Chip" Property="Background" Value="{DynamicResource Brush.Pane0}" />
+                            <Setter TargetName="Line" Property="Background" Value="{DynamicResource Brush.Pane0Strong}" />
+                            <Setter TargetName="TitleText" Property="Foreground" Value="{DynamicResource Brush.Text}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding PaneSlot}" Value="1">
+                            <Setter TargetName="Chip" Property="Background" Value="{DynamicResource Brush.Pane1}" />
+                            <Setter TargetName="Line" Property="Background" Value="{DynamicResource Brush.Pane1Strong}" />
+                            <Setter TargetName="TitleText" Property="Foreground" Value="{DynamicResource Brush.Text}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding PaneSlot}" Value="2">
+                            <Setter TargetName="Chip" Property="Background" Value="{DynamicResource Brush.Pane2}" />
+                            <Setter TargetName="Line" Property="Background" Value="{DynamicResource Brush.Pane2Strong}" />
+                            <Setter TargetName="TitleText" Property="Foreground" Value="{DynamicResource Brush.Text}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding PaneSlot}" Value="3">
+                            <Setter TargetName="Chip" Property="Background" Value="{DynamicResource Brush.Pane3}" />
+                            <Setter TargetName="Line" Property="Background" Value="{DynamicResource Brush.Pane3Strong}" />
+                            <Setter TargetName="TitleText" Property="Foreground" Value="{DynamicResource Brush.Text}" />
+                        </DataTrigger>
                     </DataTemplate.Triggers>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>

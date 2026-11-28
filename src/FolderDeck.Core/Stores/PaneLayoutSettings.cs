@@ -3,9 +3,9 @@ using FolderDeck.Core.Layout;
 namespace FolderDeck.Core.Stores;
 
 /// <summary>
-/// Converts a <see cref="PaneLayout{T}"/> to and from its settings.json form
-/// (<see cref="OpenTabSetting.Layout"/> with <see cref="OpenTabSetting.Panes"/>), and holds the one
-/// check of that form that both <see cref="AppSettings.Normalize"/> and <see cref="FromSetting"/> use.
+/// Converts a <see cref="PaneLayout{T}"/> to and from its settings.json form (<see cref="AppSettings.SplitLayout"/>,
+/// whose leaves are indexes into <see cref="AppSettings.OpenTabs"/>), and holds the one check of that
+/// form that both <see cref="AppSettings.Normalize"/> and <see cref="FromSetting"/> use.
 /// </summary>
 public static class PaneLayoutSettings
 {
@@ -23,39 +23,33 @@ public static class PaneLayoutSettings
     };
 
     /// <summary>
-    /// Whether <paramref name="node"/> is a layout of <paramref name="paneCount"/> panes: 2 to
-    /// <see cref="PaneRules.MaxPanes"/> panes; every leaf has a pane index in range and no children;
-    /// every split has a known <see cref="PaneNodeSetting.Split"/>, both children and no pane index;
-    /// each index is used exactly once (so every pane is in the layout).
+    /// Whether <paramref name="node"/> is a split of some of <paramref name="itemCount"/> items (the open
+    /// tabs): 2 to <see cref="PaneRules.MaxPanes"/> leaves; every leaf has an index in range and no
+    /// children; every split has a known <see cref="PaneNodeSetting.Split"/>, both children and no
+    /// index; no index twice. Items without a leaf are fine (tabs that are not shown).
     /// </summary>
-    public static bool IsValid(PaneNodeSetting? node, int paneCount)
+    public static bool IsValid(PaneNodeSetting? node, int itemCount)
     {
-        if (node is null || paneCount < 2 || paneCount > PaneRules.MaxPanes)
+        if (node is null || itemCount < 2)
         {
             return false;
         }
 
-        var used = new bool[paneCount];
-        int leaves = 0;
-        return Check(node, 0) && leaves == paneCount;
+        var used = new HashSet<int>();
+        return Check(node, 0) && used.Count >= 2;
 
         bool Check(PaneNodeSetting n, int depth)
         {
-            if (depth >= paneCount)
+            if (depth >= PaneRules.MaxPanes)
             {
-                return false; // a tree of paneCount leaves is never this deep
+                return false; // a tree of MaxPanes leaves is never this deep
             }
 
             if (n.Split is null)
             {
-                if (n.First is not null || n.Second is not null || n.Pane is not int index || index < 0 || index >= paneCount || used[index])
-                {
-                    return false;
-                }
-
-                used[index] = true;
-                leaves++;
-                return true;
+                return n.First is null && n.Second is null
+                    && n.Pane is int index && index >= 0 && index < itemCount
+                    && used.Count < PaneRules.MaxPanes && used.Add(index);
             }
 
             return AxisOf(n.Split) is not null && n.Pane is null && n.First is not null && n.Second is not null
@@ -64,8 +58,8 @@ public static class PaneLayoutSettings
     }
 
     /// <summary>
-    /// The form of <paramref name="layout"/> whose leaves are indexes into <paramref name="order"/>
-    /// (normally <see cref="PaneLayout{T}.Panes"/>, the order the panes are written in).
+    /// The form of <paramref name="layout"/> whose leaves are indexes into <paramref name="order"/> (the
+    /// open tabs in the order they are written); ArgumentException when a pane is not in it.
     /// </summary>
     public static PaneNodeSetting ToSetting<T>(PaneLayout<T> layout, IReadOnlyList<T> order)
         where T : class
@@ -98,33 +92,64 @@ public static class PaneLayoutSettings
     }
 
     /// <summary>
-    /// The layout that <paramref name="node"/> describes, with <paramref name="panes"/> as its panes (leaf
-    /// <c>n</c> is <c>panes[n]</c>; ratios pulled into range). Null when <paramref name="node"/> is not
-    /// <see cref="IsValid"/> for that many panes or a pane is given twice: the tab is then not split.
+    /// The layout that <paramref name="node"/> describes, leaf <c>n</c> being <c>items[n]</c> (ratios
+    /// pulled into range). Null when <paramref name="node"/> is not <see cref="IsValid"/> for that many
+    /// items, a leaf's item is null (the app could not restore that tab) or two leaves are the same
+    /// item: the window is then not split.
     /// </summary>
-    public static PaneLayout<T>? FromSetting<T>(PaneNodeSetting? node, IReadOnlyList<T> panes)
+    public static PaneLayout<T>? FromSetting<T>(PaneNodeSetting? node, IReadOnlyList<T?> items)
         where T : class
     {
-        ArgumentNullException.ThrowIfNull(panes);
-        if (!IsValid(node, panes.Count) || panes.Distinct(ReferenceEqualityComparer.Instance).Count() != panes.Count)
+        ArgumentNullException.ThrowIfNull(items);
+        if (!IsValid(node, items.Count))
         {
             return null;
         }
 
-        PaneNode<T> Of(PaneNodeSetting n) => n.Split is null
-            ? new PaneLeaf<T>(panes[n.Pane!.Value])
-            : new PaneSplit<T>(AxisOf(n.Split)!.Value, PaneRules.NormalizeRatio(n.Ratio ?? PaneRules.DefaultRatio), Of(n.First!), Of(n.Second!));
-        return new PaneLayout<T>(Of(node!));
+        var leaves = new List<T>();
+        PaneNode<T>? Of(PaneNodeSetting n)
+        {
+            if (n.Split is null)
+            {
+                var item = items[n.Pane!.Value];
+                if (item is null || leaves.Any(l => ReferenceEquals(l, item)))
+                {
+                    return null;
+                }
+
+                leaves.Add(item);
+                return new PaneLeaf<T>(item);
+            }
+
+            return Of(n.First!) is { } first && Of(n.Second!) is { } second
+                ? new PaneSplit<T>(AxisOf(n.Split)!.Value, PaneRules.NormalizeRatio(n.Ratio ?? PaneRules.DefaultRatio), first, second)
+                : null;
+        }
+
+        return Of(node!) is { } root ? new PaneLayout<T>(root) : null;
     }
 
-    /// <summary>A copy of the valid (<see cref="IsValid"/>) <paramref name="node"/> with the split values in their written form and the ratios in range.</summary>
-    internal static PaneNodeSetting Normalize(PaneNodeSetting node) => node.Split is null
-        ? new PaneNodeSetting { Pane = node.Pane }
-        : new PaneNodeSetting
+    /// <summary>
+    /// A copy of the valid (<see cref="IsValid"/>) <paramref name="node"/> with each leaf's index replaced
+    /// by <paramref name="newIndex"/>'s entry for it, the split values in their written form and the
+    /// ratios in range. Null when a leaf's entry is negative (its item was dropped).
+    /// </summary>
+    internal static PaneNodeSetting? Normalize(PaneNodeSetting node, IReadOnlyList<int> newIndex)
+    {
+        if (node.Split is null)
         {
-            Split = ToSetting(AxisOf(node.Split)!.Value),
-            Ratio = PaneRules.NormalizeRatio(node.Ratio ?? PaneRules.DefaultRatio),
-            First = Normalize(node.First!),
-            Second = Normalize(node.Second!),
-        };
+            int index = newIndex[node.Pane!.Value];
+            return index < 0 ? null : new PaneNodeSetting { Pane = index };
+        }
+
+        return Normalize(node.First!, newIndex) is { } first && Normalize(node.Second!, newIndex) is { } second
+            ? new PaneNodeSetting
+            {
+                Split = ToSetting(AxisOf(node.Split)!.Value),
+                Ratio = PaneRules.NormalizeRatio(node.Ratio ?? PaneRules.DefaultRatio),
+                First = first,
+                Second = second,
+            }
+            : null;
+    }
 }

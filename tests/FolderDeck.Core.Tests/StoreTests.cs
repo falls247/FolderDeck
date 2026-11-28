@@ -767,7 +767,7 @@ public class SettingsStoreTests
     }
 
     [Fact]
-    public void Version2File_LoadsAsOnePaneTabs_WithoutTheVersion1Migration_AndIsWrittenAsVersion3()
+    public void Version2File_LoadsUnsplit_WithoutTheVersion1Migration_AndIsWrittenAsVersion3()
     {
         using var tmp = new TempDir();
         string file = tmp.Combine("settings.json");
@@ -787,182 +787,211 @@ public class SettingsStoreTests
         Assert.Equal(2, s.SelectedTab);
         Assert.Equal(["details", "portrait", "square"], s.OpenTabs!.Select(t => t.CardShape));
         Assert.Equal("v1:a", s.OpenTabs![0].FileId);
-        Assert.All(s.OpenTabs!, t => Assert.True(t.Panes is null && t.Layout is null && t.ActivePane is null));
+        Assert.Null(s.SplitLayout);
 
         store.Update(_ => { });
         store.Flush();
         string text = File.ReadAllText(file);
         Assert.Contains("\"version\": 3", text);
-        Assert.DoesNotContain("panes", text);
-        Assert.DoesNotContain("layout", text);
-        Assert.DoesNotContain("active_pane", text);
+        Assert.DoesNotContain("split_layout", text);
         var reloaded = new SettingsStore(file, FakeClock.Fixed());
         reloaded.Load();
         Assert.Equal(expected, reloaded.Current.OpenTabs!.Select(Describe));
         Assert.Equal(2, reloaded.Current.SelectedTab);
     }
 
-    /// <summary>A folder tab of three panes, E:\a | (E:\b / E:\c), the third one worked in.</summary>
-    private static OpenTabSetting SplitTab() => new()
+    /// <summary>The leaves of a split as text: "(first | second)" for columns, "(first / second)" for rows; "none" when not split.</summary>
+    private static string Leaves(PaneNodeSetting? node) => node is null
+        ? "none"
+        : node.Split is null ? $"{node.Pane}" : $"({Leaves(node.First)} {(node.Split == "columns" ? "|" : "/")} {Leaves(node.Second)})";
+
+    private static PaneNodeSetting Split(string split, PaneNodeSetting first, PaneNodeSetting second, double? ratio = null) =>
+        new() { Split = split, Ratio = ratio, First = first, Second = second };
+
+    private static PaneNodeSetting Tab(int index) => new() { Pane = index };
+
+    /// <summary>Five tabs, three of them shown: 2 | (0 / 4) at 0.3 and 0.6, tab 4 selected (the active pane).</summary>
+    private static AppSettings SplitWindow() => new()
     {
-        Kind = AppSettings.TabFolder,
-        Root = @"E:\a",
-        Panes =
+        OpenTabs =
         [
-            new PaneSetting { Root = @"E:\a", Path = "x", FileId = "v1:a", CardShape = "details", SortMode = "name_desc" },
-            new PaneSetting { Root = @"E:\b", Path = "", CardShape = "square" },
-            new PaneSetting { Root = @"E:\c", Path = @"y\z", FileId = "v1:c", SortMode = "size_asc" },
+            new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\a" },
+            new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\b" },
+            new OpenTabSetting { Kind = AppSettings.TabRecent },
+            new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\d" },
+            new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\e", Path = "x" },
         ],
-        Layout = new PaneNodeSetting
-        {
-            Split = "columns",
-            Ratio = 0.3,
-            First = new PaneNodeSetting { Pane = 0 },
-            Second = new PaneNodeSetting { Split = "rows", Ratio = 0.6, First = new PaneNodeSetting { Pane = 1 }, Second = new PaneNodeSetting { Pane = 2 } },
-        },
-        ActivePane = 2,
+        SelectedTab = 4,
+        SplitLayout = Split("columns", Tab(2), Split("rows", Tab(0), Tab(4), 0.6), 0.3),
     };
 
+    private static readonly string[] SplitWindowTabs = [@"folder|E:\a|", @"folder|E:\b|", "recent||", @"folder|E:\d|", @"folder|E:\e|x"];
+
     [Fact]
-    public void SplitTab_RoundTrips_AndTheEntryIsTheActivePane_ForAnOlderExe()
+    public void SplitLayout_RoundTrips_AndAnOlderExeThatDropsItOpensTheSelectedTabAlone()
     {
         using var tmp = new TempDir();
         string file = tmp.Combine("settings.json");
         var store = new SettingsStore(file, FakeClock.Fixed());
         store.Load();
+        var window = SplitWindow();
         store.Update(s =>
         {
-            s.CardShape = "portrait";
-            s.OpenTabs = [new OpenTabSetting { Kind = AppSettings.TabRecent }, SplitTab()];
-            s.SelectedTab = 1;
+            s.OpenTabs = window.OpenTabs;
+            s.SelectedTab = window.SelectedTab;
+            s.SplitLayout = window.SplitLayout;
         });
         store.Flush();
 
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(file))!;
+        Assert.NotNull(json["split_layout"]);
+        // Every entry is a plain tab, as version 2 wrote it.
+        Assert.All(json["open_tabs"]!.AsArray(), e => Assert.Equal(
+            ["kind", "root", "path", "card_shape", "sort_mode"],
+            e!.AsObject().Select(kv => kv.Key).Where(k => k != "file_id")));
+
         var reloaded = new SettingsStore(file, FakeClock.Fixed());
         reloaded.Load();
-        var tab = reloaded.Current.Clone().OpenTabs![1]; // through Clone too
-        Assert.Equal([@"E:\a", @"E:\b", @"E:\c"], tab.Panes!.Select(p => p.Root));
-        Assert.Equal(["x", "", @"y\z"], tab.Panes!.Select(p => p.Path));
-        Assert.Equal(["v1:a", null, "v1:c"], tab.Panes!.Select(p => p.FileId));
-        // A pane without its own view values took the entry's (the shared card_shape, the folder sort mode).
-        Assert.Equal(["details", "square", "portrait"], tab.Panes!.Select(p => p.CardShape));
-        Assert.Equal(["name_desc", "manual", "size_asc"], tab.Panes!.Select(p => p.SortMode));
-        Assert.Equal(2, tab.ActivePane);
-        Assert.Equal(("columns", 0.3), (tab.Layout!.Split, tab.Layout.Ratio));
-        Assert.Equal(0, tab.Layout.First!.Pane);
-        Assert.Equal(("rows", 0.6), (tab.Layout.Second!.Split, tab.Layout.Second.Ratio));
-        Assert.Equal([1, 2], new[] { tab.Layout.Second.First!.Pane, tab.Layout.Second.Second!.Pane }.Select(p => p!.Value));
-
-        // The entry itself is the active pane (it said E:\a: the panes win).
-        Assert.Equal((@"E:\c", @"y\z", "v1:c", "portrait", "size_asc"), (tab.Root, tab.Path, tab.FileId, tab.CardShape, tab.SortMode));
+        var s = reloaded.Current;
+        Assert.Equal(SplitWindowTabs, s.OpenTabs!.Select(Describe));
+        Assert.Equal(4, s.SelectedTab);
+        Assert.Equal("(2 | (0 / 4))", Leaves(s.SplitLayout));
+        Assert.Equal(0.3, s.SplitLayout!.Ratio);
+        Assert.Equal(0.6, s.SplitLayout.Second!.Ratio);
+        Assert.Null(s.SplitLayout.First!.Ratio); // leaves carry only their index
 
         // The copies are deep: changing one does not change the store.
-        var copy = reloaded.Current;
-        copy.OpenTabs![1].Panes![0].Root = @"E:\other";
-        copy.OpenTabs![1].Layout!.Ratio = 0.9;
-        Assert.Equal(@"E:\a", reloaded.Current.OpenTabs![1].Panes![0].Root);
-        Assert.Equal(0.3, reloaded.Current.OpenTabs![1].Layout!.Ratio);
+        s.SplitLayout.Ratio = 0.9;
+        s.SplitLayout.Second.First!.Pane = 1;
+        Assert.Equal(0.3, reloaded.Current.SplitLayout!.Ratio);
+        Assert.Equal("(2 | (0 / 4))", Leaves(reloaded.Current.Clone().SplitLayout));
 
-        // An exe without panes drops the keys it does not know and writes its version: the tab opens
-        // as one pane, the one worked in.
-        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(file))!;
-        var entry = json["open_tabs"]![1]!.AsObject();
-        entry.Remove("panes");
-        entry.Remove("layout");
-        entry.Remove("active_pane");
+        // An exe without the split drops the key and writes its version: the same tabs, unsplit.
+        json.AsObject().Remove("split_layout");
         json["version"] = 2;
         File.WriteAllText(file, json.ToJsonString());
         var downgraded = new SettingsStore(file, FakeClock.Fixed());
         downgraded.Load();
-        var one = downgraded.Current.OpenTabs![1];
-        Assert.Equal(["recent||", @"folder|E:\c|y\z"], downgraded.Current.OpenTabs!.Select(Describe));
-        Assert.Equal(("v1:c", "portrait", "size_asc"), (one.FileId, one.CardShape, one.SortMode));
-        Assert.Null(one.Panes);
-        Assert.Equal(1, downgraded.Current.SelectedTab);
-    }
-
-    public static TheoryData<string> InvalidSplits => new()
-    {
-        "one pane",
-        "five panes",
-        "a pane without a root",
-        "an index twice",
-        "a pane not in the layout",
-        "an unknown split",
-        "no active pane",
-        "active pane out of range",
-        "no layout",
-    };
-
-    [Theory]
-    [MemberData(nameof(InvalidSplits))]
-    public void SplitTab_AnythingInvalid_LeavesATabOfOnePane(string broken)
-    {
-        var tab = SplitTab();
-        tab.Root = @"E:\entry";
-        switch (broken)
-        {
-            case "one pane":
-                tab.Panes!.RemoveRange(1, 2);
-                tab.Layout = new PaneNodeSetting { Pane = 0 };
-                tab.ActivePane = 0;
-                break;
-            case "five panes":
-                tab.Panes!.AddRange([new PaneSetting { Root = @"E:\d" }, new PaneSetting { Root = @"E:\e" }]);
-                tab.Layout = new PaneNodeSetting
-                {
-                    Split = "columns",
-                    First = tab.Layout,
-                    Second = new PaneNodeSetting { Split = "rows", First = new PaneNodeSetting { Pane = 3 }, Second = new PaneNodeSetting { Pane = 4 } },
-                };
-                break;
-            case "a pane without a root":
-                tab.Panes![1].Root = " ";
-                break;
-            case "an index twice":
-                tab.Layout!.First!.Pane = 1;
-                break;
-            case "a pane not in the layout":
-                tab.Panes!.Add(new PaneSetting { Root = @"E:\d" });
-                break;
-            case "an unknown split":
-                tab.Layout!.Second!.Split = "diagonal";
-                break;
-            case "no active pane":
-                tab.ActivePane = null;
-                break;
-            case "active pane out of range":
-                tab.ActivePane = 3;
-                break;
-            case "no layout":
-                tab.Layout = null;
-                break;
-        }
-
-        var s = new AppSettings { OpenTabs = [tab], SelectedTab = 0 };
-        s.Normalize();
-        var entry = Assert.Single(s.OpenTabs!);
-        Assert.Equal(@"folder|E:\entry|", Describe(entry));
-        Assert.True(entry.Panes is null && entry.Layout is null && entry.ActivePane is null);
+        Assert.Equal(SplitWindowTabs, downgraded.Current.OpenTabs!.Select(Describe));
+        Assert.Equal(4, downgraded.Current.SelectedTab);
+        Assert.Null(downgraded.Current.SplitLayout);
     }
 
     [Fact]
-    public void SplitTab_FixedTabsNeverKeepPanes_AndRatiosArePulledIntoRange()
+    public void SplitLayout_FollowsItsTabs_WhenEntriesAreDropped_AndIsWrittenCanonically()
     {
-        var recent = SplitTab();
-        recent.Kind = AppSettings.TabRecent;
-        recent.Root = string.Empty;
-        var folder = SplitTab();
-        folder.Layout!.Ratio = 3;
-        folder.Layout.Second!.Ratio = double.NaN;
-        folder.Layout.Second.Split = " ROWS ";
-
-        var s = new AppSettings { OpenTabs = [recent, folder], SelectedTab = 1 };
+        // A blank-root folder and a null before the shown tabs: the leaves move with their entries.
+        var s = new AppSettings
+        {
+            OpenTabs =
+            [
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\a" },
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = " " },
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\b" },
+                new OpenTabSetting { Kind = AppSettings.TabRecent },
+                null!,
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\e" },
+            ],
+            SelectedTab = 5,
+            SplitLayout = Split("columns", Tab(3), Split(" ROWS ", Tab(0), Tab(5), double.NaN), 3),
+        };
         s.Normalize();
-        Assert.Equal(["recent||", @"folder|E:\c|y\z"], s.OpenTabs!.Select(Describe));
-        Assert.True(s.OpenTabs![0].Panes is null && s.OpenTabs[0].Layout is null && s.OpenTabs[0].ActivePane is null);
-        Assert.Equal(PaneRules.MaxRatio, s.OpenTabs[1].Layout!.Ratio);
-        Assert.Equal(("rows", PaneRules.DefaultRatio), (s.OpenTabs[1].Layout!.Second!.Split, s.OpenTabs[1].Layout!.Second!.Ratio));
+        Assert.Equal([@"folder|E:\a|", @"folder|E:\b|", "recent||", @"folder|E:\e|"], s.OpenTabs!.Select(Describe));
+        Assert.Equal(3, s.SelectedTab);
+        Assert.Equal("(2 | (0 / 3))", Leaves(s.SplitLayout));
+        Assert.Equal(PaneRules.MaxRatio, s.SplitLayout!.Ratio);
+        Assert.Equal(PaneRules.DefaultRatio, s.SplitLayout.Second!.Ratio);
+
+        // A shown tab that is dropped (a second 最近の履歴) takes the whole split with it.
+        var dropped = new AppSettings
+        {
+            OpenTabs =
+            [
+                new OpenTabSetting { Kind = AppSettings.TabRecent },
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\a" },
+                new OpenTabSetting { Kind = AppSettings.TabRecent },
+            ],
+            SelectedTab = 1,
+            SplitLayout = Split("columns", Tab(1), Tab(2)),
+        };
+        dropped.Normalize();
+        Assert.Equal(["recent||", @"folder|E:\a|"], dropped.OpenTabs!.Select(Describe));
+        Assert.Equal(1, dropped.SelectedTab);
+        Assert.Null(dropped.SplitLayout);
+    }
+
+    [Fact]
+    public void SplitLayout_KeepsItsFolderTabs_WhenTheCapOfFolderTabsDropsOthers()
+    {
+        // 51 folder tabs (a split added the last one right of the 50th): the cap drops one folder tab,
+        // not the one on screen, so the split survives.
+        var tabs = Enumerable.Range(0, AppSettings.OpenTabsMax + 1)
+            .Select(i => new OpenTabSetting { Kind = AppSettings.TabFolder, Root = $@"E:\f{i}" })
+            .ToList();
+        var s = new AppSettings
+        {
+            OpenTabs = tabs,
+            SelectedTab = AppSettings.OpenTabsMax,
+            SplitLayout = Split("columns", Tab(AppSettings.OpenTabsMax - 1), Tab(AppSettings.OpenTabsMax)),
+        };
+        s.Normalize();
+        Assert.Equal(AppSettings.OpenTabsMax, s.OpenTabs!.Count);
+        Assert.Equal($@"folder|E:\f{AppSettings.OpenTabsMax}|", Describe(s.OpenTabs[s.SelectedTab]));
+        Assert.Equal($"({AppSettings.OpenTabsMax - 2} | {AppSettings.OpenTabsMax - 1})", Leaves(s.SplitLayout));
+        Assert.Equal(@"folder|E:\f47|", Describe(s.OpenTabs[^3])); // the one dropped is the rightmost tab not on screen (f48)
+        Assert.DoesNotContain(@"folder|E:\f48|", s.OpenTabs.Select(Describe));
+    }
+
+    public static TheoryData<string> InvalidSplitLayouts => new()
+    {
+        "the selected tab is not shown",
+        "one pane",
+        "five panes",
+        "an index twice",
+        "an index out of range",
+        "an unknown split",
+        "a split without its second part",
+        "a leaf with children",
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidSplitLayouts))]
+    public void SplitLayout_Invalid_OrWithoutTheSelectedTab_IsNotSplit(string broken)
+    {
+        var s = SplitWindow();
+        switch (broken)
+        {
+            case "the selected tab is not shown":
+                s.SelectedTab = 1;
+                break;
+            case "one pane":
+                s.SplitLayout = Tab(4);
+                break;
+            case "five panes":
+                s.SplitLayout = Split("columns", Split("rows", Tab(0), Tab(1)), Split("rows", Tab(2), Split("columns", Tab(3), Tab(4))));
+                break;
+            case "an index twice":
+                s.SplitLayout!.First!.Pane = 4;
+                break;
+            case "an index out of range":
+                s.SplitLayout!.First!.Pane = 5;
+                break;
+            case "an unknown split":
+                s.SplitLayout!.Second!.Split = "diagonal";
+                break;
+            case "a split without its second part":
+                s.SplitLayout!.Second!.Second = null;
+                break;
+            case "a leaf with children":
+                s.SplitLayout!.First!.First = Tab(1);
+                break;
+        }
+
+        int selected = s.SelectedTab;
+        s.Normalize();
+        Assert.Null(s.SplitLayout);
+        Assert.Equal(SplitWindowTabs, s.OpenTabs!.Select(Describe)); // the tabs stay as they are
+        Assert.Equal(selected, s.SelectedTab);
     }
 
     [Fact]

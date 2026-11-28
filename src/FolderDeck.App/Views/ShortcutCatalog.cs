@@ -28,6 +28,7 @@ public enum ShortcutId
     SplitColumns,
     SplitRows,
     NextPane,
+    MovePane,
     Search,
     Address,
     ShortcutHelp,
@@ -98,14 +99,15 @@ public static class ShortcutCatalog
             new("Ctrl + Tab / Ctrl + Shift + Tab", "次 / 前のタブ（端では反対の端へ）"), // OnPreviewKeyDown switch: Key.Tab → SelectAdjacentTab
             new("Ctrl + 1〜8", "左から n 番目のタブ"), // same switch: D1..D9, NumPad1..9 → SelectTabAt
             new("Ctrl + 9", "最後のタブ"), // same branch
-            new("Ctrl + W", "表示中のタブを閉じる（分割しているタブでは操作中のペインを閉じる）", ShortcutId.CloseTab), // same switch: Key.W → ClosePaneOrTabAsync
+            new("Ctrl + W", "表示中のタブを閉じる（分割しているときは操作中のペインのタブ）", ShortcutId.CloseTab), // same switch: Key.W → CloseTabCommand
             new("Ctrl + Shift + T", "閉じたタブを開き直す（タブの右クリックのメニューにも。複製は「タブを複製」）", ShortcutId.ReopenTab), // same switch: Key.T → ReopenClosedTabCommand
         ]),
         new("ペイン（タブの分割）",
         [
             new("Ctrl + \\", "操作中のペインを左右に分割（ツールバーのボタン・タブと一覧の空いているところの右クリックからも）", ShortcutId.SplitColumns), // OnPreviewKeyDown switch: Oem5 / OemBackslash → SplitActivePaneAsync(Columns)
             new("Ctrl + Shift + \\", "操作中のペインを上下に分割", ShortcutId.SplitRows), // same branch with Shift → SplitActivePaneAsync(Rows)
-            new("F6 / Shift + F6", "次 / 前のペインへ（分割しているタブで）", ShortcutId.NextPane), // same switch: Key.F6 → SelectAdjacentPane
+            new("F6 / Shift + F6", "次 / 前のペインへ（分割しているとき）", ShortcutId.NextPane), // same switch: Key.F6 → SelectAdjacentPane
+            new("Alt + Shift + ← → ↑ ↓", "その方向のペインへ（分割しているとき）", ShortcutId.MovePane), // same switch: Left / Right / Up / Down with Alt + Shift → MoveToPane
         ]),
         new("検索・アドレス",
         [

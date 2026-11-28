@@ -152,6 +152,78 @@ public class PaneLayoutTests
         Assert.Throws<ArgumentException>(() => layout.Next("x", back: false));
     }
 
+    [Fact]
+    public void Replace_PutsTheNewPaneInTheOldOnesPlace_KeepingRatiosAndOtherNodes()
+    {
+        // a | (b / c) at 0.3 and 0.6
+        var inner = new PaneSplit<string>(SplitAxis.Rows, 0.6, Leaf("b"), Leaf("c"));
+        var left = Leaf("a");
+        var layout = new PaneLayout<string>(new PaneSplit<string>(SplitAxis.Columns, 0.3, left, inner));
+
+        var replaced = layout.Replace("c", "x");
+        Assert.Equal("(a | (b / x))", Shape(replaced.Root));
+        var root = (PaneSplit<string>)replaced.Root;
+        Assert.Equal(0.3, root.Ratio);
+        Assert.Equal(0.6, ((PaneSplit<string>)root.Second).Ratio);
+        Assert.Same(left, root.First);
+        Assert.Same(inner.First, ((PaneSplit<string>)root.Second).First);
+        Assert.Equal(["a", "b", "c"], layout.Panes); // immutable
+
+        Assert.Same(layout, layout.Replace("b", "b"));
+        Assert.Throws<ArgumentException>(() => layout.Replace("x", "y")); // not in the layout
+        Assert.Throws<ArgumentException>(() => layout.Replace("a", "b")); // already in it
+    }
+
+    [Fact]
+    public void Arrange_LaysThePanesOutOnTheUnitSquareByTheRatios()
+    {
+        var layout = new PaneLayout<string>(new PaneSplit<string>(
+            SplitAxis.Columns, 0.25, Leaf("a"), new PaneSplit<string>(SplitAxis.Rows, 0.4, Leaf("b"), Leaf("c"))));
+
+        var rects = layout.Arrange();
+        Assert.Equal(["a", "b", "c"], rects.Select(r => r.Pane));
+        Assert.Equal((0, 0, 0.25, 1), (rects[0].X, rects[0].Y, rects[0].Width, rects[0].Height));
+        Assert.Equal((0.25, 0, 0.75, 0.4), (rects[1].X, rects[1].Y, rects[1].Width, rects[1].Height));
+        Assert.Equal(0.4, rects[2].Y, 9);
+        Assert.Equal(0.6, rects[2].Height, 9);
+    }
+
+    [Fact]
+    public void Neighbor_IsThePaneSharingMostOfThatEdge_TopmostOrLeftmostOnATie_NullAtTheEdge()
+    {
+        // a | (b / c), half each
+        var layout = new PaneLayout<string>(new PaneSplit<string>(
+            SplitAxis.Columns, 0.5, Leaf("a"), new PaneSplit<string>(SplitAxis.Rows, 0.5, Leaf("b"), Leaf("c"))));
+        Assert.Equal("b", layout.Neighbor("a", PaneDirection.Right)); // b and c share as much: the topmost
+        Assert.Equal("a", layout.Neighbor("c", PaneDirection.Left));
+        Assert.Equal("a", layout.Neighbor("b", PaneDirection.Left));
+        Assert.Equal("b", layout.Neighbor("c", PaneDirection.Up));
+        Assert.Equal("c", layout.Neighbor("b", PaneDirection.Down));
+        Assert.Null(layout.Neighbor("a", PaneDirection.Left));
+        Assert.Null(layout.Neighbor("a", PaneDirection.Up));
+        Assert.Null(layout.Neighbor("b", PaneDirection.Right));
+        Assert.Null(layout.Neighbor("c", PaneDirection.Down));
+        Assert.Throws<ArgumentException>(() => layout.Neighbor("x", PaneDirection.Up));
+
+        // b over c at 0.3: c shares more of a's right edge.
+        var uneven = new PaneLayout<string>(new PaneSplit<string>(
+            SplitAxis.Columns, 0.5, Leaf("a"), new PaneSplit<string>(SplitAxis.Rows, 0.3, Leaf("b"), Leaf("c"))));
+        Assert.Equal("c", uneven.Neighbor("a", PaneDirection.Right));
+
+        // (a / b) | (c / d) with the left split at 0.7 and the right at 0.4: from c (top right, 0–0.4)
+        // only a touches on the left; from d (0.4–1), a shares 0.3 and b 0.3: a is topmost.
+        var grid = new PaneLayout<string>(new PaneSplit<string>(
+            SplitAxis.Columns,
+            0.5,
+            new PaneSplit<string>(SplitAxis.Rows, 0.7, Leaf("a"), Leaf("b")),
+            new PaneSplit<string>(SplitAxis.Rows, 0.4, Leaf("c"), Leaf("d"))));
+        Assert.Equal("a", grid.Neighbor("c", PaneDirection.Left));
+        Assert.Equal("a", grid.Neighbor("d", PaneDirection.Left));
+        Assert.Equal("d", grid.Neighbor("b", PaneDirection.Right)); // b (0.7–1) touches d only
+        Assert.Equal("c", grid.Neighbor("a", PaneDirection.Right)); // of a's 0–0.7, c shares 0.4 and d 0.3
+        Assert.Null(PaneLayout<string>.Single("x").Neighbor("x", PaneDirection.Right));
+    }
+
     [Theory]
     [InlineData(1, 565, 0, SplitAxis.Columns, SplitRefusal.None)] // exactly 2 × 280 + 5
     [InlineData(1, 564, 9999, SplitAxis.Columns, SplitRefusal.TooNarrow)]
@@ -194,46 +266,58 @@ public class PaneLayoutTests
     }
 
     [Fact]
-    public void Settings_RoundTripTheTree_ByIndexIntoThePanes()
+    public void Settings_RoundTripTheTree_ByIndexIntoTheTabs_WhichItNeedNotAllShow()
     {
-        var layout = PaneLayout<string>.Single("a").Split("a", SplitAxis.Columns, "b").Split("a", SplitAxis.Rows, "c");
+        // (d / b) | e: three of five tabs shown.
+        string[] tabs = ["a", "b", "c", "d", "e"];
+        var layout = PaneLayout<string>.Single(tabs[3]).Split(tabs[3], SplitAxis.Columns, tabs[4]).Split(tabs[3], SplitAxis.Rows, tabs[1]);
         layout = layout.WithRatio((PaneSplit<string>)layout.Root, 0.3);
 
-        var node = PaneLayoutSettings.ToSetting(layout, layout.Panes);
+        var node = PaneLayoutSettings.ToSetting(layout, tabs);
         Assert.Equal("columns", node.Split);
         Assert.Equal(0.3, node.Ratio);
         Assert.Equal("rows", node.First!.Split);
-        Assert.Equal([0, 1, 2], new[] { node.First.First!.Pane, node.First.Second!.Pane, node.Second!.Pane }.Select(p => p!.Value));
+        Assert.Equal([3, 1, 4], new[] { node.First.First!.Pane, node.First.Second!.Pane, node.Second!.Pane }.Select(p => p!.Value));
         Assert.Null(node.Second.Ratio); // leaves carry only their index
+        Assert.True(PaneLayoutSettings.IsValid(node, tabs.Length));
 
-        string[] panes = ["x", "y", "z"];
-        var back = PaneLayoutSettings.FromSetting(node, panes)!;
-        Assert.Equal("((x / y) | z)", Shape(back.Root));
+        string[] restored = ["v", "w", "x", "y", "z"];
+        var back = PaneLayoutSettings.FromSetting(node, restored)!;
+        Assert.Equal("((y / w) | z)", Shape(back.Root));
         Assert.Equal(0.3, ((PaneSplit<string>)back.Root).Ratio);
+
+        // A tab of the layout that is not in the order; a shown tab the app could not restore.
+        Assert.Throws<ArgumentException>(() => PaneLayoutSettings.ToSetting(layout, ["a", "b", "c"]));
+        Assert.Null(PaneLayoutSettings.FromSetting(node, new string?[] { "v", null, "x", "y", "z" }));
+        Assert.NotNull(PaneLayoutSettings.FromSetting(node, new string?[] { null, "w", null, "y", "z" })); // only tabs not shown are missing
+
+        // The same item at two leaves.
+        string same = "s";
+        Assert.Null(PaneLayoutSettings.FromSetting(node, new[] { "v", same, "x", same, "z" }));
     }
 
     public static TheoryData<string, int> InvalidTrees => new()
     {
         { """{"split":"columns","first":{"pane":0},"second":{"pane":0}}""", 2 },                     // an index twice
-        { """{"split":"columns","first":{"pane":0},"second":{"pane":1}}""", 3 },                     // pane 2 unused
         { """{"split":"columns","first":{"pane":0},"second":{"pane":2}}""", 2 },                     // out of range
         { """{"split":"diagonal","first":{"pane":0},"second":{"pane":1}}""", 2 },                    // unknown split
         { """{"split":"rows","first":{"pane":0}}""", 2 },                                            // a child missing
         { """{"split":"rows","pane":0,"first":{"pane":0},"second":{"pane":1}}""", 2 },               // a split with an index
         { """{"split":"rows","first":{"pane":0,"first":{"pane":1}},"second":{"pane":1}}""", 2 },     // a leaf with children
         { """{"split":"rows","first":{},"second":{"pane":1}}""", 2 },                                // a leaf without an index
-        { """{"pane":0}""", 1 },                                                                     // one pane is not a split
-        { """{"split":"rows","first":{"pane":0},"second":{"split":"rows","first":{"pane":1},"second":{"split":"rows","first":{"pane":2},"second":{"split":"rows","first":{"pane":3},"second":{"pane":4}}}}}""", 5 }, // more than 4 panes
+        { """{"pane":0}""", 3 },                                                                     // one pane is not a split
+        { """{"split":"rows","first":{"pane":0},"second":{"pane":-1}}""", 3 },                       // a negative index
+        { """{"split":"rows","first":{"pane":0},"second":{"split":"rows","first":{"pane":1},"second":{"split":"rows","first":{"pane":2},"second":{"split":"rows","first":{"pane":3},"second":{"pane":4}}}}}""", 7 }, // more than 4 panes
     };
 
     [Theory]
     [MemberData(nameof(InvalidTrees))]
-    public void Settings_AnInvalidTree_IsNoLayout(string json, int paneCount)
+    public void Settings_AnInvalidTree_IsNoLayout(string json, int itemCount)
     {
         var node = JsonSerializer.Deserialize<PaneNodeSetting>(json, JsonFile.Options);
-        var panes = Enumerable.Range(0, paneCount).Select(i => $"p{i}").ToList();
-        Assert.False(PaneLayoutSettings.IsValid(node, paneCount));
-        Assert.Null(PaneLayoutSettings.FromSetting(node, panes));
+        var items = Enumerable.Range(0, itemCount).Select(i => $"p{i}").ToList();
+        Assert.False(PaneLayoutSettings.IsValid(node, itemCount));
+        Assert.Null(PaneLayoutSettings.FromSetting(node, items));
     }
 
     [Fact]

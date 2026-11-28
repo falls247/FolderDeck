@@ -42,6 +42,15 @@
     <SolidColorBrush x:Key="Brush.WarnSoft" Color="{StaticResource Color.WarnSoft}" />
     <SolidColorBrush x:Key="Brush.Danger" Color="{StaticResource Color.Danger}" />
     <SolidColorBrush x:Key="Brush.DangerSoft" Color="{StaticResource Color.DangerSoft}" />
+    <!-- The panes of a split window and their tabs (MainViewModel.UpdatePaneSlots): the same colour on both. Soft: backgrounds; strong: the tab's line -->
+    <SolidColorBrush x:Key="Brush.Pane0" Color="#1b2944" />
+    <SolidColorBrush x:Key="Brush.Pane0Strong" Color="#6e9bf3" />
+    <SolidColorBrush x:Key="Brush.Pane1" Color="#352a19" />
+    <SolidColorBrush x:Key="Brush.Pane1Strong" Color="#e2a04a" />
+    <SolidColorBrush x:Key="Brush.Pane2" Color="#1a3222" />
+    <SolidColorBrush x:Key="Brush.Pane2Strong" Color="#5cc07b" />
+    <SolidColorBrush x:Key="Brush.Pane3" Color="#30223a" />
+    <SolidColorBrush x:Key="Brush.Pane3Strong" Color="#c88ae2" />
     <SolidColorBrush x:Key="Brush.CardShadow" Color="{StaticResource Color.CardShadow}" />
     <SolidColorBrush x:Key="Brush.OnAccent" Color="{StaticResource Color.OnAccent}" />
 </ResourceDictionary>
