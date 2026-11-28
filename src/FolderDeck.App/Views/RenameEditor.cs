@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
@@ -116,6 +117,7 @@ public sealed class RenameEditor
             MaxHeight = wrap ? (CardMaxLines * LineHeight * TextScale.Factor) + 6 : double.PositiveInfinity,
         };
         box.SetResourceReference(FrameworkElement.StyleProperty, "RenameBox");
+        AutomationProperties.SetName(box, "名前");
 
         var adorner = new BoxAdorner(adorned, box, place);
         string pending = new((typeAhead ?? string.Empty).Where(c => !ItemNames.IsInvalidChar(c)).ToArray());

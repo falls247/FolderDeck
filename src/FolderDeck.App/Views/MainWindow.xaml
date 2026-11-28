@@ -64,7 +64,7 @@
           </Grid>
       </Border>
 
-      <GridSplitter x:Name="SidebarSplitter" Grid.Column="1" Width="5" HorizontalAlignment="Center" VerticalAlignment="Stretch"
+      <GridSplitter x:Name="SidebarSplitter" Grid.Column="1" AutomationProperties.Name="サイドメニューの幅" Width="5" HorizontalAlignment="Center" VerticalAlignment="Stretch"
                     ResizeBehavior="PreviousAndNext" ResizeDirection="Columns" Focusable="False" Cursor="SizeWE"
                     Background="{DynamicResource Brush.Border}" ToolTip="ドラッグでサイドメニューの幅を変更"
                     DragStarted="OnSplitterDragStarted" DragCompleted="OnSplitterDragCompleted" />
@@ -81,9 +81,9 @@
         <!-- Sidebar toggle + tabs + settings (§5.1): one strip for every open tab (the row keeps its height without any tab) -->
         <Border Grid.Row="0" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
             <DockPanel Margin="8,0,8,0" MinHeight="38">
-                <Button DockPanel.Dock="Left" Style="{StaticResource Btn.Icon}" Content="&#xE90C;" ToolTip="サイドメニューを表示 / 隠す"
+                <Button DockPanel.Dock="Left" Style="{StaticResource Btn.Icon}" Content="&#xE90C;" ToolTip="サイドメニューを表示 / 隠す" AutomationProperties.Name="サイドメニューを表示 / 隠す"
                         Command="{Binding ToggleSidebarCommand}" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Content="&#xE713;" ToolTip="設定"
+                <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Content="&#xE713;" ToolTip="設定" AutomationProperties.Name="設定"
                         Command="{Binding OpenSettingsCommand}" VerticalAlignment="Center" />
                 <views:FolderTabStrip x:Name="TabStrip" />
             </DockPanel>
@@ -104,7 +104,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <Button Grid.Column="0" Style="{StaticResource Btn.Icon}" Content="&#xE74A;" ToolTip="{views:ShortcutTip Text=1つ上へ, Id=Up}"
+                <Button Grid.Column="0" Style="{StaticResource Btn.Icon}" Content="&#xE74A;" ToolTip="{views:ShortcutTip Text=1つ上へ, Id=Up}" AutomationProperties.Name="1つ上へ"
                         Command="{Binding GoUpCommand}" />
 
                 <!--
@@ -203,7 +203,7 @@
                                 <TextBlock Text="&#xE721;" FontFamily="{StaticResource Font.Icons}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"
                                            Foreground="{DynamicResource Brush.Accent}" />
                                 <TextBlock Text="{Binding ActivePane.SearchText}" MaxWidth="180" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                                <Button Style="{StaticResource Btn.TabClose}" Margin="4,0,0,0" ToolTip="検索を解除" Click="OnSearchClearClick" />
+                                <Button Style="{StaticResource Btn.TabClose}" Margin="4,0,0,0" ToolTip="検索を解除" AutomationProperties.Name="検索を解除" Click="OnSearchClearClick" />
                             </StackPanel>
                         </Border>
                         <Border x:Name="SearchBox" Width="220" Visibility="Collapsed" CornerRadius="6" BorderThickness="1" Padding="6,0,0,0"
@@ -222,7 +222,7 @@
                 </StackPanel>
 
                 <!-- what the list of 最近の履歴 / よく使う項目 shows: everything, folders only, files only -->
-                <Button Grid.Column="4" Style="{StaticResource Btn}" Margin="0,0,8,0" Padding="10,4" Click="OnFilterClick"
+                <Button Grid.Column="4" Style="{StaticResource Btn}" Margin="0,0,8,0" Padding="10,4" Click="OnFilterClick" AutomationProperties.Name="表示する項目"
                         ToolTip="表示する項目（タブごと）：すべて / フォルダのみ / ファイルのみ"
                         Visibility="{Binding ActivePane.ShowFilter, Converter={StaticResource BoolToVis}}">
                     <StackPanel Orientation="Horizontal">
@@ -234,7 +234,7 @@
                 </Button>
 
                 <!-- sort mode of the selected tab -->
-                <Button Grid.Column="5" Style="{StaticResource Btn}" Margin="0,0,10,0" Padding="10,4" Click="OnSortClick"
+                <Button Grid.Column="5" Style="{StaticResource Btn}" Margin="0,0,10,0" Padding="10,4" Click="OnSortClick" AutomationProperties.Name="並べ替え"
                         ToolTip="並べ替え（タブごと。一覧の空いているところの右クリックからも選べます）。一覧はドラッグで並べた順、フォルダの中は既定の順（フォルダ→ファイル、名前順）が「手動」です。ピン留めした項目は位置が固定されます。">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8CB;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
@@ -353,13 +353,13 @@
                     </StackPanel.Style>
                     <TextBlock Text="&#xE71E;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center"
                                Foreground="{DynamicResource Brush.Muted}" Margin="0,0,6,0" />
-                    <Slider x:Name="SizeSlider" Width="110" Minimum="120" Maximum="400" TickFrequency="20" SmallChange="20" LargeChange="40"
+                    <Slider x:Name="SizeSlider" AutomationProperties.Name="カードの大きさ" Width="110" Minimum="120" Maximum="400" TickFrequency="20" SmallChange="20" LargeChange="40"
                             IsSnapToTickEnabled="True" VerticalAlignment="Center" Focusable="False"
                             Value="{Binding CardSize, Mode=TwoWay}" />
                 </StackPanel>
 
                 <Grid Grid.Column="8">
-                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE72C;" ToolTip="{views:ShortcutTip Text=更新, Id=Refresh}"
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE72C;" ToolTip="{views:ShortcutTip Text=更新, Id=Refresh}" AutomationProperties.Name="更新"
                             Command="{Binding RefreshCommand}"
                             IsEnabled="{Binding ActivePane.IsLoading, Converter={StaticResource Not}}" />
                     <ContentControl Style="{StaticResource Spinner}" Width="16" Height="16"
@@ -374,7 +374,7 @@
             <Border Style="{StaticResource MessageBar}" Visibility="{Binding Message.ShowsAtTop, Converter={StaticResource BoolToVis}}">
                 <DockPanel>
                     <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="24" Height="22" FontSize="10" Content="&#xE711;"
-                            ToolTip="閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
+                            ToolTip="閉じる" AutomationProperties.Name="メッセージを閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
                     <TextBlock Text="{Binding Message.Text}" TextWrapping="Wrap" VerticalAlignment="Center" />
                 </DockPanel>
             </Border>
@@ -432,7 +432,7 @@
                 Visibility="{Binding Message.ShowsAtBottom, Converter={StaticResource BoolToVis}}">
             <DockPanel>
                 <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="24" Height="22" FontSize="10" Content="&#xE711;"
-                        ToolTip="閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
+                        ToolTip="閉じる" AutomationProperties.Name="メッセージを閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
                 <TextBlock Text="{Binding Message.Text}" TextWrapping="Wrap" VerticalAlignment="Center" />
             </DockPanel>
         </Border>

@@ -44,8 +44,8 @@
     <DockPanel>
     <!-- Shown only while the tabs do not fit (UpdateArrows). No scroll bar: the wheel (vertical or horizontal) scrolls too. -->
     <StackPanel x:Name="Arrows" DockPanel.Dock="Left" Orientation="Horizontal" Visibility="Collapsed" Margin="0,0,4,0">
-        <RepeatButton x:Name="LeftArrow" Style="{StaticResource Btn.TabScroll}" Content="&#xEDD9;" ToolTip="左のタブを表示" />
-        <RepeatButton x:Name="RightArrow" Style="{StaticResource Btn.TabScroll}" Content="&#xEDDA;" ToolTip="右のタブを表示" />
+        <RepeatButton x:Name="LeftArrow" Style="{StaticResource Btn.TabScroll}" Content="&#xEDD9;" ToolTip="左のタブを表示" AutomationProperties.Name="左のタブを表示" />
+        <RepeatButton x:Name="RightArrow" Style="{StaticResource Btn.TabScroll}" Content="&#xEDDA;" ToolTip="右のタブを表示" AutomationProperties.Name="右のタブを表示" />
     </StackPanel>
     <ScrollViewer x:Name="Scroller" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" Focusable="False">
         <StackPanel Orientation="Horizontal">
@@ -63,7 +63,7 @@
                         <Border x:Name="Chip" Margin="0,5,0,5" CornerRadius="7" Background="Transparent" />
                         <DockPanel Margin="10,0,4,0">
                             <!-- ToolTip from the triggers below: Ctrl + W closes only the shown tab, so only its × names it -->
-                            <Button x:Name="CloseButton" DockPanel.Dock="Right" Style="{StaticResource Btn.TabClose}"
+                            <Button x:Name="CloseButton" DockPanel.Dock="Right" Style="{StaticResource Btn.TabClose}" AutomationProperties.Name="タブを閉じる"
                                     Command="{Binding DataContext.CloseTabCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
                                     CommandParameter="{Binding}" />
                             <TextBlock x:Name="Glyph" DockPanel.Dock="Left" Text="&#xE8B7;" FontFamily="{StaticResource Font.Icons}" FontSize="13"
