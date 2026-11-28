@@ -130,6 +130,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
         BuildPanes();
         WatchCrumbs(vm.ActivePane);
 
+        // A closed tab's kept views go with it, not at the next change of the screen (they hold its cards).
+        vm.Tabs.CollectionChanged += (_, e) =>
+        {
+            if (e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Move)
+            {
+                TrimKeptScreens();
+            }
+        };
+
         // Windows' names of the details view's extra columns are read once off the UI thread (the
         // built-in titles show until then; NewPaneView gives them to every pane's list).
         _ = LoadColumnTitlesAsync();
@@ -164,6 +173,18 @@ public partial class MainWindow : Window, IMainView, ICardHost
         TabStrip.TabMoved += (element, tab, position) => _cascade.AnchorMouseMove(element, element, tab, position);
         TabStrip.TabLeft += element => _cascade.AnchorMouseLeave(element);
         TabStrip.TabsShifted += () => _cascade.AnchorsMoved<TabLayoutViewModel>();
+        TabStrip.TabDraggedOverPanes += OnTabDraggedOverPanes;
+        TabStrip.TabDroppedOnPanes += OnTabDroppedOnPanes;
+        Sidebar.PaneItemClicked += row =>
+        {
+            _cascade.CloseAll();
+            _ = _vm.OpenRegisteredPaneAsync(row);
+        };
+        Sidebar.PaneItemContextMenu += (row, element) =>
+        {
+            _cascade.CloseAll();
+            _menus.ShowRegisteredPane(row, element);
+        };
 
         // §9.6 rule 5: these close every flyout at once (Popups are topmost windows).
         Deactivated += (_, _) => _cascade.CloseAll();
@@ -222,6 +243,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             HideDropHint();
             SetDropMark(null);
+            MarkDropView(null);
         };
         Drop += OnDrop;
         Closing += OnClosing;
@@ -625,15 +647,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 e.Handled = true; // like Explorer: the search box, its text selected
                 BeginSearch();
                 break;
-            case Key.Tab when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
+            case Key.Tab when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.Control && _vm.Tabs.Count > 0 && !IsMenuTakingKeys():
                 // Also in the search / address box, as in Explorer. Handled here, at the window's
                 // preview, before WPF's focus traversal would move the focus (Ctrl+Tab's old effect).
                 e.Handled = true;
                 EndAddressEdit(); // the box shows the tab left (the search box closes with the tab)
                 _vm.SelectAdjacentTab(back: (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
                 break;
-            case >= Key.D1 and <= Key.D9 when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
-            case >= Key.NumPad1 and <= Key.NumPad9 when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
+            case >= Key.D1 and <= Key.D9 when Keyboard.Modifiers == ModifierKeys.Control && _vm.Tabs.Count > 0 && !IsMenuTakingKeys():
+            case >= Key.NumPad1 and <= Key.NumPad9 when Keyboard.Modifiers == ModifierKeys.Control && _vm.Tabs.Count > 0 && !IsMenuTakingKeys():
                 e.Handled = true; // Ctrl+1…8: that tab; Ctrl+9: the last one (as Explorer)
                 EndAddressEdit();
                 int digit = key >= Key.NumPad1 ? key - Key.NumPad1 : key - Key.D1;
@@ -649,11 +671,19 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 }
 
                 break;
-            case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
-                e.Handled = true; // like Explorer: closes the shown tab (in a split, the active pane's tab), whatever its kind
-                _vm.CloseTabCommand.Execute(_vm.SelectedTab);
+            case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasPanes:
+                e.Handled = true; // like Explorer: closes the shown tab (in a split, the active pane's tab), whatever its kind; an empty pane closes
+                if (_vm.HasTab)
+                {
+                    _vm.CloseTabCommand.Execute(_vm.SelectedTab);
+                }
+                else
+                {
+                    _vm.CloseActivePaneCommand.Execute(null); // an empty pane; the blank page of ＋ goes back to the tab before it
+                }
+
                 break;
-            case Key.Oem5 or Key.OemBackslash when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
+            case Key.Oem5 or Key.OemBackslash when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.Control && _vm.HasPanes && !IsMenuTakingKeys():
                 // Ctrl + \ (the ¥ key and the ろ key of a Japanese keyboard, \ of others): left | right;
                 // with Shift, top / bottom. Also in the search / address box (neither types with Ctrl).
                 e.Handled = true;
@@ -661,11 +691,14 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 {
                     EndAddressEdit();
                     var axis = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? SplitAxis.Rows : SplitAxis.Columns;
-                    _ = _vm.SplitActivePaneAsync(axis);
+                    if (_vm.SplitPaneCommand.CanExecute(axis))
+                    {
+                        _vm.SplitPaneCommand.Execute(axis); // as the toolbar's buttons: at the pane limit, closes the pane beside
+                    }
                 }
 
                 break;
-            case Key.F6 when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.None && _vm.HasTab && !IsMenuTakingKeys():
+            case Key.F6 when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.None && _vm.HasPanes && !IsMenuTakingKeys():
                 // the next / previous pane of the split (as Windows Terminal's focus moves); nothing otherwise
                 if (_vm.IsSplit)
                 {
@@ -1108,8 +1141,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             CardView card => _cascade.OpenFromKeys(card),
             DetailsRowView row when CardAnchor.For(folder, _vm.Services.Icons) is { } anchor => anchor.File is not null
-                ? _cascade.OpenPreviewFromKeys(row.NameCell, anchor)
-                : _cascade.OpenFromKeys(row.NameCell, anchor),
+                ? _cascade.OpenPreviewFromKeys(row.CascadeAnchor, anchor)
+                : _cascade.OpenFromKeys(row.CascadeAnchor, anchor),
             _ => false,
         };
     }
@@ -1212,12 +1245,20 @@ public partial class MainWindow : Window, IMainView, ICardHost
             return;
         }
 
-        if (e.Handled || !_vm.HasTab || IsOnItemOrControl(e.OriginalSource) || IsOnPaneBanner(e.OriginalSource))
+        if (e.Handled || !_vm.HasPanes || IsOnItemOrControl(e.OriginalSource) || IsOnPaneBanner(e.OriginalSource))
         {
             return;
         }
 
         e.Handled = true;
+        if (!_vm.HasTab)
+        {
+            // an empty pane (the press made it the active one): only the pane entries
+            _cascade.CloseAll();
+            _menus.ShowEmptyPane(ActivePaneView.ItemsHost);
+            return;
+        }
+
         if (ActiveList.RealizedItemAt(e) is { } view
             && ((view as CardView)?.ViewModel ?? (view as DetailsRowView)?.ViewModel) is { } item)
         {
@@ -1441,6 +1482,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
     private void OnDragOver(object sender, DragEventArgs e)
     {
         NoteInput(); // OLE calls it over and over during a drag over the window
+        if (DragOverEmptyPane(e))
+        {
+            return; // a folder onto an empty pane: it opens there
+        }
+
         if (FolderDropOf(e) is { } drop)
         {
             e.Effects = ToWpf(drop.Effect);
@@ -1466,6 +1512,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private async void OnDrop(object sender, DragEventArgs e)
     {
+        if (DropOnEmptyPane(e))
+        {
+            SetDropMark(null);
+            return;
+        }
+
         var drop = FolderDropOf(e); // the position and the keys at the release decide again
         SetDropMark(null);
         HideDropHint();
@@ -1627,12 +1679,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
         // no highlight: the whole list is the target, and a card's mark would say "into this folder"
         FolderTarget? ShownFolderTarget(string? onFile = null) =>
-            _vm.HasTab && _vm.PasteFolderOf(null, pane) is { } shown ? new FolderTarget(shown, null, ShownFolder: true, onFile) : RefusedInFolder();
+            HasTabIn(pane) && _vm.PasteFolderOf(null, pane) is { } shown ? new FolderTarget(shown, null, ShownFolder: true, onFile) : RefusedInFolder();
 
         // a real folder's list that takes no drop now refuses it; only the top lists (最近の履歴 /
         // よく使う項目 / PC) and the placeholder keep the old null (a registration for Explorer drags)
         FolderTarget? RefusedInFolder() =>
-            _vm.HasTab && (pane ?? _vm.ActivePane).FolderTargetPath is { } real ? new FolderTarget(real, null, Refused: true) : null;
+            HasTabIn(pane) && (pane ?? _vm.ActivePane).FolderTargetPath is { } real ? new FolderTarget(real, null, Refused: true) : null;
+
+        // the pane of the drop shows a tab (not an empty pane, not the placeholder); the active one off the panes
+        bool HasTabIn(PaneViewModel? target) => !(target ?? _vm.ActivePane).IsPlaceholder;
     }
 
     /// <summary>The paths of another app's file drop (null when it carries none or cannot be read).</summary>
@@ -1803,6 +1858,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
     }
 
     public bool OpensOnDoubleClick => _vm.OpensOnDoubleClick;
+
+    public bool CascadeOnNameColumn => _vm.CascadeOnNameColumn;
 
     // ---- the name's edit box (F2, 名前の変更, 新しいフォルダー) -------------------------------------
 
@@ -2835,83 +2892,167 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _crumbs = next;
     }
 
-    // ---- panes: one PaneView per pane of the shown tab --------------------------------------------
+    // ---- panes: one PaneView per pane of the shown tab; the layouts shown before stay built ----------
 
-    /// <summary>Every pane view made so far (at most <see cref="PaneRules.MaxPanes"/>), kept for the window's life.</summary>
+    /// <summary>
+    /// A layout as it was built: the views of its panes under one root. The one on screen is
+    /// <see cref="_screen"/>. When another tab or group comes on screen it is hidden, not taken apart
+    /// (<see cref="_keptScreens"/>), and comes back as it was left: showing it takes about a
+    /// millisecond, building it again 60 ms and more (its cards are made anew). As Explorer keeps a
+    /// window per tab.
+    /// </summary>
+    private sealed class PaneScreen
+    {
+        /// <summary>The root in <c>PaneArea</c>: visible on screen, collapsed while kept.</summary>
+        public required PaneScreenHost Host { get; init; }
+
+        /// <summary>The layout the views are laid out by (to tell a moved splitter from a new shape).</summary>
+        public required PaneLayout<PaneViewModel> Layout { get; set; }
+
+        public required Dictionary<PaneViewModel, PaneView> Views { get; init; }
+
+        /// <summary>The split each of its splitters drags.</summary>
+        public Dictionary<GridSplitter, PaneSplit<PaneViewModel>> Splits { get; } = [];
+    }
+
+    /// <summary>
+    /// The pane views kept hidden at most: past it, the screens left longest ago are taken apart
+    /// (their tabs are built again when shown). A view holds the cards of about two screenfuls and
+    /// their thumbnails.
+    /// </summary>
+    private const int KeptViewBudget = 12;
+
+    /// <summary>Every pane view made so far: on screen, kept hidden, or free (empty, outside the tree).</summary>
     private readonly List<PaneView> _paneViews = [];
 
-    /// <summary>The views on screen, by the pane they show (the panes of <see cref="MainViewModel.ShownLayout"/>).</summary>
+    /// <summary>The screen shown (null only before the first one is built).</summary>
+    private PaneScreen? _screen;
+
+    /// <summary>The screens hidden, oldest first: each still the layout of a tab or a group that can come back.</summary>
+    private readonly List<PaneScreen> _keptScreens = [];
+
+    /// <summary>The views on screen, by the pane they show (the panes of <see cref="MainViewModel.ShownLayout"/>): <see cref="_screen"/>'s.</summary>
     private Dictionary<PaneViewModel, PaneView> _shownViews = [];
 
-    /// <summary>The layout the views are laid out by (to tell a moved splitter from a new shape).</summary>
-    private PaneLayout<PaneViewModel>? _builtLayout;
-
-    /// <summary>The split each splitter on screen drags (rebuilt with the layout).</summary>
-    private readonly Dictionary<GridSplitter, PaneSplit<PaneViewModel>> _splitOf = [];
+    /// <summary>The split each splitter on screen drags: <see cref="_screen"/>'s.</summary>
+    private Dictionary<GridSplitter, PaneSplit<PaneViewModel>> _splitOf = [];
 
     /// <summary>The view of the active pane (the first view while nothing is built yet).</summary>
     private PaneView ActivePaneView =>
-        _shownViews.TryGetValue(_vm.ActivePane, out var view) ? view : _paneViews.Count > 0 ? _paneViews[0] : NewPaneView();
+        _shownViews.TryGetValue(_vm.ActivePane, out var view) ? view
+        : _shownViews.Count > 0 ? _shownViews.Values.First()
+        : _paneViews.Count > 0 ? _paneViews[0] : NewPaneView();
 
     /// <summary>
-    /// Lays the views out by the shown tab's layout (<see cref="MainViewModel.ShownLayout"/>). A view
-    /// stays with its pane while the pane stays on screen; a pane new on screen gets a free view (a
-    /// tab of one pane always the same one, without moving it: as the one grid of the window before
-    /// panes). Only a moved splitter (the same panes, the same shape) updates the sizes in place;
-    /// anything else rebuilds the splits, and the views that moved get their scroll positions back.
+    /// Shows the views of the shown tab's layout (<see cref="MainViewModel.ShownLayout"/>).
+    /// <list type="bullet">
+    /// <item>The same panes in the same shape as on screen (a moved splitter): the sizes change in place.</item>
+    /// <item>A layout shown before and still built (<see cref="_keptScreens"/>): the screen on screen is
+    /// hidden and that one is shown, cards, scroll positions and all.</item>
+    /// <item>The layout on screen changed (a split, a pane closed or filled): its views stay with their
+    /// panes and move to the new splits; they get their scroll positions back.</item>
+    /// <item>Anything else is built: the screen on screen is hidden and kept, each pane gets a free
+    /// view, and takes it only after the layout (its cards are made once, for the width it has there).</item>
+    /// </list>
     /// </summary>
     private void BuildPanes()
     {
         var layout = _vm.ShownLayout;
-        if (_builtLayout is { } built && SameShape(built.Root, layout.Root))
+        if (_screen is { } on && SameShape(on.Layout.Root, layout.Root))
         {
-            _builtLayout = layout;
-            UpdateSplits(layout.Root);
+            on.Layout = layout;
+            UpdateSplits(on);
             MarkActivePane();
             return;
         }
 
+        if (_keptScreens.Find(k => SameShape(k.Layout.Root, layout.Root)) is { } back)
+        {
+            _keptScreens.Remove(back);
+            back.Layout = layout;
+            UpdateSplits(back); // the layout's nodes are new objects
+            HideScreen();
+            _screen = back;
+            _shownViews = back.Views;
+            _splitOf = back.Splits;
+            back.Host.Visibility = Visibility.Visible;
+            MarkActivePane();
+            TrimKeptScreens();
+            return;
+        }
+
+        // A kept screen that has a pane of this layout has another shape (its group changed while it
+        // was hidden): it cannot come back, and a pane has one view.
+        foreach (var stale in _keptScreens.Where(k => layout.Panes.Any(k.Views.ContainsKey)).ToList())
+        {
+            _keptScreens.Remove(stale);
+            TakeApart(stale);
+        }
+
         var shown = new Dictionary<PaneViewModel, PaneView>();
-        foreach (var pane in layout.Panes)
+        var offsets = new Dictionary<PaneViewModel, double>();
+        PaneScreen? changed = null;
+        if (_screen is { } before && layout.Panes.Any(before.Views.ContainsKey))
         {
-            if (_shownViews.TryGetValue(pane, out var kept))
+            // The layout on screen changed: the views of the panes that stay move with them. Views
+            // that move to another split lose their layout: their positions come back after it.
+            changed = before;
+            foreach (var (pane, view) in before.Views)
             {
-                shown[pane] = kept;
+                if (layout.Contains(pane))
+                {
+                    shown[pane] = view;
+                    offsets[pane] = view.ActiveList.VerticalOffset;
+                }
+                else
+                {
+                    Detach(view);
+                    view.DataContext = null; // its cards go with its pane
+                }
             }
-        }
 
-        var free = new Queue<PaneView>(_paneViews.Where(v => !shown.ContainsValue(v)));
-        foreach (var pane in layout.Panes.Where(p => !shown.ContainsKey(p)))
-        {
-            var view = free.Count > 0 ? free.Dequeue() : NewPaneView();
-            view.DataContext = pane;
-            shown[pane] = view;
-        }
-
-        // Views that move to another split lose their layout: their positions come back after it.
-        var offsets = shown.Where(s => _shownViews.ContainsKey(s.Key)).ToDictionary(s => s.Key, s => s.Value.ActiveList.VerticalOffset);
-
-        _shownViews = shown;
-        _builtLayout = layout;
-        _splitOf.Clear();
-        foreach (var view in free)
-        {
-            Detach(view);
-            view.DataContext = null; // its cards go with its pane
-        }
-
-        if (layout.Root is PaneLeaf<PaneViewModel> { Pane: var only } && ReferenceEquals(PaneArea.Child, shown[only]))
-        {
-            // the same view as before, the same place: only its pane changed (a tab switch)
+            _screen = null;
         }
         else
         {
-            var root = Build(layout.Root);
-            if (!ReferenceEquals(PaneArea.Child, root))
-            {
-                Detach(root);
-                PaneArea.Child = root;
-            }
+            HideScreen();
+        }
+
+        var free = new Queue<PaneView>(_paneViews.Where(v => !shown.ContainsValue(v) && !_keptScreens.Any(k => k.Views.ContainsValue(v))));
+        var arriving = new List<(PaneViewModel Pane, PaneView View)>(); // the panes new on screen: given to their views below
+        foreach (var pane in layout.Panes.Where(p => !shown.ContainsKey(p)))
+        {
+            var view = free.Count > 0 ? free.Dequeue() : NewPaneView();
+            view.DataContext = null; // a free view is empty already; a new one must not take the window's
+            arriving.Add((pane, view));
+            shown[pane] = view;
+        }
+
+        var screen = new PaneScreen { Host = new PaneScreenHost(), Layout = layout, Views = shown };
+        _screen = screen;
+        _shownViews = shown;
+        _splitOf = screen.Splits;
+        screen.Host.Child = Build(layout.Root); // takes the views that stay out of the old splits
+        if (changed is not null)
+        {
+            PaneArea.Children.Remove(changed.Host);
+            changed.Host.Child = null;
+        }
+
+        PaneArea.Children.Add(screen.Host);
+
+        // A view that takes a pane here also takes a size. Its card grid counts its columns from the
+        // width it has: given the pane first, it would make the cards for the old width and make them
+        // again after the layout. So the views are laid out in their places while empty (cheap: no
+        // items), and only then given their panes.
+        if (PaneArea.IsLoaded)
+        {
+            PaneArea.UpdateLayout();
+        }
+
+        foreach (var (pane, view) in arriving)
+        {
+            view.DataContext = pane;
         }
 
         foreach (var (pane, offset) in offsets)
@@ -2920,6 +3061,56 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         MarkActivePane();
+        TrimKeptScreens();
+    }
+
+    /// <summary>The screen on screen leaves it as it is, to come back (<see cref="_keptScreens"/>).</summary>
+    private void HideScreen()
+    {
+        if (_screen is not { } screen)
+        {
+            return;
+        }
+
+        _cascade.CloseCardCascade(); // it hangs on an item of a view that leaves the screen (the item stays, unlike before)
+        screen.Host.Visibility = Visibility.Collapsed;
+        _keptScreens.Add(screen);
+        _screen = null;
+        _shownViews = [];
+        _splitOf = [];
+    }
+
+    /// <summary>A screen that will not be shown again: its views are emptied and free for other panes.</summary>
+    private void TakeApart(PaneScreen screen)
+    {
+        PaneArea.Children.Remove(screen.Host);
+        foreach (var view in screen.Views.Values)
+        {
+            Detach(view);
+            view.DataContext = null; // its cards go with its pane
+        }
+
+        screen.Host.Child = null;
+    }
+
+    /// <summary>
+    /// Drops the kept screens that cannot come back (a pane of theirs is closed: the view would hold
+    /// its cards for nothing) and, over <see cref="KeptViewBudget"/>, the ones left longest ago.
+    /// </summary>
+    private void TrimKeptScreens()
+    {
+        foreach (var gone in _keptScreens.Where(k => k.Views.Keys.Any(p => !_vm.IsOpenPane(p))).ToList())
+        {
+            _keptScreens.Remove(gone);
+            TakeApart(gone);
+        }
+
+        while (_keptScreens.Count > 0 && _keptScreens.Sum(k => k.Views.Count) > KeptViewBudget)
+        {
+            var oldest = _keptScreens[0];
+            _keptScreens.RemoveAt(0);
+            TakeApart(oldest);
+        }
     }
 
     private UIElement Build(PaneNode<PaneViewModel> node)
@@ -2950,6 +3141,16 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _splitOf[splitter] = split;
         var first = Build(split.First);
         var second = Build(split.Second);
+
+        // A view is reused across layouts: the cell it had in its last grid must not carry over (a
+        // former second part keeps Grid.Column / Grid.Row = 2 and would cover the other part, leaving
+        // its own cell empty and dead to clicks).
+        foreach (var part in new[] { first, second })
+        {
+            part.ClearValue(Grid.ColumnProperty);
+            part.ClearValue(Grid.RowProperty);
+        }
+
         if (columns)
         {
             grid.ColumnDefinitions.Add(new ColumnDefinition());
@@ -2999,12 +3200,13 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _ => false,
     };
 
-    /// <summary>A splitter moved: the grids on screen take the new layout's nodes and ratios (they are new objects).</summary>
-    private void UpdateSplits(PaneNode<PaneViewModel> root)
+    /// <summary>A splitter moved, or a kept screen comes back: its grids take the layout's nodes and ratios (they are new objects).</summary>
+    private static void UpdateSplits(PaneScreen screen)
     {
-        var byGrid = _splitOf.ToDictionary(s => (Grid)s.Key.Parent, s => s.Key);
-        _splitOf.Clear();
-        Walk(PaneArea.Child, root);
+        var splits = screen.Splits;
+        var byGrid = splits.ToDictionary(s => (Grid)s.Key.Parent, s => s.Key);
+        splits.Clear();
+        Walk(screen.Host.Child, screen.Layout.Root);
 
         void Walk(UIElement? element, PaneNode<PaneViewModel> node)
         {
@@ -3013,7 +3215,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 return;
             }
 
-            _splitOf[splitter] = split;
+            splits[splitter] = split;
             SetRatio(grid, split);
             Walk(grid.Children[0], split.First);
             Walk(grid.Children[2], split.Second);
@@ -3078,8 +3280,9 @@ public partial class MainWindow : Window, IMainView, ICardHost
         foreach (var (pane, view) in _shownViews)
         {
             view.IsSplit = split;
+            view.ShowsEmptyHint = _vm.IsEmptyPane(pane);
             view.IsActive = ReferenceEquals(pane, _vm.ActivePane);
-            view.Slot = split ? _vm.Tabs.FirstOrDefault(t => ReferenceEquals(t.ActivePane, pane))?.PaneSlot ?? -1 : -1;
+            view.Slot = split ? _vm.SlotOf(pane) : -1;
         }
     }
 
@@ -3220,25 +3423,6 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
     }
 
-    public Size PaneSize(PaneViewModel pane)
-    {
-        if (!_shownViews.TryGetValue(pane, out var view))
-        {
-            return Size.Empty;
-        }
-
-        if (!view.IsArrangeValid)
-        {
-            UpdateLayout(); // a tab just switched to (the tab menu's split): its panes are laid out first
-        }
-
-        // A view just given to the pane (a tab switched to) is laid out on the next pass: a tab of
-        // one pane has the whole items area.
-        return view.ActualWidth > 0 || _shownViews.Count > 1
-            ? new Size(view.ActualWidth, view.ActualHeight)
-            : new Size(ContentHost.ActualWidth, ContentHost.ActualHeight);
-    }
-
     public nint WindowHandle => new WindowInteropHelper(this).Handle;
 
     public bool Confirm(string title, string body, string? path, string primaryText, bool danger)
@@ -3255,6 +3439,23 @@ public partial class MainWindow : Window, IMainView, ICardHost
             _modalDepth--;
         }
     }
+
+    public string? AskName(string title, string body, string initial)
+    {
+        _cascade.CloseAll();
+        var dialog = new NameInputDialog(title, body, initial) { Owner = this };
+        _modalDepth++;
+        try
+        {
+            return dialog.ShowDialog() == true ? dialog.Result : null;
+        }
+        finally
+        {
+            _modalDepth--;
+        }
+    }
+
+    // (a tab dragged from the strip onto the panes, a folder onto an empty pane: MainWindow.PaneDrag.cs)
 
     // ---- auto refresh: what a replaced item list would break ------------------------------------
 

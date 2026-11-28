@@ -133,18 +133,30 @@ public partial class DetailsRowView : UserControl
 
     // ---- the name cell: where a folder's list hangs -------------------------------------------
 
+    /// <summary>
+    /// What a folder's list hangs beside: the name cell (icon + name + 📌), or the whole name column
+    /// while 名前列に対してカスケードを表示する is on (<see cref="ICardHost.CascadeOnNameColumn"/>). Both raise
+    /// the hover events; only the anchor's count.
+    /// </summary>
+    public FrameworkElement CascadeAnchor => CardView.Host?.CascadeOnNameColumn == true ? NameColumn : NameCell;
+
     private void OnNameEnter(object sender, MouseEventArgs e)
     {
-        if (_vm is { } vm)
+        if (_vm is { } vm && ReferenceEquals(sender, CascadeAnchor))
         {
-            CardView.Host?.RowMouseEnter(NameCell, vm);
+            CardView.Host?.RowMouseEnter(CascadeAnchor, vm);
         }
     }
 
     private void OnNameLeave(object sender, MouseEventArgs e)
     {
+        if (!ReferenceEquals(sender, CascadeAnchor))
+        {
+            return;
+        }
+
         _noRearm = false;
-        CardView.Host?.RowMouseLeave(NameCell);
+        CardView.Host?.RowMouseLeave(CascadeAnchor);
     }
 
     /// <summary>
@@ -154,11 +166,12 @@ public partial class DetailsRowView : UserControl
     private void OnNameMove(object sender, MouseEventArgs e)
     {
         if (!_noRearm
+            && ReferenceEquals(sender, CascadeAnchor)
             && e.LeftButton == MouseButtonState.Released
             && e.RightButton == MouseButtonState.Released
             && _vm is { } vm)
         {
-            CardView.Host?.RowMouseMove(NameCell, vm);
+            CardView.Host?.RowMouseMove(CascadeAnchor, vm);
         }
     }
 
@@ -190,6 +203,7 @@ public partial class DetailsRowView : UserControl
         if (e.OldValue is not null)
         {
             CardView.Host?.RowMouseLeave(NameCell);
+            CardView.Host?.RowMouseLeave(NameColumn);
         }
 
         (e.OldValue as CardViewModel)?.CancelPropertyReads(); // a recycled row: the old item's reads are not wanted

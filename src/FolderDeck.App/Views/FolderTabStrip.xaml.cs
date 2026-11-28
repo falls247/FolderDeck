@@ -15,7 +15,17 @@ namespace FolderDeck.Views;
 /// <summary>
 /// The tab strip (every open tab: 最近の履歴, よく使う項目 and the folder tabs): a press shows the
 /// tab, dragging it sideways moves it among the others (they swap as the pointer passes the middle
-/// of a neighbour), a middle click or × closes it. When the tabs do not fit, ◀ / ▶ appear on the
+/// of a neighbour), dragging it down onto a pane of the group on screen puts it in that pane
+/// (<see cref="TabDraggedOverPanes"/> / <see cref="TabDroppedOnPanes"/>), a middle click or × closes it.
+/// A press on a tab that is not on screen (outside the group on screen, or any other tab than the one
+/// shown alone) shows it at once too; when the press becomes a drag down to the panes, what was on
+/// screen at the press comes back (<see cref="_shownAtPress"/>), so that the tab can be dropped on a
+/// pane of it or on a snap layout, and the tab is then shown on release as far as the drop leaves it
+/// to. While an empty pane, the blank page or no tab is on screen, and for a drag by a group's bar,
+/// the tab is shown on release only (a press must not fill the empty pane before a drag is told
+/// from a click).
+/// The bar over a pane group's tabs, dragged, moves the whole group past the tabs and groups beside it.
+/// A drag shows a see-through picture of what it holds under the pointer (<see cref="DragGhost"/>). When the tabs do not fit, ◀ / ▶ appear on the
 /// left (next to the sidebar button) and step one tab at a time, and the wheel (vertical or
 /// horizontal) over the strip scrolls it; there is no scroll bar. Resting on a tab that is not shown
 /// lists its folder under it: the hover events go to the main window's cascade (<see cref="TabEntered"/>).
@@ -27,20 +37,69 @@ public partial class FolderTabStrip : UserControl
     private Point _pressedAt;
     private bool _moving;
 
+    /// <summary>The pressed tab is shown on release (see the class summary).</summary>
+    private bool _selectOnRelease;
+
+    /// <summary>
+    /// The tab that was shown when the press showed the pressed one instead (null: the press did not
+    /// change the screen). A drag down to the panes brings it back, with its group.
+    /// </summary>
+    private TabLayoutViewModel? _shownAtPress;
+
+    /// <summary>The dragged tab is over the panes (not the strip): moving it does not reorder the strip.</summary>
+    private bool _overPanes;
+
+    /// <summary>The press was on the bar over a pane group: the drag moves the whole group (<see cref="MoveGroupTowards"/>).</summary>
+    private bool _groupDrag;
+
+    /// <summary>The picture under the pointer while a drag runs.</summary>
+    private DragGhost? _ghost;
+
     public FolderTabStrip()
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
         Tabs.PreviewMouseLeftButtonDown += OnLeftDown;
         Tabs.MouseMove += OnMouseMove;
-        Tabs.PreviewMouseLeftButtonUp += (_, _) => EndPress();
+        Tabs.PreviewMouseLeftButtonUp += (_, e) => EndPress(e);
         Tabs.LostMouseCapture += (_, _) =>
         {
+            // Taken away mid-drag (Alt+Tab, a dialog): the moves so far stand, no drop on a pane.
+            if (_moving && _pressed is { } tab)
+            {
+                _moving = false;
+                EndOverPanes(tab);
+                if (_groupDrag)
+                {
+                    _vm?.CommitGroupMove();
+                }
+                else
+                {
+                    _vm?.CommitTabMove(tab);
+                }
+            }
+
+            EndDragVisuals();
             _moving = false;
             _pressed = null;
+            _selectOnRelease = false;
+            _shownAtPress = null;
+            _groupDrag = false;
         };
         Tabs.PreviewMouseDown += OnMouseDown;
         Tabs.MouseRightButtonUp += OnRightUp;
+
+        // The blank page's tab: a middle click closes it, as a tab's does.
+        BlankTab.PreviewMouseDown += (_, e) =>
+        {
+            _quietAt = e.GetPosition(this);
+            if (e.ChangedButton == MouseButton.Middle && _vm is not null)
+            {
+                e.Handled = true;
+                Interacted?.Invoke();
+                _vm.CloseActivePaneCommand.Execute(null);
+            }
+        };
 
         // Over the whole strip (the arrows too): the wheel up / down scrolls left / right.
         PreviewMouseWheel += (_, e) =>
@@ -228,6 +287,11 @@ public partial class FolderTabStrip : UserControl
         {
             RevealSelected();
         }
+        else if (e.PropertyName == nameof(MainViewModel.IsBlankPane) && _vm?.IsBlankPane == true)
+        {
+            // the blank page's tab after the last tab: scrolled into view once it is laid out
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => BlankTab.BringIntoView());
+        }
     }
 
     private void OnTabsChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -334,8 +398,35 @@ public partial class FolderTabStrip : UserControl
         _pressed = tab;
         _pressedAt = e.GetPosition(Tabs);
         _moving = false;
+        _overPanes = false;
         Interacted?.Invoke();
-        _vm.SelectTabCommand.Execute(tab);
+        _groupDrag = tab.IsGrouped && OnGroupHandle(e.OriginalSource);
+        _shownAtPress = null;
+        bool offScreen = !tab.IsOnScreen && !ReferenceEquals(tab, _vm.SelectedTab);
+        if (_groupDrag)
+        {
+            _selectOnRelease = true;
+        }
+        else if (offScreen && _vm.Tabs.Contains(_vm.SelectedTab))
+        {
+            // Shown at the press, as a click expects (the time the button is held is not waited for).
+            // What is on screen now is needed again if this becomes a drag down to the panes: a drop on
+            // a pane or a snap layout lays it out with the dragged tab (OnMouseMove brings it back).
+            _selectOnRelease = false;
+            _shownAtPress = _vm.SelectedTab;
+            _vm.SelectTabCommand.Execute(tab);
+        }
+        else if (offScreen)
+        {
+            // An empty pane is active (the tab would fill it), the blank page or no tab is on screen:
+            // nothing to bring back to as it was, so the tab is shown on release, a click only.
+            _selectOnRelease = true;
+        }
+        else
+        {
+            _selectOnRelease = false;
+            _vm.SelectTabCommand.Execute(tab);
+        }
     }
 
     private void OnMouseMove(object sender, MouseEventArgs e)
@@ -348,7 +439,7 @@ public partial class FolderTabStrip : UserControl
         Point p = e.GetPosition(Tabs);
         if (!_moving)
         {
-            if (!FileDrag.IsDragGesture(p.X - _pressedAt.X, 0, SystemParameters.MinimumHorizontalDragDistance, SystemParameters.MinimumVerticalDragDistance)
+            if (!FileDrag.IsDragGesture(p.X - _pressedAt.X, p.Y - _pressedAt.Y, SystemParameters.MinimumHorizontalDragDistance, SystemParameters.MinimumVerticalDragDistance)
                 || !Tabs.CaptureMouse())
             {
                 return;
@@ -356,9 +447,140 @@ public partial class FolderTabStrip : UserControl
 
             _moving = true; // after CaptureMouse: taking the capture resets the press state of a previous one
             _pressed = tab;
+            StartGhost(tab);
         }
 
+        _ghost?.MoveTo(Tabs.PointToScreen(p));
+        if (_groupDrag)
+        {
+            MoveGroupTowards(tab, p.X); // along the strip only: a group is not dropped on a pane
+            return;
+        }
+
+        // Below the strip: over the panes (the window marks the pane it would go in). Back on the strip: reordering again.
+        bool overPanes = p.Y > Tabs.ActualHeight + DragOutMargin;
+        if (overPanes)
+        {
+            if (_shownAtPress is { } before)
+            {
+                // The press showed the tab; the drop is on what was on screen then: it comes back
+                // (kept built: MainWindow.BuildPanes), and the tab is shown on release, as before.
+                _shownAtPress = null;
+                _selectOnRelease = true;
+                _vm.RestoreShown(before);
+            }
+
+            _overPanes = true;
+            bool target = TabDraggedOverPanes?.Invoke(tab, Tabs.PointToScreen(p)) ?? false;
+            Tabs.Cursor = target ? Cursors.Hand : Cursors.No;
+            return;
+        }
+
+        EndOverPanes(tab);
         MoveTowards(tab, p.X);
+    }
+
+    /// <summary>The element pressed is (in) the bar over a pane group's tabs.</summary>
+    private static bool OnGroupHandle(object? source)
+    {
+        for (var node = source as DependencyObject; node is not null and not ContentPresenter; node = System.Windows.Media.VisualTreeHelper.GetParent(node))
+        {
+            if (node is FrameworkElement { Name: "GroupHandle" })
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The see-through picture of the dragged tab (or of the whole group for a drag by its bar).</summary>
+    private void StartGhost(TabLayoutViewModel tab)
+    {
+        EndDragVisuals();
+        var block = _groupDrag && _vm?.StripBlocks().FirstOrDefault(b => b.Contains(tab)) is { } tabs ? tabs : [tab];
+        if (EdgesOf(block[0]) is { } first && EdgesOf(block[^1]) is { } last)
+        {
+            _ghost = DragGhost.Start(Tabs, new Rect(first.Left, 0, Math.Max(0, last.Right - first.Left), Tabs.ActualHeight), _pressedAt);
+        }
+
+        if (_groupDrag)
+        {
+            Tabs.Cursor = Cursors.SizeAll;
+        }
+    }
+
+    private void EndDragVisuals()
+    {
+        _ghost?.End();
+        _ghost = null;
+        if (_groupDrag)
+        {
+            Tabs.ClearValue(CursorProperty);
+        }
+    }
+
+    /// <summary>
+    /// A group dragged by its bar moves past the block beside it (a tab, or another group as a whole)
+    /// once the pointer is past that block's middle, as a single tab does.
+    /// </summary>
+    private void MoveGroupTowards(TabLayoutViewModel tab, double x)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        for (int guard = 0; guard < 64; guard++)
+        {
+            var blocks = _vm.StripBlocks();
+            int at = -1;
+            for (int i = 0; i < blocks.Count && at < 0; i++)
+            {
+                at = blocks[i].Contains(tab) ? i : -1;
+            }
+
+            if (at < 0)
+            {
+                return;
+            }
+
+            bool right = at + 1 < blocks.Count && MiddleOf(blocks[at + 1]) is { } r && x > r;
+            bool left = !right && at > 0 && MiddleOf(blocks[at - 1]) is { } l && x < l;
+            if (!(right || left) || !_vm.MoveGroupBlock(tab, right))
+            {
+                return;
+            }
+
+            Tabs.UpdateLayout(); // the next move is judged against the new positions
+        }
+    }
+
+    /// <summary>Horizontal middle of a block of tabs, in the strip's coordinates (null: not realized).</summary>
+    private double? MiddleOf(IReadOnlyList<TabLayoutViewModel> block) =>
+        EdgesOf(block[0]) is { } first && EdgesOf(block[^1]) is { } last ? (first.Left + last.Right) / 2 : null;
+
+    /// <summary>How far below the strip a dragged tab is still over it (DIP).</summary>
+    private const double DragOutMargin = 8;
+
+    /// <summary>
+    /// The pointer is over the panes while a tab is dragged (in screen coordinates): the window marks
+    /// the pane the tab would go in; true when there is one. Null: the pointer left the panes (back on
+    /// the strip, or the drag ended): the mark goes.
+    /// </summary>
+    public event Func<TabLayoutViewModel, Point?, bool>? TabDraggedOverPanes;
+
+    /// <summary>A dragged tab was released over the panes (screen coordinates): true when a pane took it.</summary>
+    public event Func<TabLayoutViewModel, Point, bool>? TabDroppedOnPanes;
+
+    private void EndOverPanes(TabLayoutViewModel tab)
+    {
+        if (_overPanes)
+        {
+            _overPanes = false;
+            Tabs.ClearValue(CursorProperty);
+            TabDraggedOverPanes?.Invoke(tab, null);
+        }
     }
 
     /// <summary>
@@ -406,16 +628,69 @@ public partial class FolderTabStrip : UserControl
             ? container.TranslatePoint(new Point(container.ActualWidth / 2, 0), Tabs).X
             : null;
 
-    private void EndPress()
+    private void EndPress(MouseButtonEventArgs e)
     {
         bool moving = _moving;
-        _moving = false;
+        bool select = _selectOnRelease;
+        bool group = _groupDrag;
+        var tab = _pressed;
+        _moving = false; // before the capture goes: LostMouseCapture must not end the drag a second time
         _pressed = null;
-        if (moving)
+        _selectOnRelease = false;
+        _shownAtPress = null;
+        EndDragVisuals();
+        _groupDrag = false;
+        if (tab is null || _vm is null)
+        {
+            return;
+        }
+
+        if (moving && group)
         {
             Tabs.ReleaseMouseCapture();
+            _vm.CommitGroupMove();
             RevealSelected();
+            return;
         }
+
+        if (!moving)
+        {
+            if (select)
+            {
+                _vm.SelectTabCommand.Execute(tab);
+            }
+
+            return;
+        }
+
+        bool overPanes = _overPanes;
+        Point at = Tabs.PointToScreen(e.GetPosition(Tabs));
+        Tabs.ReleaseMouseCapture();
+        if (overPanes)
+        {
+            // The drop first, while the window still shows what the drag was over: ending the drag over
+            // the panes first would close the snap bar, and committing the strip's moves first could take
+            // the tab out of its group and change the screen under the drop. A drop that lands lays the
+            // panes and the strip out itself; one that does not leaves the strip's moves to CommitTabMove.
+            bool dropped = TabDroppedOnPanes?.Invoke(tab, at) ?? false;
+            EndOverPanes(tab);
+            if (!dropped)
+            {
+                _vm.CommitTabMove(tab);
+            }
+
+            return;
+        }
+
+        EndOverPanes(tab);
+        _vm.CommitTabMove(tab); // the moves on the strip stand
+
+        if (select && _vm.Tabs.Contains(tab))
+        {
+            _vm.SelectTabCommand.Execute(tab);
+        }
+
+        RevealSelected();
     }
 
     /// <summary>Middle click closes the tab under the pointer.</summary>
@@ -447,26 +722,21 @@ public partial class FolderTabStrip : UserControl
         duplicate.Click += (_, _) => _ = vm.DuplicateTabAsync(tab);
         menu.Items.Add(duplicate);
 
-        // Panes: a folder tab splits (it is shown first, in the active pane); a tab in a pane of the
-        // split can leave it (the tab stays on the strip).
-        bool inSplit = tab.PaneSlot >= 0;
-        if (tab.IsFolderTab || inSplit)
-        {
-            menu.Items.Add(new Separator());
-        }
-
-        if (tab.IsFolderTab)
-        {
-            bool canSplit = vm.ShownLayout.Panes.Count < PaneRules.MaxPanes;
-            var columns = new MenuItem { Header = "左右に分割", IsEnabled = canSplit, InputGestureText = ShortcutCatalog.MainKeysOf(ShortcutId.SplitColumns) };
-            columns.Click += (_, _) => _ = vm.SplitTabAsync(tab, SplitAxis.Columns);
-            menu.Items.Add(columns);
-            var rows = new MenuItem { Header = "上下に分割", IsEnabled = canSplit, InputGestureText = ShortcutCatalog.MainKeysOf(ShortcutId.SplitRows) };
-            rows.Click += (_, _) => _ = vm.SplitTabAsync(tab, SplitAxis.Rows);
-            menu.Items.Add(rows);
-        }
-
-        if (inSplit)
+        // Panes: any tab splits (it is shown first; the new pane is empty); a tab goes into the active
+        // pane of the group (the one on screen, else the one shown last); a tab of the group on screen
+        // can leave it (the tab stays on the strip).
+        menu.Items.Add(new Separator());
+        bool canSplit = vm.CanSplitTab(tab);
+        var columns = new MenuItem { Header = "左右に分割", IsEnabled = canSplit, InputGestureText = ShortcutCatalog.MainKeysOf(ShortcutId.SplitColumns) };
+        columns.Click += (_, _) => _ = vm.SplitTabAsync(tab, SplitAxis.Columns);
+        menu.Items.Add(columns);
+        var rows = new MenuItem { Header = "上下に分割", IsEnabled = canSplit, InputGestureText = ShortcutCatalog.MainKeysOf(ShortcutId.SplitRows) };
+        rows.Click += (_, _) => _ = vm.SplitTabAsync(tab, SplitAxis.Rows);
+        menu.Items.Add(rows);
+        var putIn = new MenuItem { Header = "選択中のペインに入れる", IsEnabled = vm.CanPutInActivePane(tab) };
+        putIn.Click += (_, _) => _ = vm.PutInActivePaneAsync(tab);
+        menu.Items.Add(putIn);
+        if (tab.IsOnScreen)
         {
             var closePane = new MenuItem { Header = "ペインを閉じる" };
             closePane.Click += (_, _) => vm.ClosePane(tab.ActivePane);

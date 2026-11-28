@@ -54,7 +54,8 @@
         </Style>
     </Window.Resources>
     <!--
-      The settings in tabs (表示 / 操作 / フォルダ / 履歴 / データ; Ctrl+Tab and Ctrl+PageDown switch).
+      The settings in tabs (表示 / 操作 / フォルダ / 履歴 / データ / ペイン; Ctrl+Tab and Ctrl+PageDown switch).
+      New tabs go at the end: SettingsWindow.OnOk finds the page of an invalid field by its index.
       The pages lie on top of each other and those not shown are Hidden, not Collapsed: the window
       is as tall as the tallest page and does not jump when the tab changes. It is at most as tall as
       the main window (MainWindow.ShowSettings sets MaxHeight): the page scrolls above the message
@@ -75,6 +76,8 @@
                              ToolTip="開き方・右クリックのメニュー・エクスプローラー" />
                 <RadioButton x:Name="TabFolders" Style="{StaticResource PageTab}" GroupName="Page" Content="フォルダ" Checked="OnTabChecked"
                              ToolTip="隠しファイル・フォルダの自動更新" />
+                <RadioButton x:Name="TabPanes" Style="{StaticResource PageTab}" GroupName="Page" Content="ペイン" Checked="OnTabChecked"
+                             ToolTip="登録ペイン・ペインを閉じるときの動作" />
                 <RadioButton x:Name="TabHistory" Style="{StaticResource PageTab}" GroupName="Page" Content="履歴" Checked="OnTabChecked"
                              ToolTip="最近の履歴・よく使う項目" />
                 <RadioButton x:Name="TabData" Style="{StaticResource PageTab}" GroupName="Page" Content="データ" Checked="OnTabChecked"
@@ -119,6 +122,16 @@
                     </Border>
                     <TextBlock Text="サイドバー・カード・詳細表示・中身の一覧（オーバーレイ・フライアウト）の文字を大きくします（タブ・ツールバー・メニュー・プレビューは変わりません）。OK を押すと切り替わります。"
                                Style="{StaticResource Help}" Margin="0,6,0,0" />
+
+                    <TextBlock Text="詳細表示" Style="{StaticResource Section}" />
+                    <CheckBox Content="名前列に対してカスケードを表示する" IsChecked="{Binding DetailsCascadeOnNameColumn}" />
+                    <TextBlock Text="オンにすると、フォルダの行の名前の列のどこに止まっても中身の一覧を出します（一覧は名前の列の右に出ます）。オフのときは、名前（アイコンと文字）の上に止まったときだけ、名前のすぐ右に出します。"
+                               Style="{StaticResource Help}" Margin="20,0,0,0" />
+
+                    <TextBlock Text="タブ" Style="{StaticResource Section}" />
+                    <CheckBox Content="タブバーの重複を許可する" IsChecked="{Binding AllowDuplicateTabs}" />
+                    <TextBlock Text="オンにすると、登録フォルダ・ドライブなどからフォルダを開くとき、同じフォルダのタブがあっても新しいタブで開きます。オフのときは、そのフォルダのタブ（ペインに表示中のものを優先）を表示します。"
+                               Style="{StaticResource Help}" Margin="20,0,0,0" />
                 </StackPanel>
 
                 <!-- 操作 -->
@@ -201,8 +214,8 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="90" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="更新の間隔（秒、2〜3600）" VerticalAlignment="Center" />
-                        <TextBox x:Name="IntervalBox" InputMethod.IsInputMethodEnabled="False" Grid.Column="1" Style="{StaticResource Input}" Text="{Binding AutoRefreshSecondsText, UpdateSourceTrigger=PropertyChanged}"
+                        <TextBlock x:Name="IntervalLabel" Text="更新の間隔（秒、2〜3600）" VerticalAlignment="Center" />
+                        <TextBox x:Name="IntervalBox" AutomationProperties.LabeledBy="{Binding ElementName=IntervalLabel}" InputMethod.IsInputMethodEnabled="False" Grid.Column="1" Style="{StaticResource Input}" Text="{Binding AutoRefreshSecondsText, UpdateSourceTrigger=PropertyChanged}"
                                  IsEnabled="{Binding IsAutoRefreshInterval}" Margin="0,3" />
                     </Grid>
                     <TextBlock Text="表示中のフォルダを指定の間隔で確認し、ファイルの追加・削除・名前の変更・書き換えがあれば一覧を更新します（選択とスクロール位置は残ります）。名前・アドレスの入力中、メニュー・オーバーレイ・ダイアログの表示中、ドラッグ中、操作の直後、最小化中は待ちます。応答のないフォルダは間隔を延ばし、一覧は消しません。"
@@ -223,10 +236,10 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <TextBlock Text="最近の履歴の表示件数（10〜500）" VerticalAlignment="Center" />
-                        <TextBox x:Name="RecentBox" InputMethod.IsInputMethodEnabled="False" Grid.Column="1" Style="{StaticResource Input}" Text="{Binding RecentLimitText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
-                        <TextBlock Grid.Row="1" Text="よく使う項目の表示件数（10〜200）" VerticalAlignment="Center" />
-                        <TextBox x:Name="FrequentBox" InputMethod.IsInputMethodEnabled="False" Grid.Row="1" Grid.Column="1" Style="{StaticResource Input}" Text="{Binding FrequentLimitText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
+                        <TextBlock x:Name="RecentLabel" Text="最近の履歴の表示件数（10〜500）" VerticalAlignment="Center" />
+                        <TextBox x:Name="RecentBox" AutomationProperties.LabeledBy="{Binding ElementName=RecentLabel}" InputMethod.IsInputMethodEnabled="False" Grid.Column="1" Style="{StaticResource Input}" Text="{Binding RecentLimitText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
+                        <TextBlock x:Name="FrequentLabel" Grid.Row="1" Text="よく使う項目の表示件数（10〜200）" VerticalAlignment="Center" />
+                        <TextBox x:Name="FrequentBox" AutomationProperties.LabeledBy="{Binding ElementName=FrequentLabel}" InputMethod.IsInputMethodEnabled="False" Grid.Row="1" Grid.Column="1" Style="{StaticResource Input}" Text="{Binding FrequentLimitText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
                     </Grid>
 
                     <TextBlock Text="統計" Style="{StaticResource Section}" />
@@ -243,8 +256,8 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="90" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="キャッシュの上限（MB、0〜8192。0 で保存しない）" VerticalAlignment="Center" TextWrapping="Wrap" />
-                        <TextBox x:Name="CacheBox" InputMethod.IsInputMethodEnabled="False" Grid.Column="1" Style="{StaticResource Input}" Text="{Binding ThumbCacheMbText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
+                        <TextBlock x:Name="CacheLabel" Text="キャッシュの上限（MB、0〜8192。0 で保存しない）" VerticalAlignment="Center" TextWrapping="Wrap" />
+                        <TextBox x:Name="CacheBox" AutomationProperties.LabeledBy="{Binding ElementName=CacheLabel}" InputMethod.IsInputMethodEnabled="False" Grid.Column="1" Style="{StaticResource Input}" Text="{Binding ThumbCacheMbText, UpdateSourceTrigger=PropertyChanged}" Margin="0,3" />
                     </Grid>
                     <TextBlock Text="一度表示した画像のサムネイルをデータフォルダの thumbs に保存し、次からすぐ表示します。変更は次回の起動から有効です。"
                                Style="{StaticResource Help}" />
@@ -253,6 +266,36 @@
                     <Button Style="{StaticResource Btn}" Content="データフォルダを開く" Command="{Binding OpenDataFolderCommand}" HorizontalAlignment="Left" />
                     <TextBlock Text="設定・登録フォルダ・履歴・ログ・サムネイルのキャッシュを置いているフォルダを、エクスプローラーで開きます。"
                                Style="{StaticResource Help}" Margin="0,6,0,0" />
+                </StackPanel>
+
+                <!-- ペイン (the two buttons act at once, as 統計のリセット does; the check boxes apply on OK) -->
+                <StackPanel x:Name="PagePanes" Visibility="Hidden">
+                    <TextBlock Text="登録ペイン" Style="{StaticResource Section}" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <!-- Enter here registers (OnPaneNameKeyDown), it does not press OK -->
+                        <TextBox x:Name="PaneNameBox" Style="{StaticResource Input}" Tag="登録ペインの名前" AutomationProperties.Name="登録ペインの名前"
+                                 Text="{Binding NewPaneName, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanRegisterPanes, Mode=OneTime}"
+                                 PreviewKeyDown="OnPaneNameKeyDown" Margin="0,3,8,3" />
+                        <Button Grid.Column="1" Style="{StaticResource Btn}" Content="現在のペインを登録する" Command="{Binding RegisterPanesCommand}"
+                                VerticalAlignment="Center" />
+                    </Grid>
+                    <TextBlock Text="{Binding RegisterPanesNote, Mode=OneTime}" Style="{StaticResource Help}" Margin="0,6,0,0" />
+                    <Button Style="{StaticResource Btn}" Content="現在のペインを上書きする" Command="{Binding OverwriteRegisteredPaneCommand}"
+                            HorizontalAlignment="Left" Margin="0,12,0,0" />
+                    <TextBlock Text="{Binding OverwritePaneNote}" Style="{StaticResource Help}" Margin="0,6,0,0" />
+                    <CheckBox Content="登録ペインの内容を自動記録する" IsChecked="{Binding PaneAutoRecord}" Margin="0,12,0,4" />
+                    <TextBlock Text="ペインで開くタブ・フォルダが変わるたびに、開いている登録ペインを上書きします。"
+                               Style="{StaticResource Help}" Margin="20,0,0,0" />
+                    <CheckBox IsChecked="{Binding PaneReuseOpenTabs}">
+                        <TextBlock Text="登録ペインを開くとき、同じフォルダのタブがあればそれを使う（タブを増やさない）" TextWrapping="Wrap" />
+                    </CheckBox>
+
+                    <TextBlock Text="ペインとタブ" Style="{StaticResource Section}" />
+                    <CheckBox Content="ペインを閉じたときにタブも閉じる" IsChecked="{Binding PaneCloseClosesTab}" />
                 </StackPanel>
             </Grid>
         </ScrollViewer>

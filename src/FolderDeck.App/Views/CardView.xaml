@@ -61,7 +61,7 @@
             </Border.RenderTransform>
             <Grid>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="{Binding Metrics.ThumbHeight, RelativeSource={RelativeSource AncestorType={x:Type views:CardGrid}}}" />
+                    <RowDefinition x:Name="ThumbRow" Height="{Binding Metrics.ThumbHeight, RelativeSource={RelativeSource AncestorType={x:Type views:CardGrid}}}" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 

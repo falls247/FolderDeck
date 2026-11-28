@@ -39,6 +39,9 @@ public sealed class OutgoingDrag(DataObject data, IReadOnlyList<string> paths, b
 
     /// <summary>Set by the window when the drag was dropped on one of the app's folders.</summary>
     public InAppDrop? Dropped { get; set; }
+
+    /// <summary>Set by the window when a folder of the drag was dropped on an empty pane and opens there (nothing is moved or watched).</summary>
+    public bool OpenedInPane { get; set; }
 }
 
 /// <summary>

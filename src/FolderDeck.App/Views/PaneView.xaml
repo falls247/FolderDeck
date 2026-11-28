@@ -10,6 +10,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:FolderDeck.Views"
              xmlns:layout="clr-namespace:FolderDeck.Core.Layout;assembly=FolderDeck.Core"
+             xmlns:vm="clr-namespace:FolderDeck.ViewModels"
              x:Name="Root">
     <UserControl.Resources>
         <views:NotEmptyToVisibilityConverter x:Key="NotEmptyToVis" />
@@ -135,7 +136,39 @@
                     <TextBlock Text="応答がありません（待機中…）" Foreground="{DynamicResource Brush.Muted}" />
                 </StackPanel>
             </Border>
+
+            <!-- An empty pane (of a group, or the blank page of ＋): what fills it. A press makes it the active pane first (ActivationRequested), so the buttons fill this one -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" MaxWidth="460">
+                <StackPanel.Style>
+                    <Style TargetType="{x:Type StackPanel}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ShowsEmptyHint, ElementName=Root}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </StackPanel.Style>
+                <TextBlock Text="空のペイン" FontWeight="SemiBold" HorizontalAlignment="Center" Foreground="{DynamicResource Brush.Text}" />
+                <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" TextAlignment="Center" Foreground="{DynamicResource Brush.Muted}"
+                           Text="このペインを選んだまま、タブ列のタブ・登録フォルダ・ドライブを選ぶと、ここに表示します。タブやフォルダをここへドラッグしても開けます。" />
+                <WrapPanel HorizontalAlignment="Center" Margin="0,12,0,0">
+                    <Button Style="{StaticResource Btn}" Padding="12,5" Margin="4" Content="最近の履歴を開く"
+                            CommandParameter="{x:Static vm:TabKind.Recent}"
+                            Command="{Binding DataContext.OpenQuickTabCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" />
+                    <Button Style="{StaticResource Btn}" Padding="12,5" Margin="4" Content="よく使う項目を開く"
+                            CommandParameter="{x:Static vm:TabKind.Frequent}"
+                            Command="{Binding DataContext.OpenQuickTabCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" />
+                    <Button Style="{StaticResource Btn}" Padding="12,5" Margin="4" Content="このペインを閉じる"
+                            Command="{Binding DataContext.CloseActivePaneCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" />
+                </WrapPanel>
+            </StackPanel>
         </Grid>
+
+        <!-- A tab dragged from the strip would go in this pane (MainWindow: TabDraggedOverPanes) -->
+        <Border Grid.RowSpan="3" Margin="6" CornerRadius="8" BorderThickness="2" BorderBrush="{DynamicResource Brush.Accent}"
+                Background="{DynamicResource Brush.AccentSoft}" Opacity="0.6" IsHitTestVisible="False"
+                Visibility="{Binding IsTabDropTarget, ElementName=Root, Converter={StaticResource BoolToVis}}" />
 
         <!-- The active pane of a split tab: an accent frame over the whole pane (never in the way of the pointer) -->
         <Border Grid.RowSpan="3" BorderThickness="2" BorderBrush="{DynamicResource Brush.Accent}" IsHitTestVisible="False">

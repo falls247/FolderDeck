@@ -329,4 +329,100 @@ public class PaneLayoutTests
         Assert.Equal("(b / a)", Shape(layout.Root));
         Assert.Equal(PaneRules.MaxRatio, ((PaneSplit<string>)layout.Root).Ratio);
     }
+
+    [Fact]
+    public void Settings_TheLeafWriterAndReader_RoundTripEmptyPanes_ThroughTheirOwnLeaves()
+    {
+        // a | (_ / b): "_" stands for an empty pane, a pane object of its own in the app.
+        string empty = "_";
+        var layout = new PaneLayout<string>(new PaneSplit<string>(SplitAxis.Columns, 0.4,
+            new PaneLeaf<string>("a"), new PaneSplit<string>(SplitAxis.Rows, 0.5, new PaneLeaf<string>(empty), new PaneLeaf<string>("b"))));
+        var node = PaneLayoutSettings.ToSetting(layout, p => ReferenceEquals(p, empty) ? PaneNodeSetting.EmptyLeaf() : new PaneNodeSetting { Tab = new OpenTabSetting { Root = p } });
+        Assert.Equal(("columns", 0.4, "rows"), (node.Split, node.Ratio, node.Second!.Split));
+        Assert.Equal("a", node.First!.Tab!.Root);
+        Assert.True(node.Second.First!.Empty);
+        Assert.Null(node.Second.First.Pane);
+        Assert.Equal("b", node.Second.Second!.Tab!.Root);
+        Assert.True(PaneLayoutSettings.IsValidSaved(node));
+
+        var asked = new List<string>();
+        var back = PaneLayoutSettings.FromSetting(node, n =>
+        {
+            string item = n.Empty == true ? "empty" : n.Tab!.Root;
+            asked.Add(item);
+            return item;
+        })!;
+        Assert.Equal("(a | (empty / b))", Shape(back.Root));
+        Assert.Equal(["a", "empty", "b"], asked); // in reading order
+
+        // A leaf the reader cannot make, the same item twice, a tree of the wrong shape (the reader is not asked).
+        Assert.Null(PaneLayoutSettings.FromSetting<string>(node, n => n.Empty == true ? null : n.Tab!.Root));
+        Assert.Null(PaneLayoutSettings.FromSetting(node, _ => "same"));
+        asked.Clear();
+        Assert.Null(PaneLayoutSettings.FromSetting(PaneNodeSetting.EmptyLeaf(), n => { asked.Add("x"); return "x"; }));
+        Assert.Empty(asked);
+    }
+
+    public static TheoryData<string, int, bool> Groups => new()
+    {
+        { """{"split":"columns","first":{"pane":1},"second":{"empty":true}}""", 2, true },                     // a tab and an empty pane
+        { """{"split":"columns","first":{"pane":0},"second":{"empty":true}}""", 1, true },                     // one tab is enough
+        { """{"split":"columns","first":{"split":"rows","first":{"empty":true},"second":{"pane":2}},"second":{"split":"rows","first":{"empty":true},"second":{"empty":true}}}""", 3, true }, // four panes
+        { """{"split":"columns","first":{"empty":true},"second":{"empty":true}}""", 2, false },                // no tab
+        { """{"split":"columns","first":{"pane":0},"second":{"pane":0}}""", 2, false },                        // a tab twice
+        { """{"split":"columns","first":{"pane":2},"second":{"empty":true}}""", 2, false },                    // out of range
+        { """{"split":"columns","first":{"pane":0,"empty":true},"second":{"pane":1}}""", 2, false },           // a leaf that is both
+        { """{"split":"columns","first":{"tab":{"kind":"recent"}},"second":{"pane":1}}""", 2, false },          // a tab of a registered pane
+        { """{"empty":true}""", 2, false },                                                                     // one pane
+    };
+
+    [Theory]
+    [MemberData(nameof(Groups))]
+    public void Settings_IsValidGroup(string json, int itemCount, bool valid) =>
+        Assert.Equal(valid, PaneLayoutSettings.IsValidGroup(JsonSerializer.Deserialize<PaneNodeSetting>(json, JsonFile.Options), itemCount));
+
+    public static TheoryData<string, bool> SavedLayouts => new()
+    {
+        { """{"split":"columns","first":{"tab":{"kind":"folder","root":"E:\\a","path":"b\\c"}},"second":{"empty":true}}""", true },
+        { """{"split":"rows","first":{"tab":{"kind":" Recent ","root":"","path":""}},"second":{"tab":{"kind":"frequent"}}}""", true }, // fixed tabs at their top level
+        { """{"split":"rows","first":{"tab":{"root":"E:\\a"}},"second":{"tab":{"root":"E:\\a"}}}""", true },       // the same folder twice: two folder tabs
+        { """{"split":"rows","first":{"empty":true},"second":{"empty":true}}""", false },                             // no tab
+        { """{"split":"rows","first":{"tab":{"kind":"folder","root":" "}},"second":{"empty":true}}""", false },        // a folder tab without a root
+        { """{"split":"rows","first":{"tab":{"root":"E:\\a","path":"..\\b"}},"second":{"empty":true}}""", false },      // a path that climbs out
+        { """{"split":"rows","first":{"tab":{"kind":"bogus","root":"E:\\a"}},"second":{"empty":true}}""", false },      // an unknown kind
+        { """{"split":"rows","first":{"tab":{"kind":"recent"}},"second":{"tab":{"kind":"recent"}}}""", false },          // 最近の履歴 twice
+        { """{"split":"rows","first":{"pane":0},"second":{"tab":{"kind":"recent"}}}""", false },                          // an index of settings.json
+        { """{"tab":{"kind":"recent"}}""", false },                                                                       // one pane
+    };
+
+    [Theory]
+    [MemberData(nameof(SavedLayouts))]
+    public void Settings_IsValidSaved(string json, bool valid) =>
+        Assert.Equal(valid, PaneLayoutSettings.IsValidSaved(JsonSerializer.Deserialize<PaneNodeSetting>(json, JsonFile.Options)));
+
+    // ---- presets (the snap layouts of a tab dragged to the top of the panes) ----
+
+    [Fact]
+    public void Presets_PutPanesInReadingOrder_AndCoverTheSquare()
+    {
+        for (int preset = 0; preset < PanePresets.Count; preset++)
+        {
+            int count = PanePresets.ZoneCount(preset);
+            Assert.InRange(count, 2, PaneRules.MaxPanes);
+            var panes = Enumerable.Range(0, count).Select(i => $"p{i}").ToList();
+            var layout = PanePresets.Build(preset, panes);
+            Assert.Equal(panes, layout.Panes);
+            var zones = PanePresets.ZonesOf(preset);
+            Assert.Equal(count, zones.Count);
+            Assert.Equal(1.0, zones.Sum(z => z.Width * z.Height), 6);
+        }
+    }
+
+    [Fact]
+    public void Presets_ThreeColumns_AreEqual_AndWrongCountThrows()
+    {
+        var zones = PanePresets.ZonesOf(2);
+        Assert.All(zones, z => Assert.Equal(1.0 / 3, z.Width, 6));
+        Assert.Throws<ArgumentException>(() => PanePresets.Build(0, new[] { "a" }));
+    }
 }

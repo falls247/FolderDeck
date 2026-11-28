@@ -477,26 +477,53 @@ public sealed class ContextMenuFactory
         return entries;
     }
 
+    /// <summary>An empty pane of a group (the press made it the active one): only its pane entries.</summary>
+    public void ShowEmptyPane(FrameworkElement target)
+    {
+        var entries = new List<MenuEntry>();
+        AddPaneEntries(entries);
+        if (entries.Count > 0 && ReferenceEquals(entries[0], MenuEntry.Separator))
+        {
+            entries.RemoveAt(0);
+        }
+
+        Open(Render(entries, target));
+    }
+
+    /// <summary>
+    /// The menu of a 登録ペイン row of the sidebar: 開く, 現在のペインで上書き (a group on screen and 自動記録
+    /// off), 名前の変更, 削除.
+    /// </summary>
+    public void ShowRegisteredPane(RegisteredPaneItemViewModel row, FrameworkElement target)
+    {
+        var entries = new List<MenuEntry>
+        {
+            new("開く", OpenGlyph, true, () => _ = _vm.OpenRegisteredPaneAsync(row)),
+            new("現在のペインで上書き", SaveGlyph, _vm.CanOverwriteRegisteredPane(row), () => _vm.OverwriteRegisteredPane(row)),
+            MenuEntry.Separator,
+            new("名前の変更", RenameGlyph, true, () => _vm.RenameRegisteredPane(row)),
+            new("削除", DeleteGlyph, true, () => _vm.DeleteRegisteredPane(row)),
+        };
+        Open(Render(entries, target));
+    }
+
     /// <summary>
     /// The pane entries of the blank area: 「左右に分割」 / 「上下に分割」 of the pane of the right click
-    /// (it is the active one: the press made it so; a folder tab's pane only), and 「ペインを閉じる」
-    /// while the window is split (the tab stays on the strip). For that pane only (RunEntry may run
-    /// the action after the menu closed).
+    /// (it is the active one: the press made it so; any pane, the new half is empty), and 「ペインを閉じる」
+    /// while a group is on screen (the tab stays on the strip unless the setting closes it). For that
+    /// pane only (RunEntry may run the action after the menu closed).
     /// </summary>
     private void AddPaneEntries(List<MenuEntry> entries)
     {
-        if (!_vm.HasTab || (!_vm.SelectedTab.IsFolderTab && !_vm.IsSplit))
+        if (!_vm.HasPanes)
         {
-            return; // a fixed tab's pane does not split
+            return;
         }
 
         var pane = _vm.ActivePane;
         entries.Add(MenuEntry.Separator);
-        if (_vm.SelectedTab.IsFolderTab)
-        {
-            entries.Add(new("左右に分割", SplitColumnsGlyph, _vm.CanSplit, () => Split(SplitAxis.Columns), Keys: ShortcutId.SplitColumns));
-            entries.Add(new("上下に分割", SplitRowsGlyph, _vm.CanSplit, () => Split(SplitAxis.Rows), Keys: ShortcutId.SplitRows));
-        }
+        entries.Add(new("左右に分割", SplitColumnsGlyph, _vm.CanSplit, () => Split(SplitAxis.Columns), Keys: ShortcutId.SplitColumns));
+        entries.Add(new("上下に分割", SplitRowsGlyph, _vm.CanSplit, () => Split(SplitAxis.Rows), Keys: ShortcutId.SplitRows));
 
         if (_vm.IsSplit)
         {
@@ -898,6 +925,7 @@ public sealed class ContextMenuFactory
     private const string SplitColumnsGlyph = "\uE90D"; // DockRight
     private const string SplitRowsGlyph = "\uE90E"; // DockBottom
     private const string ClosePaneGlyph = "\uE711"; // Cancel
+    private const string SaveGlyph = "\uE74E"; // Save (\u767B\u9332\u30DA\u30A4\u30F3\u306E\u4E0A\u66F8\u304D)
 
     private sealed record MenuEntry(
         string? Header, string Glyph, bool Enabled, Action? Action, bool IsDefault = false, IReadOnlyList<MenuEntry>? Children = null,

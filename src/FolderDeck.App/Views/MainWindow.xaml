@@ -64,7 +64,7 @@
           </Grid>
       </Border>
 
-      <GridSplitter x:Name="SidebarSplitter" Grid.Column="1" Width="5" HorizontalAlignment="Center" VerticalAlignment="Stretch"
+      <GridSplitter x:Name="SidebarSplitter" Grid.Column="1" AutomationProperties.Name="サイドメニューの幅" Width="5" HorizontalAlignment="Center" VerticalAlignment="Stretch"
                     ResizeBehavior="PreviousAndNext" ResizeDirection="Columns" Focusable="False" Cursor="SizeWE"
                     Background="{DynamicResource Brush.Border}" ToolTip="ドラッグでサイドメニューの幅を変更"
                     DragStarted="OnSplitterDragStarted" DragCompleted="OnSplitterDragCompleted" />
@@ -81,17 +81,17 @@
         <!-- Sidebar toggle + tabs + settings (§5.1): one strip for every open tab (the row keeps its height without any tab) -->
         <Border Grid.Row="0" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
             <DockPanel Margin="8,0,8,0" MinHeight="38">
-                <Button DockPanel.Dock="Left" Style="{StaticResource Btn.Icon}" Content="&#xE90C;" ToolTip="サイドメニューを表示 / 隠す"
+                <Button DockPanel.Dock="Left" Style="{StaticResource Btn.Icon}" Content="&#xE90C;" ToolTip="サイドメニューを表示 / 隠す" AutomationProperties.Name="サイドメニューを表示 / 隠す"
                         Command="{Binding ToggleSidebarCommand}" VerticalAlignment="Center" Margin="0,0,6,0" />
-                <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Content="&#xE713;" ToolTip="設定"
+                <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Content="&#xE713;" ToolTip="設定" AutomationProperties.Name="設定"
                         Command="{Binding OpenSettingsCommand}" VerticalAlignment="Center" />
                 <views:FolderTabStrip x:Name="TabStrip" />
             </DockPanel>
         </Border>
 
-        <!-- Toolbar (§5.3): only while a tab is shown -->
+        <!-- Toolbar (§5.3): while a tab or a pane group is shown (an empty pane may be the active one) -->
         <Border Grid.Row="1" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
-                Padding="8,6" Visibility="{Binding HasTab, Converter={StaticResource BoolToVis}}">
+                Padding="8,6" Visibility="{Binding HasPanes, Converter={StaticResource BoolToVis}}">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -104,7 +104,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <Button Grid.Column="0" Style="{StaticResource Btn.Icon}" Content="&#xE74A;" ToolTip="{views:ShortcutTip Text=1つ上へ, Id=Up}"
+                <Button Grid.Column="0" Style="{StaticResource Btn.Icon}" Content="&#xE74A;" ToolTip="{views:ShortcutTip Text=1つ上へ, Id=Up}" AutomationProperties.Name="1つ上へ"
                         Command="{Binding GoUpCommand}" />
 
                 <!--
@@ -203,7 +203,7 @@
                                 <TextBlock Text="&#xE721;" FontFamily="{StaticResource Font.Icons}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"
                                            Foreground="{DynamicResource Brush.Accent}" />
                                 <TextBlock Text="{Binding ActivePane.SearchText}" MaxWidth="180" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                                <Button Style="{StaticResource Btn.TabClose}" Margin="4,0,0,0" ToolTip="検索を解除" Click="OnSearchClearClick" />
+                                <Button Style="{StaticResource Btn.TabClose}" Margin="4,0,0,0" ToolTip="検索を解除" AutomationProperties.Name="検索を解除" Click="OnSearchClearClick" />
                             </StackPanel>
                         </Border>
                         <Border x:Name="SearchBox" Width="220" Visibility="Collapsed" CornerRadius="6" BorderThickness="1" Padding="6,0,0,0"
@@ -222,7 +222,7 @@
                 </StackPanel>
 
                 <!-- what the list of 最近の履歴 / よく使う項目 shows: everything, folders only, files only -->
-                <Button Grid.Column="4" Style="{StaticResource Btn}" Margin="0,0,8,0" Padding="10,4" Click="OnFilterClick"
+                <Button Grid.Column="4" Style="{StaticResource Btn}" Margin="0,0,8,0" Padding="10,4" Click="OnFilterClick" AutomationProperties.Name="表示する項目"
                         ToolTip="表示する項目（タブごと）：すべて / フォルダのみ / ファイルのみ"
                         Visibility="{Binding ActivePane.ShowFilter, Converter={StaticResource BoolToVis}}">
                     <StackPanel Orientation="Horizontal">
@@ -234,7 +234,7 @@
                 </Button>
 
                 <!-- sort mode of the selected tab -->
-                <Button Grid.Column="5" Style="{StaticResource Btn}" Margin="0,0,10,0" Padding="10,4" Click="OnSortClick"
+                <Button Grid.Column="5" Style="{StaticResource Btn}" Margin="0,0,10,0" Padding="10,4" Click="OnSortClick" AutomationProperties.Name="並べ替え"
                         ToolTip="並べ替え（タブごと。一覧の空いているところの右クリックからも選べます）。一覧はドラッグで並べた順、フォルダの中は既定の順（フォルダ→ファイル、名前順）が「手動」です。ピン留めした項目は位置が固定されます。">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8CB;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
@@ -277,27 +277,61 @@
                         </StackPanel>
                     </RadioButton>
 
-                    <!-- split the active pane (MainViewModel.SplitPaneCommand): left | right, top / bottom -->
-                    <Button Style="{StaticResource Btn.Icon}" Width="30" Height="28" Margin="10,0,0,0"
-                            ToolTip="{views:ShortcutTip Text=左右に分割, Id=SplitColumns}" AutomationProperties.Name="左右に分割"
+                    <!-- split the active pane (MainViewModel.SplitPaneCommand): left | right, top / bottom; at the pane limit they close the pane beside it -->
+                    <Button Width="30" Height="28" Margin="10,0,0,0"
                             ToolTipService.ShowOnDisabled="True"
                             Command="{Binding SplitPaneCommand}" CommandParameter="{x:Static layout:SplitAxis.Columns}">
+                        <Button.Style>
+                            <Style TargetType="{x:Type Button}" BasedOn="{StaticResource Btn.Icon}">
+                                <Setter Property="ToolTip" Value="{views:ShortcutTip Text=左右に分割, Id=SplitColumns}" />
+                                <Setter Property="AutomationProperties.Name" Value="左右に分割" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsPaneLimitReached}" Value="True">
+                                        <Setter Property="ToolTip" Value="右（なければ左）のペインを閉じる（ペインは 4 個まで）" />
+                                        <Setter Property="AutomationProperties.Name" Value="右（なければ左）のペインを閉じる（ペインは 4 個まで）" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
                         <Grid Width="14" Height="12">
                             <Rectangle RadiusX="1.5" RadiusY="1.5" StrokeThickness="1.5"
                                        Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
                             <Rectangle Width="1.5" HorizontalAlignment="Center"
                                        Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                            <!-- at the pane limit the button closes a pane: a small × in the half it closes -->
+                            <TextBlock Text="&#xE711;" FontFamily="{StaticResource Font.Icons}" FontSize="6"
+                                       HorizontalAlignment="Right" VerticalAlignment="Center"
+                                       Margin="0,0,2,0"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}"
+                                       Visibility="{Binding IsPaneLimitReached, Converter={StaticResource BoolToVis}}" />
                         </Grid>
                     </Button>
-                    <Button Style="{StaticResource Btn.Icon}" Width="30" Height="28" Margin="2,0,0,0"
-                            ToolTip="{views:ShortcutTip Text=上下に分割, Id=SplitRows}" AutomationProperties.Name="上下に分割"
+                    <Button Width="30" Height="28" Margin="2,0,0,0"
                             ToolTipService.ShowOnDisabled="True"
                             Command="{Binding SplitPaneCommand}" CommandParameter="{x:Static layout:SplitAxis.Rows}">
+                        <Button.Style>
+                            <Style TargetType="{x:Type Button}" BasedOn="{StaticResource Btn.Icon}">
+                                <Setter Property="ToolTip" Value="{views:ShortcutTip Text=上下に分割, Id=SplitRows}" />
+                                <Setter Property="AutomationProperties.Name" Value="上下に分割" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsPaneLimitReached}" Value="True">
+                                        <Setter Property="ToolTip" Value="下（なければ上）のペインを閉じる（ペインは 4 個まで）" />
+                                        <Setter Property="AutomationProperties.Name" Value="下（なければ上）のペインを閉じる（ペインは 4 個まで）" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
                         <Grid Width="14" Height="12">
                             <Rectangle RadiusX="1.5" RadiusY="1.5" StrokeThickness="1.5"
                                        Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
                             <Rectangle Height="1.5" VerticalAlignment="Center"
                                        Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                            <!-- at the pane limit the button closes a pane: a small × in the half it closes -->
+                            <TextBlock Text="&#xE711;" FontFamily="{StaticResource Font.Icons}" FontSize="6"
+                                       HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                       Margin="0,0,0,1"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}"
+                                       Visibility="{Binding IsPaneLimitReached, Converter={StaticResource BoolToVis}}" />
                         </Grid>
                     </Button>
                 </StackPanel>
@@ -319,13 +353,13 @@
                     </StackPanel.Style>
                     <TextBlock Text="&#xE71E;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center"
                                Foreground="{DynamicResource Brush.Muted}" Margin="0,0,6,0" />
-                    <Slider x:Name="SizeSlider" Width="110" Minimum="120" Maximum="400" TickFrequency="20" SmallChange="20" LargeChange="40"
+                    <Slider x:Name="SizeSlider" AutomationProperties.Name="カードの大きさ" Width="110" Minimum="120" Maximum="400" TickFrequency="20" SmallChange="20" LargeChange="40"
                             IsSnapToTickEnabled="True" VerticalAlignment="Center" Focusable="False"
                             Value="{Binding CardSize, Mode=TwoWay}" />
                 </StackPanel>
 
                 <Grid Grid.Column="8">
-                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE72C;" ToolTip="{views:ShortcutTip Text=更新, Id=Refresh}"
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE72C;" ToolTip="{views:ShortcutTip Text=更新, Id=Refresh}" AutomationProperties.Name="更新"
                             Command="{Binding RefreshCommand}"
                             IsEnabled="{Binding ActivePane.IsLoading, Converter={StaticResource Not}}" />
                     <ContentControl Style="{StaticResource Spinner}" Width="16" Height="16"
@@ -340,7 +374,7 @@
             <Border Style="{StaticResource MessageBar}" Visibility="{Binding Message.ShowsAtTop, Converter={StaticResource BoolToVis}}">
                 <DockPanel>
                     <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="24" Height="22" FontSize="10" Content="&#xE711;"
-                            ToolTip="閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
+                            ToolTip="閉じる" AutomationProperties.Name="メッセージを閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
                     <TextBlock Text="{Binding Message.Text}" TextWrapping="Wrap" VerticalAlignment="Center" />
                 </DockPanel>
             </Border>
@@ -353,16 +387,29 @@
         -->
         <!-- transparent, not null: a press on the blank area clears the selection, a right click there offers 貼り付け -->
         <Grid x:Name="ContentHost" Grid.Row="3" Background="Transparent">
-            <!-- The panes of the shown tab: one PaneView each, with splitters between them (MainWindow.BuildPanes from ShownLayout) -->
-            <Border x:Name="PaneArea" />
+            <!--
+              The panes of the shown tab: one PaneView each, with splitters between them (MainWindow.BuildPanes
+              from ShownLayout), under one PaneScreenHost. The hosts of the layouts shown before stay here, collapsed.
+            -->
+            <Grid x:Name="PaneArea" />
 
-            <!-- Empty state: every tab was closed (the placeholder tab is selected: no cards, no texts of its own) -->
+            <!-- A tab dragged to the top of the panes: the layouts to drop it in (MainWindow.PaneDrag.cs draws them from PanePresets) -->
+            <Border x:Name="SnapBar" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,8,0,0" Padding="12,8,12,12" CornerRadius="10"
+                    Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1"
+                    Visibility="Collapsed" IsHitTestVisible="False" Panel.ZIndex="10">
+                <StackPanel>
+                    <TextBlock Text="配置を選んでドロップ" HorizontalAlignment="Center" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,0,0,8" />
+                    <StackPanel x:Name="SnapLayouts" Orientation="Horizontal" />
+                </StackPanel>
+            </Border>
+
+            <!-- Empty state: every tab was closed (the placeholder tab is selected: no cards, no texts of its own; an empty pane of a group has its own hint) -->
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
                 <StackPanel.Style>
                     <Style TargetType="{x:Type StackPanel}">
                         <Setter Property="Visibility" Value="Collapsed" />
                         <Style.Triggers>
-                            <DataTrigger Binding="{Binding HasTab}" Value="False">
+                            <DataTrigger Binding="{Binding HasPanes}" Value="False">
                                 <Setter Property="Visibility" Value="Visible" />
                             </DataTrigger>
                         </Style.Triggers>
@@ -385,7 +432,7 @@
                 Visibility="{Binding Message.ShowsAtBottom, Converter={StaticResource BoolToVis}}">
             <DockPanel>
                 <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Icon}" Width="24" Height="22" FontSize="10" Content="&#xE711;"
-                        ToolTip="閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
+                        ToolTip="閉じる" AutomationProperties.Name="メッセージを閉じる" Click="OnHideMessage" Foreground="{Binding (TextElement.Foreground), RelativeSource={RelativeSource AncestorType={x:Type Border}}}" />
                 <TextBlock Text="{Binding Message.Text}" TextWrapping="Wrap" VerticalAlignment="Center" />
             </DockPanel>
         </Border>
