@@ -17,8 +17,9 @@ namespace FolderDeck.Views;
 /// tab, dragging it sideways moves it among the others (they swap as the pointer passes the middle
 /// of a neighbour), dragging it down onto a pane of the group on screen puts it in that pane
 /// (<see cref="TabDraggedOverPanes"/> / <see cref="TabDroppedOnPanes"/>), a middle click or × closes it.
-/// A press on a tab outside the group on screen shows it only when the button is released without a
-/// drag (shown at once, the group would leave the screen before the tab could be dropped on a pane).
+/// A press on a tab that is not on screen (outside the group on screen, or any other tab than the one
+/// shown alone) shows it only when the button is released without a drag (shown at once, what is on
+/// screen would leave it before the tab could be dropped on a pane or a snap layout).
 /// The bar over a pane group's tabs, dragged, moves the whole group past the tabs and groups beside it.
 /// A drag shows a see-through picture of what it holds under the pointer (<see cref="DragGhost"/>). When the tabs do not fit, ◀ / ▶ appear on the
 /// left (next to the sidebar button) and step one tab at a time, and the wheel (vertical or
@@ -372,7 +373,10 @@ public partial class FolderTabStrip : UserControl
         _overPanes = false;
         Interacted?.Invoke();
         _groupDrag = tab.IsGrouped && OnGroupHandle(e.OriginalSource);
-        _selectOnRelease = _groupDrag || (_vm.IsSplit && !tab.IsOnScreen); // a click still fills an active empty pane (on release)
+        // A tab that is not on screen is shown on release: what is on screen at the press (a group, or the
+        // tab shown alone) stays for a drop on a pane or a snap layout, which lays it out with the dragged tab.
+        // A click still fills an active empty pane (on release).
+        _selectOnRelease = _groupDrag || (!tab.IsOnScreen && !ReferenceEquals(tab, _vm.SelectedTab));
         if (!_selectOnRelease)
         {
             _vm.SelectTabCommand.Execute(tab);
@@ -604,14 +608,19 @@ public partial class FolderTabStrip : UserControl
         }
 
         bool overPanes = _overPanes;
-        EndOverPanes(tab);
+        Point at = Tabs.PointToScreen(e.GetPosition(Tabs));
         Tabs.ReleaseMouseCapture();
         _vm.CommitTabMove(tab); // the moves on the strip before it left it stand
         if (overPanes)
         {
-            TabDroppedOnPanes?.Invoke(tab, Tabs.PointToScreen(e.GetPosition(Tabs)));
+            // The drop first, while the window still shows what the drag was over: ending the drag over
+            // the panes first would close the snap bar, and a release on it would then miss its layouts.
+            TabDroppedOnPanes?.Invoke(tab, at);
+            EndOverPanes(tab);
             return;
         }
+
+        EndOverPanes(tab);
 
         if (select && _vm.Tabs.Contains(tab))
         {
