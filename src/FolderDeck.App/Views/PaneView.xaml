@@ -137,19 +137,15 @@
                 </StackPanel>
             </Border>
 
-            <!-- An empty pane of a group (the placeholder's pane while split): what fills it. A press makes it the active pane first (ActivationRequested), so the buttons fill this one -->
+            <!-- An empty pane (of a group, or the blank page of ＋): what fills it. A press makes it the active pane first (ActivationRequested), so the buttons fill this one -->
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" MaxWidth="460">
                 <StackPanel.Style>
                     <Style TargetType="{x:Type StackPanel}">
                         <Setter Property="Visibility" Value="Collapsed" />
                         <Style.Triggers>
-                            <MultiDataTrigger>
-                                <MultiDataTrigger.Conditions>
-                                    <Condition Binding="{Binding IsPlaceholder}" Value="True" />
-                                    <Condition Binding="{Binding IsSplit, ElementName=Root}" Value="True" />
-                                </MultiDataTrigger.Conditions>
+                            <DataTrigger Binding="{Binding ShowsEmptyHint, ElementName=Root}" Value="True">
                                 <Setter Property="Visibility" Value="Visible" />
-                            </MultiDataTrigger>
+                            </DataTrigger>
                         </Style.Triggers>
                     </Style>
                 </StackPanel.Style>

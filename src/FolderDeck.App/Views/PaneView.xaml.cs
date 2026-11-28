@@ -24,6 +24,9 @@ public partial class PaneView : UserControl
     public static readonly DependencyProperty SlotProperty =
         DependencyProperty.Register(nameof(Slot), typeof(int), typeof(PaneView), new PropertyMetadata(-1));
 
+    public static readonly DependencyProperty ShowsEmptyHintProperty =
+        DependencyProperty.Register(nameof(ShowsEmptyHint), typeof(bool), typeof(PaneView), new PropertyMetadata(false));
+
     public static readonly DependencyProperty IsTabDropTargetProperty =
         DependencyProperty.Register(nameof(IsTabDropTarget), typeof(bool), typeof(PaneView), new PropertyMetadata(false));
 
@@ -61,6 +64,13 @@ public partial class PaneView : UserControl
     {
         get => (int)GetValue(SlotProperty);
         set => SetValue(SlotProperty, value);
+    }
+
+    /// <summary>The pane is an empty pane (of a group, or the blank page of ＋): its hint and buttons show.</summary>
+    public bool ShowsEmptyHint
+    {
+        get => (bool)GetValue(ShowsEmptyHintProperty);
+        set => SetValue(ShowsEmptyHintProperty, value);
     }
 
     /// <summary>A tab dragged from the strip would go in this pane if dropped now: the pane is marked.</summary>

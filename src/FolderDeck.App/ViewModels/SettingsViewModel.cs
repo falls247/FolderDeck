@@ -121,9 +121,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _paneCloseClosesTab;
 
-    /// <summary>ペイン: グループの外へドラッグしたタブのペインを空のペインとして残す (<see cref="AppSettings.PaneDragOutKeepsEmpty"/>).</summary>
+    /// <summary>表示: 名前列に対してカスケードを表示する (<see cref="AppSettings.DetailsCascadeOnNameColumn"/>).</summary>
     [ObservableProperty]
-    private bool _paneDragOutKeepsEmpty;
+    private bool _detailsCascadeOnNameColumn;
 
     /// <summary>The name typed for 「現在のペインを登録する」 (not a setting: the button acts at once).</summary>
     [ObservableProperty]
@@ -171,7 +171,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _paneAutoRecord = settings.PaneAutoRecord;
         _paneReuseOpenTabs = settings.PaneReuseOpenTabs;
         _paneCloseClosesTab = settings.PaneCloseClosesTab;
-        _paneDragOutKeepsEmpty = settings.PaneDragOutKeepsEmpty;
+        _detailsCascadeOnNameColumn = settings.DetailsCascadeOnNameColumn;
     }
 
     // One switch per theme (RadioButtons). Only "checked" counts: the one that gets unchecked
@@ -407,7 +407,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.PaneAutoRecord = PaneAutoRecord;
         settings.PaneReuseOpenTabs = PaneReuseOpenTabs;
         settings.PaneCloseClosesTab = PaneCloseClosesTab;
-        settings.PaneDragOutKeepsEmpty = PaneDragOutKeepsEmpty;
+        settings.DetailsCascadeOnNameColumn = DetailsCascadeOnNameColumn;
     }
 
     [RelayCommand]

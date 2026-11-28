@@ -47,6 +47,9 @@ public interface ICardHost
     /// <summary>Items open on a double click (setting ダブルクリックで開く); read at every press.</summary>
     bool OpensOnDoubleClick { get; }
 
+    /// <summary>A details row's whole name column (not only its name) opens a folder's list (setting 名前列に対してカスケードを表示する); read at every hover.</summary>
+    bool CascadeOnNameColumn { get; }
+
     /// <summary>The item was right-clicked: its menu opens on <paramref name="element"/>.</summary>
     void ItemContextMenu(CardViewModel vm, FrameworkElement element);
 

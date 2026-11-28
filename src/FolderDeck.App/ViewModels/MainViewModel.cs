@@ -293,6 +293,9 @@ public sealed partial class MainViewModel : ObservableObject
             group.LastActive = newValue.ActivePane;
         }
 
+        OnPropertyChanged(nameof(IsBlankPane));
+        OnPropertyChanged(nameof(CanAddBlankPane));
+
         if (newValue.IsPlaceholder)
         {
             return; // no tab: the toolbar is hidden; the last tab's view stays, new tabs start with it
@@ -452,7 +455,11 @@ public sealed partial class MainViewModel : ObservableObject
     {
         bool tabs = _tabsRestored;
         // An empty pane is active: the group's first tab stands for it (shown_group says which pane is active).
-        int selectedTab = Tabs.IndexOf(_shownGroup is { } shownGroup && IsEmptyPane(ActivePane) ? TabsOf(shownGroup).FirstOrDefault() ?? SelectedTab : SelectedTab); // -1: no tab is open
+        // The blank page of ＋ is not kept: the tab shown before it stands for it.
+        int selectedTab = Tabs.IndexOf(
+            IsBlankPane ? BlankBackTab ?? SelectedTab
+            : _shownGroup is { } shownGroup && IsEmptyPane(ActivePane) ? TabsOf(shownGroup).FirstOrDefault() ?? SelectedTab
+            : SelectedTab); // -1: no tab is open
         var openTabs = Tabs.Select(TabSetting).ToList();
         var (paneGroups, shownGroupIndex) = GroupSettings(Tabs.Select(t => t.ActivePane).ToList());
         RecordRegisteredPanes();
@@ -932,7 +939,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         RemoveFromStrip(tab);
-        bool lostEmpty = IsEmptyPane(ActivePane) && _shownGroup?.Layout.Contains(ActivePane) != true; // the group of the active empty pane ended
+        bool lostEmpty = IsEmptyPane(ActivePane) && !IsBlankPane && _shownGroup?.Layout.Contains(ActivePane) != true; // the group of the active empty pane ended
         if (wasSelected || lostEmpty)
         {
             var then = nearest ?? (Tabs.Count > 0 ? Tabs[Math.Min(index, Tabs.Count - 1)] : NoTab);
@@ -2860,6 +2867,9 @@ public sealed partial class MainViewModel : ObservableObject
     /// Read at every click, so OK in the settings applies without a restart.
     /// </summary>
     public bool OpensOnDoubleClick => Settings.OpenOnDoubleClick;
+
+    /// <summary>Details view: resting anywhere on a folder's name column opens its list (setting 名前列に対してカスケードを表示する).</summary>
+    public bool CascadeOnNameColumn => Settings.DetailsCascadeOnNameColumn;
 
     /// <summary>
     /// A plain click when items open on a double click: the item alone becomes the selection and

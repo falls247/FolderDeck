@@ -50,7 +50,7 @@ public partial class MainWindow
         }
 
         ShowSnapBar(false);
-        var view = screen is { } point && _vm.IsSplit ? PaneViewAtScreen(point) : null;
+        var view = screen is { } point && (_vm.IsSplit || _vm.IsBlankPane) ? PaneViewAtScreen(point) : null;
         if (view?.Pane is not { } pane || ReferenceEquals(pane, tab.ActivePane))
         {
             view = null;

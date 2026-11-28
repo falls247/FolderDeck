@@ -57,7 +57,7 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="{x:Type vm:TabLayoutViewModel}">
-                    <Grid x:Name="Tab" Height="38" MinWidth="76" MaxWidth="200" Margin="0,0,2,0" Background="Transparent" Cursor="Hand"
+                    <Grid x:Name="Tab" Height="38" MinWidth="76" MaxWidth="200" Margin="0,0,1,0" Background="Transparent" Cursor="Hand"
                           ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700"
                           MouseEnter="OnTabEnter" MouseMove="OnTabMove" MouseLeave="OnTabLeave">
                         <Border x:Name="Chip" Margin="0,5,0,5" CornerRadius="7" Background="Transparent" />
@@ -74,7 +74,7 @@
                         <Border x:Name="Line" Height="3" VerticalAlignment="Bottom" CornerRadius="2" Margin="8,0"
                                 Background="{DynamicResource Brush.Folder}" Visibility="Hidden" />
                         <!-- a pane group: one bar over its tabs (bridging the gap to the next tab of the group); dragged, it moves the whole group (FolderTabStrip) -->
-                        <Grid x:Name="GroupHandle" Height="7" VerticalAlignment="Top" Margin="0,0,-2,0" Background="Transparent" Cursor="SizeAll"
+                        <Grid x:Name="GroupHandle" Height="7" VerticalAlignment="Top" Margin="0,0,-1,0" Background="Transparent" Cursor="SizeAll"
                               Visibility="Hidden" ToolTip="ドラッグしてグループごと移動" ToolTipService.InitialShowDelay="700">
                             <Border x:Name="GroupBar" Height="2" VerticalAlignment="Top" Margin="0,1,0,0" CornerRadius="1"
                                     Background="{DynamicResource Brush.Border}" />
@@ -159,10 +159,10 @@
                             <Setter TargetName="Chip" Property="Opacity" Value="0.55" />
                         </MultiDataTrigger>
                         <DataTrigger Binding="{Binding IsGroupStart}" Value="True">
-                            <Setter TargetName="Tab" Property="Margin" Value="8,0,2,0" />
+                            <Setter TargetName="Tab" Property="Margin" Value="4,0,1,0" />
                         </DataTrigger>
                         <DataTrigger Binding="{Binding IsGroupEnd}" Value="True">
-                            <Setter TargetName="Tab" Property="Margin" Value="0,0,10,0" />
+                            <Setter TargetName="Tab" Property="Margin" Value="0,0,5,0" />
                             <Setter TargetName="GroupHandle" Property="Margin" Value="0" />
                         </DataTrigger>
                         <MultiDataTrigger>
@@ -170,16 +170,37 @@
                                 <Condition Binding="{Binding IsGroupStart}" Value="True" />
                                 <Condition Binding="{Binding IsGroupEnd}" Value="True" />
                             </MultiDataTrigger.Conditions>
-                            <Setter TargetName="Tab" Property="Margin" Value="8,0,10,0" />
+                            <Setter TargetName="Tab" Property="Margin" Value="4,0,5,0" />
                         </MultiDataTrigger>
                     </DataTemplate.Triggers>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
-        <!-- ＋: an empty pane right of the active one (MainViewModel.AddEmptyPane), right after the last tab -->
+        <!--
+          The blank page of ＋ while it is shown (MainViewModel.IsBlankPane): a tab of its own, drawn as the
+          selected folder tab, after the strip's tabs. It is no tab of Tabs (an empty pane's stand-in never
+          is): it does not move, and it goes once another tab is shown. × (and a middle click) close the
+          blank page as 「このペインを閉じる」 does: back to the tab shown before it.
+        -->
+        <Grid x:Name="BlankTab" Height="38" MinWidth="76" MaxWidth="200" Margin="0,0,1,0" Background="Transparent"
+              Visibility="{Binding IsBlankPane, Converter={StaticResource BoolToVis}}"
+              ToolTip="空のペイン（次に選んだタブ・フォルダをここに表示します）" ToolTipService.InitialShowDelay="700">
+            <Border Margin="0,5,0,5" CornerRadius="7" Background="{DynamicResource Brush.FolderSoft}" />
+            <DockPanel Margin="10,0,4,0">
+                <Button DockPanel.Dock="Right" Style="{StaticResource Btn.TabClose}" Command="{Binding CloseActivePaneCommand}"
+                        AutomationProperties.Name="空のペインを閉じる"
+                        ToolTip="{views:ShortcutTip Text=空のペインを閉じる, Id=CloseTab, Tail=。中クリックでも閉じます}" />
+                <TextBlock DockPanel.Dock="Left" Text="&#xE8B7;" FontFamily="{StaticResource Font.Icons}" FontSize="13"
+                           VerticalAlignment="Center" Margin="0,0,7,0" Foreground="{DynamicResource Brush.Folder}" />
+                <TextBlock Text="空のペイン" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center" Margin="0,0,4,0" Foreground="{DynamicResource Brush.Text}" />
+            </DockPanel>
+            <Border Height="3" VerticalAlignment="Bottom" CornerRadius="2" Margin="8,0" Background="{DynamicResource Brush.Folder}" />
+        </Grid>
+        <!-- ＋: a blank page of one empty pane (MainViewModel.AddEmptyPane), right after the last tab -->
         <Button x:Name="AddPaneButton" Style="{StaticResource Btn.Icon}" Width="30" Height="30" Margin="2,0,0,0" FontSize="12"
-                VerticalAlignment="Center" Content="&#xE710;" AutomationProperties.Name="空のペインを追加" Command="{Binding AddEmptyPaneCommand}" IsEnabled="{Binding CanSplit}"
-                ToolTip="空のペインを追加（選択中のペインを左右に分割）" ToolTipService.ShowOnDisabled="True" />
+                VerticalAlignment="Center" Content="&#xE710;" AutomationProperties.Name="空のペインを開く" Command="{Binding AddEmptyPaneCommand}" IsEnabled="{Binding CanAddBlankPane}"
+                ToolTip="空のペインを開く（次に選んだタブ・フォルダを 1 つだけで表示）" ToolTipService.ShowOnDisabled="True" />
         </StackPanel>
     </ScrollViewer>
     </DockPanel>

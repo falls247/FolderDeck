@@ -123,6 +123,11 @@
                     <TextBlock Text="サイドバー・カード・詳細表示・中身の一覧（オーバーレイ・フライアウト）の文字を大きくします（タブ・ツールバー・メニュー・プレビューは変わりません）。OK を押すと切り替わります。"
                                Style="{StaticResource Help}" Margin="0,6,0,0" />
 
+                    <TextBlock Text="詳細表示" Style="{StaticResource Section}" />
+                    <CheckBox Content="名前列に対してカスケードを表示する" IsChecked="{Binding DetailsCascadeOnNameColumn}" />
+                    <TextBlock Text="オンにすると、フォルダの行の名前の列のどこに止まっても中身の一覧を出します（一覧は名前の列の右に出ます）。オフのときは、名前（アイコンと文字）の上に止まったときだけ、名前のすぐ右に出します。"
+                               Style="{StaticResource Help}" Margin="20,0,0,0" />
+
                     <TextBlock Text="タブ" Style="{StaticResource Section}" />
                     <CheckBox Content="タブバーの重複を許可する" IsChecked="{Binding AllowDuplicateTabs}" />
                     <TextBlock Text="オンにすると、登録フォルダ・ドライブなどからフォルダを開くとき、同じフォルダのタブがあっても新しいタブで開きます。オフのときは、そのフォルダのタブ（ペインに表示中のものを優先）を表示します。"
@@ -291,9 +296,6 @@
 
                     <TextBlock Text="ペインとタブ" Style="{StaticResource Section}" />
                     <CheckBox Content="ペインを閉じたときにタブも閉じる" IsChecked="{Binding PaneCloseClosesTab}" />
-                    <CheckBox IsChecked="{Binding PaneDragOutKeepsEmpty}">
-                        <TextBlock Text="グループの外へドラッグしたタブのペインを空のペインとして残す（オフ：ペインを閉じる）" TextWrapping="Wrap" />
-                    </CheckBox>
                 </StackPanel>
             </Grid>
         </ScrollViewer>

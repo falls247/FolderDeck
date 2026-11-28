@@ -87,7 +87,9 @@
               pointer. Transparent, not null: the padding around the name must be hit too.
             -->
             <!-- NameColumn: the whole column, for the rename box (RenameEditor), which spans it -->
-            <DockPanel x:Name="NameColumn" Grid.Column="0">
+            <!-- with 名前列に対してカスケードを表示する (ICardHost.CascadeOnNameColumn) the whole column is the anchor instead: transparent, so its blank part is hit -->
+            <DockPanel x:Name="NameColumn" Grid.Column="0" Background="Transparent"
+                       MouseEnter="OnNameEnter" MouseLeave="OnNameLeave" MouseMove="OnNameMove">
                 <Border x:Name="NameCell" DockPanel.Dock="Left" Background="Transparent" Padding="6,0,8,0"
                         MouseEnter="OnNameEnter" MouseLeave="OnNameLeave" MouseMove="OnNameMove">
                     <DockPanel>

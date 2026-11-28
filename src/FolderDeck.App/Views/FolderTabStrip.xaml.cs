@@ -78,6 +78,18 @@ public partial class FolderTabStrip : UserControl
         Tabs.PreviewMouseDown += OnMouseDown;
         Tabs.MouseRightButtonUp += OnRightUp;
 
+        // The blank page's tab: a middle click closes it, as a tab's does.
+        BlankTab.PreviewMouseDown += (_, e) =>
+        {
+            _quietAt = e.GetPosition(this);
+            if (e.ChangedButton == MouseButton.Middle && _vm is not null)
+            {
+                e.Handled = true;
+                Interacted?.Invoke();
+                _vm.CloseActivePaneCommand.Execute(null);
+            }
+        };
+
         // Over the whole strip (the arrows too): the wheel up / down scrolls left / right.
         PreviewMouseWheel += (_, e) =>
         {
@@ -263,6 +275,11 @@ public partial class FolderTabStrip : UserControl
         if (e.PropertyName == nameof(MainViewModel.SelectedTab))
         {
             RevealSelected();
+        }
+        else if (e.PropertyName == nameof(MainViewModel.IsBlankPane) && _vm?.IsBlankPane == true)
+        {
+            // the blank page's tab after the last tab: scrolled into view once it is laid out
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => BlankTab.BringIntoView());
         }
     }
 
@@ -610,17 +627,24 @@ public partial class FolderTabStrip : UserControl
         bool overPanes = _overPanes;
         Point at = Tabs.PointToScreen(e.GetPosition(Tabs));
         Tabs.ReleaseMouseCapture();
-        _vm.CommitTabMove(tab); // the moves on the strip before it left it stand
         if (overPanes)
         {
             // The drop first, while the window still shows what the drag was over: ending the drag over
-            // the panes first would close the snap bar, and a release on it would then miss its layouts.
-            TabDroppedOnPanes?.Invoke(tab, at);
+            // the panes first would close the snap bar, and committing the strip's moves first could take
+            // the tab out of its group and change the screen under the drop. A drop that lands lays the
+            // panes and the strip out itself; one that does not leaves the strip's moves to CommitTabMove.
+            bool dropped = TabDroppedOnPanes?.Invoke(tab, at) ?? false;
             EndOverPanes(tab);
+            if (!dropped)
+            {
+                _vm.CommitTabMove(tab);
+            }
+
             return;
         }
 
         EndOverPanes(tab);
+        _vm.CommitTabMove(tab); // the moves on the strip stand
 
         if (select && _vm.Tabs.Contains(tab))
         {

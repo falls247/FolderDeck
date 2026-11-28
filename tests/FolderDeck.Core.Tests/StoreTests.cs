@@ -740,7 +740,7 @@ public class SettingsStoreTests
         Assert.False(s.PaneAutoRecord);
         Assert.True(s.PaneReuseOpenTabs);
         Assert.False(s.PaneCloseClosesTab);
-        Assert.False(s.PaneDragOutKeepsEmpty);
+        Assert.False(s.DetailsCascadeOnNameColumn);
     }
 
     private static string Describe(OpenTabSetting tab) => $"{tab.Kind}|{tab.Root}|{tab.Path}";

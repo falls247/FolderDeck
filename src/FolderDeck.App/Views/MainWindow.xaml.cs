@@ -670,7 +670,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 }
                 else
                 {
-                    _vm.ClosePane(_vm.ActivePane);
+                    _vm.CloseActivePaneCommand.Execute(null); // an empty pane; the blank page of ＋ goes back to the tab before it
                 }
 
                 break;
@@ -1132,8 +1132,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             CardView card => _cascade.OpenFromKeys(card),
             DetailsRowView row when CardAnchor.For(folder, _vm.Services.Icons) is { } anchor => anchor.File is not null
-                ? _cascade.OpenPreviewFromKeys(row.NameCell, anchor)
-                : _cascade.OpenFromKeys(row.NameCell, anchor),
+                ? _cascade.OpenPreviewFromKeys(row.CascadeAnchor, anchor)
+                : _cascade.OpenFromKeys(row.CascadeAnchor, anchor),
             _ => false,
         };
     }
@@ -1849,6 +1849,8 @@ public partial class MainWindow : Window, IMainView, ICardHost
     }
 
     public bool OpensOnDoubleClick => _vm.OpensOnDoubleClick;
+
+    public bool CascadeOnNameColumn => _vm.CascadeOnNameColumn;
 
     // ---- the name's edit box (F2, 名前の変更, 新しいフォルダー) -------------------------------------
 
@@ -3134,6 +3136,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         foreach (var (pane, view) in _shownViews)
         {
             view.IsSplit = split;
+            view.ShowsEmptyHint = _vm.IsEmptyPane(pane);
             view.IsActive = ReferenceEquals(pane, _vm.ActivePane);
             view.Slot = split ? _vm.SlotOf(pane) : -1;
         }

@@ -454,10 +454,10 @@ public sealed class AppSettings
     public bool PaneCloseClosesTab { get; set; }
 
     /// <summary>
-    /// グループの外へ出したタブのペインを空のペインとして残す: a group's tab dragged out of the group's block on
-    /// the strip leaves an empty pane (off: its pane closes).
+    /// 名前列に対してカスケードを表示する: in the details view, resting anywhere on a folder's name column
+    /// (not only on its name) opens its list, beside the column. Off by default.
     /// </summary>
-    public bool PaneDragOutKeepsEmpty { get; set; }
+    public bool DetailsCascadeOnNameColumn { get; set; }
 
     public static int ClampCardSize(int value) => Snap(value, CardSizeMin, CardSizeMax, CardSizeStep);
 

@@ -57,20 +57,35 @@ public sealed partial class MainViewModel
     /// <summary>A group is on screen (more than one pane).</summary>
     public bool IsSplit => _shownGroup is not null;
 
-    /// <summary>Something is in the items area: a tab, or a group (whose active pane may be empty). False only for the empty window.</summary>
-    public bool HasPanes => HasTab || IsSplit;
+    /// <summary>Something is in the items area: a tab, a group (whose active pane may be empty), or the blank page of ＋. False only for the empty window.</summary>
+    public bool HasPanes => HasTab || IsSplit || IsBlankPane;
+
+    /// <summary>The empty pane the tab strip's ＋ opened last (shown alone, in no group: <see cref="IsBlankPane"/> while it is the active pane).</summary>
+    private PaneViewModel? _blankPane;
+
+    /// <summary>The tab that was shown when ＋ opened the blank page: 「このペインを閉じる」 goes back to it.</summary>
+    private TabLayoutViewModel? _beforeBlank;
+
+    /// <summary>
+    /// The blank page of ＋ is shown: one empty pane alone, in no group. The next tab picked is shown
+    /// alone (or with its group) in its place; it does not split.
+    /// </summary>
+    public bool IsBlankPane => _shownGroup is null && _blankPane is { } blank && ReferenceEquals(blank, ActivePane);
+
+    /// <summary>The tab strip's ＋ can open a blank page (not while one is shown).</summary>
+    public bool CanAddBlankPane => !IsBlankPane;
 
     /// <summary>The group on screen has <see cref="PaneRules.MaxPanes"/> panes: the toolbar's split buttons close a pane instead.</summary>
     public bool IsPaneLimitReached => _shownGroup is { } group && group.Layout.Panes.Count >= PaneRules.MaxPanes;
 
-    /// <summary>The active pane can split now (the menus): something is on screen and the group has room.</summary>
-    public bool CanSplit => HasPanes && !IsPaneLimitReached;
+    /// <summary>The active pane can split now (the menus): something is on screen and the group has room (the blank page of ＋ does not split).</summary>
+    public bool CanSplit => HasPanes && !IsPaneLimitReached && !IsBlankPane;
 
     /// <summary>The panes on screen that show a tab (empty panes have nothing to load or refresh); none while no tab is open.</summary>
     public IReadOnlyList<PaneViewModel> VisiblePanes =>
         _shownGroup is { } group ? group.Layout.Panes.Where(p => !IsEmptyPane(p)).ToList() : HasTab ? [ActivePane] : [];
 
-    private bool IsVisible(PaneViewModel pane) => _shownGroup?.Layout.Contains(pane) ?? (HasTab && ReferenceEquals(pane, ActivePane));
+    private bool IsVisible(PaneViewModel pane) => _shownGroup?.Layout.Contains(pane) ?? ((HasTab || IsBlankPane) && ReferenceEquals(pane, ActivePane));
 
     /// <summary><paramref name="pane"/> is an empty pane of a group (no tab in it).</summary>
     public bool IsEmptyPane(PaneViewModel pane) => _emptyTabs.ContainsKey(pane);
@@ -172,6 +187,8 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(HasPanes));
         OnPropertyChanged(nameof(IsPaneLimitReached));
         OnPropertyChanged(nameof(CanSplit));
+        OnPropertyChanged(nameof(IsBlankPane));
+        OnPropertyChanged(nameof(CanAddBlankPane));
         SplitPaneCommand.NotifyCanExecuteChanged();
         OnRegisteredPanesStateChanged();
     }
@@ -312,7 +329,7 @@ public sealed partial class MainViewModel
         return SplitActivePaneAsync(axis);
     }
 
-    private bool CanSplitPane(SplitAxis axis) => HasPanes && (!IsPaneLimitReached || PaneAlong(axis) is not null);
+    private bool CanSplitPane(SplitAxis axis) => HasPanes && !IsBlankPane && (!IsPaneLimitReached || PaneAlong(axis) is not null);
 
     /// <summary>
     /// The pane the split button of <paramref name="axis"/> closes at the pane limit: the one right of
@@ -342,21 +359,72 @@ public sealed partial class MainViewModel
         }
     }
 
-    /// <summary>「このペインを閉じる」 of an empty pane (a press in it made it the active pane first).</summary>
+    /// <summary>
+    /// 「このペインを閉じる」 of an empty pane (a press in it made it the active pane first), Ctrl + W on it.
+    /// The blank page of ＋ goes back to the tab shown before it.
+    /// </summary>
     [RelayCommand]
-    private void CloseActivePane() => ClosePane(ActivePane);
-
-    /// <summary>The tab strip's ＋: an empty pane right of the active pane (as 左右に分割), filled by the next tab picked.</summary>
-    [RelayCommand]
-    private Task AddEmptyPane()
+    private void CloseActivePane()
     {
-        if (!CanSplit)
+        if (IsBlankPane)
         {
-            Message.Info(HasPanes ? $"ペインは {PaneRules.MaxPanes} 個まで並べられます。" : "空のペインは、タブを開いてから追加できます。");
-            return Task.CompletedTask;
+            CloseBlankPane();
+            return;
         }
 
-        return SplitActivePaneAsync(SplitAxis.Columns);
+        ClosePane(ActivePane);
+    }
+
+    /// <summary>
+    /// The tab strip's ＋: a blank page, one empty pane alone (the group on screen, if any, leaves the
+    /// screen and stays on the strip). The next tab or folder picked is shown alone in its place, as a new
+    /// browser tab is filled; the toolbar's split buttons split no blank page.
+    /// </summary>
+    [RelayCommand]
+    private void AddEmptyPane()
+    {
+        if (IsBlankPane)
+        {
+            return;
+        }
+
+        View?.CloseCascade();
+        Message.ClearPersistent();
+        foreach (var shown in VisiblePanes)
+        {
+            shown.SavedScrollOffset = View?.GetScrollOffset(shown) ?? 0; // they come back where they were
+        }
+
+        _beforeBlank = Tabs.Contains(SelectedTab) ? SelectedTab : _shownGroup is { } group ? TabsOf(group).FirstOrDefault() : null;
+        LeaveSelectedTab();
+        var blank = NewEmptyPane();
+        _blankPane = blank.ActivePane;
+        _shownGroup = null; // SetShownGroup's notifications come with the new shown tab
+        SelectedTab = blank; // announces the layout (the blank pane alone), then the active pane
+        OnGroupsChanged();
+        SaveLocations();
+    }
+
+    /// <summary>
+    /// Where the blank page goes back to (closed, or saved as selected_tab): the tab shown before it while
+    /// it is still open, else the last tab; null without tabs.
+    /// </summary>
+    private TabLayoutViewModel? BlankBackTab => _beforeBlank is { } before && Tabs.Contains(before) ? before : Tabs.LastOrDefault();
+
+    /// <summary>The blank page closes: the tab shown before it comes back (else the last tab, else no tab).</summary>
+    private void CloseBlankPane()
+    {
+        var back = BlankBackTab;
+        _beforeBlank = null;
+        if (back is not null)
+        {
+            _ = SelectTabCommand.ExecuteAsync(back);
+            return;
+        }
+
+        SelectedTab = NoTab;
+        OnGroupsChanged();
+        SaveLocations();
     }
 
     /// <summary>
@@ -368,7 +436,7 @@ public sealed partial class MainViewModel
     /// </summary>
     public Task SplitActivePaneAsync(SplitAxis axis)
     {
-        if (!HasPanes)
+        if (!HasPanes || IsBlankPane)
         {
             return Task.CompletedTask;
         }
@@ -574,6 +642,12 @@ public sealed partial class MainViewModel
     public async Task PutInPaneAsync(TabLayoutViewModel tab, PaneViewModel target)
     {
         var pane = tab.ActivePane;
+        if (Tabs.Contains(tab) && IsBlankPane && ReferenceEquals(target, ActivePane))
+        {
+            await SelectTabCommand.ExecuteAsync(tab); // the blank page of ＋: the tab is shown in its place
+            return;
+        }
+
         if (!Tabs.Contains(tab) || ReferenceEquals(pane, target) || GroupOf(target) is not { } group)
         {
             return;
@@ -592,7 +666,7 @@ public sealed partial class MainViewModel
         }
         else
         {
-            TakeOutOfGroup(pane, Settings.PaneDragOutKeepsEmpty, out _);
+            TakeOutOfGroup(pane, keepEmpty: false, out _);
             if (!_groups.Contains(group) || !group.Layout.Contains(target))
             {
                 return; // cannot happen: the two groups are different
@@ -656,7 +730,7 @@ public sealed partial class MainViewModel
         var others = VisiblePanes.Where(p => !ReferenceEquals(p, pane)).ToList();
         if (GroupOf(pane) is { } own && !ReferenceEquals(own, group))
         {
-            TakeOutOfGroup(pane, Settings.PaneDragOutKeepsEmpty, out _);
+            TakeOutOfGroup(pane, keepEmpty: false, out _);
             if (group is not null && !_groups.Contains(group))
             {
                 group = null; // cannot happen: the two groups are different
@@ -799,8 +873,8 @@ public sealed partial class MainViewModel
     /// <summary>
     /// A drag of <paramref name="tab"/> on the strip ended (the moves themselves only reorder the
     /// strip). A tab of a group that is still next to the others of its group reorders the panes to the
-    /// strip's order; one dragged away from them leaves the group: its pane closes, or stays as an empty
-    /// pane (<see cref="AppSettings.PaneDragOutKeepsEmpty"/>). A tab dragged in between a group's tabs is
+    /// strip's order; one dragged away from them leaves the group: its pane closes and the tab is shown
+    /// alone (the rest of the group stays on the strip). A tab dragged in between a group's tabs is
     /// put after them (it joins a group only by a drop on a pane or the menu).
     /// </summary>
     public void CommitTabMove(TabLayoutViewModel tab)
@@ -811,6 +885,8 @@ public sealed partial class MainViewModel
         }
 
         bool layoutChanged = false;
+        bool shownAlone = false;
+        bool wasVisible = IsVisible(tab.ActivePane);
         if (GroupOf(tab.ActivePane) is { } group)
         {
             var members = TabsOf(group);
@@ -827,8 +903,9 @@ public sealed partial class MainViewModel
                     shown.SavedScrollOffset = View?.GetScrollOffset(shown) ?? 0;
                 }
 
-                TakeOutOfGroup(tab.ActivePane, Settings.PaneDragOutKeepsEmpty, out _);
+                TakeOutOfGroup(tab.ActivePane, keepEmpty: false, out _);
                 layoutChanged = true;
+                shownAlone = true;
             }
             else
             {
@@ -843,9 +920,16 @@ public sealed partial class MainViewModel
         }
 
         ArrangeGroupTabs();
-        if (layoutChanged)
+        if (layoutChanged && shownAlone && !wasVisible)
         {
+            // a tab of a group that was not on screen: shown alone through SelectTab, which loads a
+            // stale pane and brings back its scroll position (ActivateOnScreen only rearranges the screen)
             ActivateOnScreen(null);
+            _ = SelectTabCommand.ExecuteAsync(tab);
+        }
+        else if (layoutChanged)
+        {
+            ActivateOnScreen(shownAlone ? tab : null); // a tab dragged out of its group (on screen) is shown alone
         }
 
         SaveLocations();
