@@ -39,6 +39,43 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _openOnDoubleClick;
 
+    /// <summary>常駐モード: ログオン時に起動 (<see cref="AppSettings.StartAtLogin"/>).</summary>
+    [ObservableProperty]
+    private bool _startAtLogin;
+
+    /// <summary>名前で検索の範囲: the subfolders too (<see cref="AppSettings.SearchScopeRecursive"/>). The two switches below show and set it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSearchFolderOnly), nameof(IsSearchRecursive))]
+    private bool _searchRecursive;
+
+    public bool IsSearchFolderOnly
+    {
+        get => !SearchRecursive;
+        set
+        {
+            if (value)
+            {
+                SearchRecursive = false;
+            }
+        }
+    }
+
+    public bool IsSearchRecursive
+    {
+        get => SearchRecursive;
+        set
+        {
+            if (value)
+            {
+                SearchRecursive = true;
+            }
+        }
+    }
+
+    /// <summary>常駐モード: 閉じても終了しない (<see cref="AppSettings.KeepRunningOnClose"/>).</summary>
+    [ObservableProperty]
+    private bool _keepRunningOnClose;
+
     /// <summary>Right-click menu of items: the app's or Explorer's. The two switches below show and set it.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsItemMenuApp), nameof(IsItemMenuWindows))]
@@ -86,6 +123,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         _addToWindowsRecent = settings.AddToWindowsRecent;
         _openExplorerInNewTab = settings.OpenExplorerInNewTab;
         _openOnDoubleClick = settings.OpenOnDoubleClick;
+        _startAtLogin = settings.StartAtLogin;
+        _keepRunningOnClose = settings.KeepRunningOnClose;
+        _searchRecursive = settings.SearchesRecursively;
         _itemMenu = ItemMenuStyles.FromSetting(settings.ItemMenu);
         _messagePlacement = MessagePlacements.FromSetting(settings.MessagePosition);
         _autoRefresh = settings.AutoRefresh;
@@ -179,6 +219,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     public Func<string?>? ResetStatsAction { get; init; }
 
     public Action? OpenDataFolderAction { get; init; }
+
+    /// <summary>False with <c>--data-dir</c>: 「ログオン時に起動」 is kept in settings.json only.</summary>
+    public bool ManagesRunKey { get; init; } = true;
+
+    public string StartAtLoginNote => ManagesRunKey
+        ? "OK を押すと、この実行ファイルを Windows のスタートアップ（HKCU の Run）に登録・解除します。管理者の権限は要りません。"
+        : "--data-dir で起動しているため、Windows のスタートアップには登録・解除しません（設定ファイルにだけ保存します）。";
 
     public int RecentLimit { get; private set; }
 
@@ -281,6 +328,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.AddToWindowsRecent = AddToWindowsRecent;
         settings.OpenExplorerInNewTab = OpenExplorerInNewTab;
         settings.OpenOnDoubleClick = OpenOnDoubleClick;
+        settings.StartAtLogin = StartAtLogin;
+        settings.KeepRunningOnClose = KeepRunningOnClose;
+        settings.SearchScope = SearchRecursive ? AppSettings.SearchScopeRecursive : AppSettings.SearchScopeFolder;
         settings.ItemMenu = ItemMenuStyles.ToSetting(ItemMenu);
         settings.MessagePosition = MessagePlacements.ToSetting(MessagePlacement);
         settings.RecentLimit = RecentLimit;

@@ -788,7 +788,7 @@ public class SettingsStoreTests
 
         // details_columns: exactly the four known keys, a missing one at its default (a file written
         // before the name had a width loads with the default), a value out of range clamped
-        Assert.Equal(["name", "modified", "type", "size"], s.DetailsColumns!.Keys);
+        Assert.Equal(["name", "modified", "type", "size", .. DetailsPropertyColumns.All.Select(c => c.Id)], s.DetailsColumns!.Keys);
         Assert.Equal(DetailsColumns.Defaults[DetailsColumns.Name], s.DetailsColumns[DetailsColumns.Name]);
         Assert.Equal(DetailsColumns.Defaults[DetailsColumns.Modified], s.DetailsColumns[DetailsColumns.Modified]);
         Assert.Equal(DetailsColumns.Max, s.DetailsColumns[DetailsColumns.Type]);

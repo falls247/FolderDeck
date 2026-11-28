@@ -571,6 +571,11 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
         _shownListing = listing;
         LastListedAt = Environment.TickCount64;
         _ = CaptureIdentityAsync(Location, path);
+        if (IsSearching)
+        {
+            _ = Dispatcher.CurrentDispatcher.BeginInvoke(() => UpdateDeepSearch(restart: true)); // once the load is over (TransferTargetPath)
+        }
+
         return LoadOutcome.Ok;
     }
 
@@ -825,11 +830,162 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     public bool IsSearching => NameSearch.Terms(SearchText).Length > 0;
 
     /// <summary>The count beside the address bar: while searching, the matches of all items.</summary>
-    public string ShownCountText => IsSearching ? $"一致 {Cards.Count:N0} / {_orderedCards.Count:N0}" : CountText;
+    public string ShownCountText => !IsSearching ? CountText
+        : _deepRoot is null ? $"一致 {Cards.Count:N0} / {_orderedCards.Count:N0}"
+        : $"一致 {Cards.Count:N0}（サブフォルダを含む{(IsDeepSearching ? "・検索中…" : _deepEnd == DeepSearchEnd.Limit ? $"・上限 {DeepSearch.MaxResults:N0} 件" : string.Empty)}）";
 
     /// <summary>The text over an empty list: while searching with no match, that nothing matched.</summary>
     public string? ShownEmptyText =>
-        IsSearching && Cards.Count == 0 && _orderedCards.Count > 0 ? $"「{SearchText.Trim()}」に一致する項目はありません。" : EmptyText;
+        IsSearching && Cards.Count == 0 && IsDeepSearching ? "サブフォルダを検索しています…"
+        : IsSearching && Cards.Count == 0 && (_orderedCards.Count > 0 || _deepRoot is not null) ? $"「{SearchText.Trim()}」に一致する項目はありません。"
+        : EmptyText;
+
+    // ---- the search of the subfolders (setting search_scope = recursive) ----------------------
+
+    /// <summary>The matches below the shown folder's children, sorted by their folder, then name (after the folder's own matches in <see cref="Cards"/>).</summary>
+    private IReadOnlyList<CardViewModel> _deepCards = [];
+
+    /// <summary>The running (or finished) search of the subfolders: its folder, words and cancellation; null when none.</summary>
+    private string? _deepRoot;
+    private string? _deepQuery;
+    private CancellationTokenSource? _deepCts;
+    private DeepSearchEnd? _deepEnd;
+
+    /// <summary>The subfolders are still being searched (the count says so).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShownCountText), nameof(ShownEmptyText))]
+    private bool _isDeepSearching;
+
+    /// <summary>The folder the search of the subfolders starts from: the listed folder while it is on screen.</summary>
+    private string? DeepSearchRoot =>
+        !IsPlaceholder && !_baseIsTop && _shownListing is { } shown && PathTools.PathEquals(shown.Path, FolderTargetPath) ? shown.Path : null;
+
+    /// <summary>
+    /// Starts, keeps or stops the search of the subfolders for what the search box holds: it runs
+    /// while the box has words, the setting says <c>recursive</c> and a folder is on screen.
+    /// <paramref name="restart"/>: the folder was listed again (a file operation, F5): the old matches may be gone.
+    /// </summary>
+    public void UpdateDeepSearch(bool restart = false)
+    {
+        string? root = DeepSearchRoot;
+        string query = SearchText.Trim();
+        bool wanted = root is not null && IsSearching && _services.Stores.Settings.Current.SearchesRecursively;
+        if (wanted && !restart && _deepCts is not null && PathTools.PathEquals(root, _deepRoot) && query == _deepQuery)
+        {
+            return; // the same search runs or ran already
+        }
+
+        bool hadCards = _deepCards.Count > 0 || _deepRoot is not null;
+        CancelDeepSearch();
+        if (wanted)
+        {
+            var cts = new CancellationTokenSource();
+            _deepCts = cts;
+            _deepRoot = root;
+            _deepQuery = query;
+            IsDeepSearching = true;
+            _ = RunDeepSearchAsync(root!, query, cts);
+        }
+
+        if (hadCards || wanted)
+        {
+            Show(_orderedCards);
+        }
+    }
+
+    private void CancelDeepSearch()
+    {
+        _deepCts?.Cancel();
+        _deepCts = null;
+        _deepRoot = null;
+        _deepQuery = null;
+        _deepEnd = null;
+        _deepCards = [];
+        IsDeepSearching = false;
+    }
+
+    private async Task RunDeepSearchAsync(string root, string query, CancellationTokenSource cts)
+    {
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        var filter = _services.Listings.Filter;
+        var fs = _services.FileSystem;
+        var pins = PinSet();
+        var location = Location;
+        long started = Environment.TickCount64;
+        try
+        {
+            var end = await Task.Run(() => DeepSearch.RunAsync(
+                fs, root, query, filter, WindowsSearchIndex.Find,
+                batch => dispatcher.BeginInvoke(() => AddDeepCards(cts, location, root, batch, pins)),
+                cts.Token));
+            if (ReferenceEquals(cts, _deepCts))
+            {
+                _deepEnd = end;
+                IsDeepSearching = false;
+                AppLog.Info($"Deep search: {_deepCards.Count} matches below the children of {root} in {Environment.TickCount64 - started} ms ({end})");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"Deep search of {root} failed", ex);
+            if (ReferenceEquals(cts, _deepCts))
+            {
+                IsDeepSearching = false;
+            }
+        }
+    }
+
+    /// <summary>A batch of matches of the running search (UI thread); dropped when another search took its place.</summary>
+    private void AddDeepCards(CancellationTokenSource cts, NavLocation location, string root, IReadOnlyList<FsEntry> batch, PathSet pins)
+    {
+        if (!ReferenceEquals(cts, _deepCts) || Location != location)
+        {
+            return;
+        }
+
+        var added = new List<CardViewModel>(_deepCards.Count + batch.Count);
+        added.AddRange(_deepCards);
+        foreach (var e in batch)
+        {
+            string rel = Path.GetRelativePath(root, e.FullPath);
+            var card = new CardViewModel(_services, e.FullPath, e.IsDirectory ? CardKind.Folder : CardKind.File,
+                e.IsDirectory ? location with { Rel = PathTools.JoinRel(location.Rel, rel) } : null, ItemContext.InnerCard)
+            {
+                OwnerTab = Kind,
+                IsPinned = pins.Contains(e.FullPath),
+                SubText = Path.GetDirectoryName(rel), // the folder it is in, below the shown one
+            };
+            card.ModifiedUtc = e.LastWriteTimeUtc;
+            if (!e.IsDirectory)
+            {
+                card.Length = e.Length;
+            }
+
+            added.Add(card);
+        }
+
+        _deepCards = added
+            .OrderBy(c => c.SubText ?? string.Empty, NaturalComparer.Instance)
+            .ThenBy(c => c.Name, NaturalComparer.Instance)
+            .ToList();
+        if (AroundDeepBatch is { } around)
+        {
+            around(() => Show(_orderedCards));
+        }
+        else
+        {
+            Show(_orderedCards);
+        }
+    }
+
+    /// <summary>
+    /// Wraps the replacement of <see cref="Cards"/> by a batch of the subfolders' matches (set by
+    /// <c>MainViewModel</c>: the items view rebuilds its rows, the scroll position is put back).
+    /// </summary>
+    public Action<Action>? AroundDeepBatch { get; set; }
 
     /// <summary>The given order becomes the base (manual) order: after a drop.</summary>
     public void SetBaseOrder(IReadOnlyList<CardViewModel> order)
@@ -949,7 +1105,8 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     {
         _orderedCards = ordered;
         var filtered = FilterApplies ? ItemFilters.Apply(ordered, Filter, c => c.IsFolderLike) : ordered;
-        Cards = NameSearch.Apply(filtered, SearchText, c => c.Name);
+        var direct = NameSearch.Apply(filtered, SearchText, c => c.Name);
+        Cards = _deepCards.Count == 0 ? direct : [.. direct, .. _deepCards]; // the subfolders' matches after the folder's own
 
         // The selection keeps the items still shown (a reload, a re-sort, the filter); new card
         // instances get their flags here, since a prune that removes nothing raises nothing.
@@ -994,6 +1151,7 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
         if (!IsLoading && !_quietSearch)
         {
             Show(_orderedCards); // the running load shows through the search when it finishes
+            UpdateDeepSearch();
         }
     }
 
@@ -1120,6 +1278,7 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     {
         _loadedLocation = null; // nothing of the new location is listed yet
         Selection.Clear();
+        CancelDeepSearch(); // a search of the subfolders belongs to the folder it started from
         if (!_keepSearch && SearchText.Length > 0)
         {
             // As in Explorer, a search belongs to the folder it was typed in.

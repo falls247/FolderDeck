@@ -181,6 +181,12 @@ public sealed class AppSettings
     /// </summary>
     public Dictionary<string, double>? DetailsColumns { get; set; }
 
+    /// <summary>
+    /// The extra columns shown in the details view (ids of <see cref="Layout.DetailsPropertyColumns"/>,
+    /// chosen with the header's right-click menu). Empty by default: only the four base columns.
+    /// </summary>
+    public List<string>? DetailsExtraColumns { get; set; }
+
     /// <summary>Colour theme: <c>system</c> (follow Windows), <c>light</c> or <c>dark</c>.</summary>
     public string? Theme { get; set; } = AppThemes.System;
 
@@ -280,6 +286,35 @@ public sealed class AppSettings
 
     /// <summary>The interval of <see cref="AutoRefresh"/>, in seconds (kept while it is off).</summary>
     public int AutoRefreshSeconds { get; set; } = AutoRefreshSecondsDefault;
+
+    /// <summary>
+    /// 常駐モード: start at the Windows sign-in, hidden in the notification area (the Run key of
+    /// HKCU holds the exe and <c>--background</c>, see <see cref="Infrastructure.LoginStartup"/>).
+    /// Off by default. The registry is the truth: at startup this follows what is registered
+    /// (not with <c>--data-dir</c>, which never touches the Run key).
+    /// </summary>
+    public bool StartAtLogin { get; set; }
+
+    /// <summary>
+    /// 常駐モード: closing the window hides it in the notification area instead of quitting (the
+    /// tray's 終了 quits). Off by default.
+    /// </summary>
+    public bool KeepRunningOnClose { get; set; }
+
+    /// <summary>名前で検索 (Ctrl+F) looks only in the shown folder.</summary>
+    public const string SearchScopeFolder = "folder";
+
+    /// <summary>名前で検索 (Ctrl+F) also looks in the subfolders (Windows Search and a walk, see <see cref="Listing.DeepSearch"/>).</summary>
+    public const string SearchScopeRecursive = "recursive";
+
+    /// <summary>
+    /// Where the search of a folder looks: <see cref="SearchScopeFolder"/> (the default, the list
+    /// shown) or <see cref="SearchScopeRecursive"/>. Unknown values are the default.
+    /// </summary>
+    public string? SearchScope { get; set; } = SearchScopeFolder;
+
+    [JsonIgnore]
+    public bool SearchesRecursively => SearchScope == SearchScopeRecursive;
 
     public static int ClampCardSize(int value) => Snap(value, CardSizeMin, CardSizeMax, CardSizeStep);
 
@@ -487,6 +522,7 @@ public sealed class AppSettings
         CardSize = ClampCardSize(CardSize);
         CardShape = CardShapes.ToSetting(CardShapes.FromSetting(CardShape));
         DetailsColumns = Layout.DetailsColumns.Normalize(DetailsColumns);
+        DetailsExtraColumns = Layout.DetailsPropertyColumns.NormalizeShown(DetailsExtraColumns);
         Theme = AppThemes.ToSetting(AppThemes.FromSetting(Theme));
         TextScale = ClampTextScale(TextScale);
         ItemMenu = ItemMenuStyles.ToSetting(ItemMenuStyles.FromSetting(ItemMenu));
@@ -495,6 +531,7 @@ public sealed class AppSettings
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
         ThumbCacheMb = Math.Clamp(ThumbCacheMb, 0, ThumbCacheMbMax);
         AutoRefreshSeconds = Math.Clamp(AutoRefreshSeconds, AutoRefreshSecondsMin, AutoRefreshSecondsMax);
+        SearchScope = string.Equals(SearchScope?.Trim(), SearchScopeRecursive, StringComparison.OrdinalIgnoreCase) ? SearchScopeRecursive : SearchScopeFolder;
         NormalizeTabViews(); // last: reads the normalized open_tabs, card_shape and sort_modes
     }
 
@@ -538,6 +575,7 @@ public sealed class AppSettings
         }).ToList();
         copy.SidebarCollapsedSections = SidebarCollapsedSections?.ToList();
         copy.DetailsColumns = DetailsColumns is null ? null : new Dictionary<string, double>(DetailsColumns);
+        copy.DetailsExtraColumns = DetailsExtraColumns?.ToList();
         copy.SortModes = SortModes is null ? null : new Dictionary<string, string>(SortModes);
         copy.FilterModes = FilterModes is null ? null : new Dictionary<string, string>(FilterModes);
         return copy;

@@ -20,6 +20,11 @@ namespace FolderDeck.Shell;
 public sealed class MainWindowHook : IDisposable
 {
     private const int WM_ACTIVATE = 0x0006;
+    private const int WM_SYSCOMMAND = 0x0112;
+    private const int SC_CLOSE = 0xF060;
+
+    /// <summary>A WM_CLOSE this soon after SC_CLOSE comes from the user (see <see cref="IsUserClose"/>).</summary>
+    private const long UserCloseWindowMs = 2000;
     private const int WM_SETTINGCHANGE = 0x001A;
     private const int WM_DISPLAYCHANGE = 0x007E;
     private const int WM_DEVICECHANGE = 0x0219;
@@ -44,6 +49,7 @@ public sealed class MainWindowHook : IDisposable
     private bool _listening;
     private bool _clipboardPending;
     private bool _disposed;
+    private long? _sysCloseAt;
 
     public MainWindowHook(Window window)
     {
@@ -86,6 +92,13 @@ public sealed class MainWindowHook : IDisposable
 
     /// <summary>The window was activated (raised after the window procedure, at Input priority).</summary>
     public event Action? Activated;
+
+    /// <summary>
+    /// The close under way was asked by the user (the close button, Alt + F4, the taskbar: a
+    /// <c>SC_CLOSE</c> just before), not by another program's WM_CLOSE (a build script, taskkill
+    /// without /F). 常駐モード hides the window only for the user's.
+    /// </summary>
+    public bool IsUserClose => _sysCloseAt is { } at && Environment.TickCount64 - at < UserCloseWindowMs;
 
     public void Dispose()
     {
@@ -153,6 +166,10 @@ public sealed class MainWindowHook : IDisposable
         // Nothing is marked handled: the window and the other hooks see every message as before.
         switch (msg)
         {
+            case WM_SYSCOMMAND when ((int)wParam & 0xFFF0) == SC_CLOSE:
+                _sysCloseAt = Environment.TickCount64;
+                break;
+
             case WM_CLIPBOARDUPDATE:
                 QueueClipboardChanged();
                 break;

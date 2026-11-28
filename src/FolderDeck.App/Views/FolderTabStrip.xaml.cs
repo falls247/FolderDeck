@@ -440,12 +440,29 @@ public partial class FolderTabStrip : UserControl
         e.Handled = true;
         Interacted?.Invoke();
         var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
+
+        // As Explorer's tab menu: タブの複製 first. A fixed tab at its list cannot be copied (it exists once).
+        var duplicate = new MenuItem { Header = "タブを複製", IsEnabled = MainViewModel.CanDuplicate(tab) };
+        duplicate.Click += (_, _) => _ = vm.DuplicateTabAsync(tab);
+        menu.Items.Add(duplicate);
+        menu.Items.Add(new Separator());
         var close = new MenuItem { Header = "タブを閉じる" };
         close.Click += (_, _) => vm.CloseTabCommand.Execute(tab);
         menu.Items.Add(close);
         var others = new MenuItem { Header = "ほかのタブを閉じる", IsEnabled = vm.Tabs.Count > 1 };
         others.Click += (_, _) => _ = vm.CloseOtherTabsAsync(tab);
         menu.Items.Add(others);
+        menu.Items.Add(new Separator());
+
+        // The key acts on the last closed tab whatever tab was right-clicked: its keys belong here.
+        var reopen = new MenuItem
+        {
+            Header = "閉じたタブを開き直す",
+            IsEnabled = vm.CanReopenClosedTab,
+            InputGestureText = ShortcutCatalog.MainKeysOf(ShortcutId.ReopenTab),
+        };
+        reopen.Click += (_, _) => vm.ReopenClosedTabCommand.Execute(null);
+        menu.Items.Add(reopen);
         menu.IsOpen = true;
     }
 }

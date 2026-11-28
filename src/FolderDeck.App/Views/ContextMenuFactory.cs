@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using FolderDeck.Core.Infrastructure;
+using FolderDeck.Core.Layout;
 using FolderDeck.Core.Ordering;
 using FolderDeck.Core.Paths;
 using FolderDeck.Core.Transfer;
@@ -122,6 +123,10 @@ public sealed class ContextMenuFactory
         entries.Add(new("エクスプローラーで表示", ExplorerGlyph, !disabled || drive, () => _ = _vm.ShowInExplorerAsync(item)));
         entries.Add(new("パスをコピー", CopyGlyph, !disabled || drive, () => _vm.CopyPath(item)));
         AddClipboardEntries(entries, [item], item, keys: keys);
+        if (card is not null && _vm.IsShownCard(card))
+        {
+            entries.Add(TypeSelectEntry());
+        }
 
         // 「…で開く」 as on the blank area (in the details view nearly every right click lands on a
         // row): a folder (also a drive row, a registered folder, a flyout header) opens in itself, a
@@ -214,6 +219,7 @@ public sealed class ContextMenuFactory
         var entries = new List<MenuEntry>();
         AddClipboardEntries(entries, group, pasteItem: null, separator: false, keys: true); // the group is the selection
         entries.Add(new("パスをコピー", CopyGlyph, true, () => _vm.CopyPaths(group)));
+        entries.Add(TypeSelectEntry());
 
         // 「…で開く」 for the folder the selection is in (always one inside a folder tab; the cards
         // of 最近の履歴 / よく使う項目 may be in several, then there is none to offer), as for one
@@ -450,6 +456,7 @@ public sealed class ContextMenuFactory
 
         entries.Add(MenuEntry.Separator);
         entries.Add(SortEntry());
+        entries.Add(TypeSelectEntry());
         entries.Add(new("最新の情報に更新", RefreshGlyph, true, () => _vm.RefreshCommand.Execute(null), Keys: ShortcutId.Refresh));
 
         if (shown is not null)
@@ -538,7 +545,58 @@ public sealed class ContextMenuFactory
         return new("並べ替え", SortGlyph, _vm.HasTab, null, Children: children);
     }
 
+    /// <summary>
+    /// 「ファイル種別選択」 ▶: the kinds in the shown list (フォルダ, each extension, 拡張子なし) with
+    /// their counts; choosing one selects exactly the items of that kind (<see cref="MainViewModel.SelectByType"/>).
+    /// For the tab of the right click only (RunEntry may run the action after the menu closed).
+    /// </summary>
+    private MenuEntry TypeSelectEntry()
+    {
+        var tab = _vm.SelectedTab;
+        var children = new List<MenuEntry>();
+        foreach (var group in _vm.TypeGroupsShown())
+        {
+            string label = group.IsFolder ? "フォルダ" : group.IsNoExtension ? "拡張子なし" : group.Key;
+            string key = group.Key;
+            children.Add(new($"{label}（{group.Count}）", group.IsFolder ? FolderGlyph : FileGlyph, true, () =>
+            {
+                if (ReferenceEquals(tab, _vm.SelectedTab))
+                {
+                    _vm.SelectByType(key);
+                }
+            }));
+        }
+
+        return new("ファイル種別選択", SelectGlyph, children.Count > 0, null, Children: children);
+    }
+
     /// <summary>The menu of the PC section header: エクスプローラーで開く (This PC).</summary>
+    /// <summary>
+    /// The details view's header menu, as Explorer's column chooser: 名前 / 更新日時 / 種類 / サイズ
+    /// (always shown, checked and greyed), then the extra columns (<see cref="DetailsPropertyColumns"/>)
+    /// to show or hide, with <paramref name="titles"/> (Windows' names, when read). One pick closes it.
+    /// </summary>
+    public void ShowDetailsColumns(FrameworkElement target, IReadOnlyDictionary<string, string>? titles)
+    {
+        var entries = new List<MenuEntry>();
+        foreach (string fixedTitle in new[] { "名前", "更新日時", "種類", "サイズ" })
+        {
+            entries.Add(new(fixedTitle, CheckGlyph, false, null, Checked: true));
+        }
+
+        entries.Add(MenuEntry.Separator);
+        var shownNow = _vm.DetailsExtraColumns;
+        foreach (var column in DetailsPropertyColumns.All)
+        {
+            bool shown = shownNow.Contains(column.Id);
+            string id = column.Id;
+            string title = titles is not null && titles.TryGetValue(id, out string? t) && t.Length > 0 ? t : column.Title;
+            entries.Add(new(title, shown ? CheckGlyph : string.Empty, true, () => _vm.SetDetailsColumnShown(id, !shown), Checked: shown));
+        }
+
+        Open(Render(entries, target));
+    }
+
     public void ShowPcSection(FrameworkElement target)
     {
         var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
@@ -781,6 +839,9 @@ public sealed class ContextMenuFactory
     private const string AdminGlyph = "\uEA18"; // Shield
     private const string SortGlyph = "\uE8CB"; // Sort (as the toolbar's sort button)
     private const string CheckGlyph = "\uE73E"; // CheckMark
+    private const string SelectGlyph = "\uE762"; // MultiSelect
+    private const string FolderGlyph = "\uE8B7"; // Folder
+    private const string FileGlyph = "\uE8A5"; // Document
     private const string UndoGlyph = "\uE7A7"; // Undo (\u5143\u306B\u623B\u3059; the reset of the manual order, as the toolbar)
     private const string RedoGlyph = "\uE7A6"; // Redo (\u3084\u308A\u76F4\u3057)
 

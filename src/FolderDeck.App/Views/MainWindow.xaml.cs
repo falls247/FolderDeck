@@ -131,6 +131,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
         Details.HeaderClicked += column => vm.SetSortMode(CardSortModes.Next(vm.SelectedTab.SortMode, column));
         Details.ColumnResized += (key, width) => vm.SetDetailsColumnWidth(key, width);
 
+        // The header's right click: Explorer's column chooser. Windows' names of the extra columns are
+        // read once off the UI thread (the built-in titles show until then).
+        Details.HeaderMenuRequested += target =>
+        {
+            _cascade.CloseAll();
+            _menus.ShowDetailsColumns(target, _columnTitles);
+        };
+        _ = LoadColumnTitlesAsync();
+
         // A sidebar row is one element: the pointer rests on it and its list goes beside it.
         Sidebar.ItemEntered += (row, item) => _cascade.AnchorMouseEnter(row, row, item);
         Sidebar.ItemMoved += (row, item, position) => _cascade.AnchorMouseMove(row, row, item, position);
@@ -218,6 +227,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
         };
         Drop += OnDrop;
         Closing += OnClosing;
+        IsVisibleChanged += OnVisibleChanged;
+        PreviewGotKeyboardFocus += (_, e) =>
+        {
+            if (_staleButton is not null && !ReferenceEquals(e.NewFocus, _staleButton))
+            {
+                _staleButton = null; // another element (a text box, a button clicked) has the focus now
+            }
+        };
+        Closed += (_, _) => _closed = true;
 
         // The blank part of the item list: a press clears the selection, a right click offers paste.
         // The cards' own presses are not handled (ItemPointerTracker), and the scroll viewer may
@@ -233,14 +251,169 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// </summary>
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (_vm.IsFileOperationRunning
+        // 常駐モード: the user's close only hides (a program's WM_CLOSE, 終了 and the sign-out quit).
+        if (!_exitRequested && !_sessionEnding && _vm.KeepRunningOnClose && _hook?.IsUserClose == true)
+        {
+            e.Cancel = true;
+            HideToTray();
+            return;
+        }
+
+        if (!_sessionEnding && _vm.IsFileOperationRunning
             && !Confirm("終了しますか？", "ファイルの移動・コピー・削除が実行中です。終了すると途中で中断されます。", null, "終了する", danger: true))
         {
             e.Cancel = true;
+            _exitRequested = false;
             return;
         }
 
         _vm.SaveState(CapturePlacement());
+    }
+
+    // ---- 常駐モード: hidden in the notification area ------------------------------------------
+
+    /// <summary>Windows' names of the details view's extra columns, once read (null until then).</summary>
+    private IReadOnlyDictionary<string, string>? _columnTitles;
+
+    private async Task LoadColumnTitlesAsync()
+    {
+        try
+        {
+            _columnTitles = await _vm.Services.Properties.TitlesAsync();
+            Details.SetExtraTitles(_columnTitles);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn("The titles of the extra details columns could not be read", ex);
+        }
+    }
+
+    /// <summary>The next close quits (終了 in the tray, a request of another program).</summary>
+    private bool _exitRequested;
+
+    /// <summary>Windows ends the session: nothing may refuse or ask.</summary>
+    private bool _sessionEnding;
+
+    /// <summary>Closed already (the exit event can come right after a CloseMainWindow of the same script).</summary>
+    private bool _closed;
+
+    /// <summary>Hidden (or never shown: --background): the next show resumes the checks and refreshes the shown tab.</summary>
+    private bool _resumeOnShow;
+
+    /// <summary>Started with --background: the handle exists (hooks, tray, session monitor), the window is not shown.</summary>
+    public void PrepareHidden()
+    {
+        _resumeOnShow = true;
+        new WindowInteropHelper(this).EnsureHandle();
+    }
+
+    /// <summary>The window is shown cloaked once (laid out and drawn, nothing on screen) until <see cref="EndPrewarm"/>.</summary>
+    private bool _prewarming;
+
+    /// <summary>
+    /// Started with --background, the first tab loaded: the window is laid out and drawn once while
+    /// cloaked (no picture, no taskbar button), then hidden again. A window never drawn took about
+    /// 400 ms to come up at the first reveal; after this it takes as long as the later ones.
+    /// </summary>
+    public void PrewarmHidden()
+    {
+        nint hwnd = new WindowInteropHelper(this).EnsureHandle();
+        if (IsVisible || !ShellInterop.SetCloaked(hwnd, true))
+        {
+            return;
+        }
+
+        _prewarming = true;
+        bool activate = ShowActivated;
+        ShowActivated = false;
+        Show();
+        ShowActivated = activate;
+        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () =>
+        {
+            if (_prewarming)
+            {
+                Hide();
+                EndPrewarm();
+            }
+        });
+    }
+
+    private void EndPrewarm()
+    {
+        _prewarming = false;
+        ShellInterop.SetCloaked(new WindowInteropHelper(this).Handle, false);
+    }
+
+    /// <summary>Windows ends the session: the close must go through, without a question.</summary>
+    public void AllowClose()
+    {
+        _sessionEnding = true;
+        _exitRequested = true;
+    }
+
+    /// <summary>The state for an exit that WPF's shutdown may not reach (the session ends).</summary>
+    public void SaveForExit() => _vm.SaveState(CapturePlacement());
+
+    /// <summary>終了 in the tray, or another program asked to quit: closes for real (asks while a file operation runs).</summary>
+    public void RequestExit(string by)
+    {
+        if (_closed || Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        AppLog.Info($"resident: exit requested by {by}");
+        _exitRequested = true;
+        if (_vm.IsFileOperationRunning && !IsVisible)
+        {
+            BringToFront(); // the question needs a visible owner
+        }
+
+        Close();
+    }
+
+    /// <summary>
+    /// Shows the window (from hidden, minimized or behind others) and brings it to the front.
+    /// <paramref name="askedAt"/>: when the request came (a second launch's signal), for the log.
+    /// </summary>
+    public void Reveal(string by, long? askedAt = null)
+    {
+        bool wasHidden = !IsVisible || _prewarming;
+        long start = askedAt ?? Environment.TickCount64;
+        if (_prewarming)
+        {
+            EndPrewarm(); // asked for while being drawn: it stays shown
+            _resumeOnShow = false;
+            Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () => _ = _vm.OnWindowShownAsync());
+        }
+
+        BringToFront();
+        if (wasHidden)
+        {
+            Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () =>
+                AppLog.Info($"resident: shown from hidden by {by} in {Environment.TickCount64 - start} ms"));
+        }
+    }
+
+    private void HideToTray()
+    {
+        _cascade.CloseAll();
+        var placement = CapturePlacement();
+        Hide();
+        _resumeOnShow = true;
+        _vm.OnWindowHidden(placement);
+        AppLog.Info("resident: window hidden to the notification area");
+    }
+
+    private void OnVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true && _resumeOnShow && !_prewarming)
+        {
+            _resumeOnShow = false;
+
+            // After the first frame: the refresh must not delay the window coming up.
+            Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () => _ = _vm.OnWindowShownAsync());
+        }
     }
 
     // ---- window placement (§5.5) ------------------------------------------------------------
@@ -336,11 +509,27 @@ public partial class MainWindow : Window, IMainView, ICardHost
             _menuKeyDown = Key.None;
             e.Handled = true;
         }
+
+        if (_altDropUp && key is Key.LeftAlt or Key.RightAlt)
+        {
+            // The Alt of an Alt + drop (a shortcut) is released after the drop: unhandled, its
+            // WM_SYSKEYUP reaches DefWindowProc, which enters the system menu's mode, and the next
+            // press only leaves that mode (the next drag did not start).
+            _altDropUp = false;
+            e.Handled = true;
+        }
     }
+
+    /// <summary>An Alt + drop just made shortcuts: the release of its Alt is swallowed (<see cref="OnPreviewKeyUp"/>).</summary>
+    private bool _altDropUp;
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
         NoteInput();
+        if (e.Key == Key.Tab)
+        {
+            _staleButton = null; // Tab goes to the controls on purpose: a button it lands on takes Space again
+        }
         if (_menuKeyDown != Key.None
             && (e.Key == Key.System ? e.SystemKey : e.Key) is var pressed
             && pressed != _menuKeyDown && pressed is not (Key.LeftShift or Key.RightShift))
@@ -406,6 +595,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
             return;
         }
 
+        if (key == Key.Space && _staleButton is not null && ReferenceEquals(Keyboard.FocusedElement, _staleButton))
+        {
+            e.Handled = true; // nothing in the list took it (no cursor yet): still not the stale button's
+            return;
+        }
+
         switch (key)
         {
             case Key.F5:
@@ -456,6 +651,15 @@ public partial class MainWindow : Window, IMainView, ICardHost
             case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
                 e.Handled = true; // like Explorer: closes the shown tab, whatever its kind
                 _vm.CloseTabCommand.Execute(_vm.SelectedTab);
+                break;
+            case Key.T when Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && !IsMenuTakingKeys():
+                e.Handled = true; // as the browsers: the last closed tab comes back (also with no tab open)
+                if (!e.IsRepeat)
+                {
+                    EndAddressEdit();
+                    _vm.ReopenClosedTabCommand.Execute(null);
+                }
+
                 break;
             case Key.N when !inTextBox && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift):
                 e.Handled = true; // like Explorer: a new folder in the folder shown, in its edit box
@@ -509,6 +713,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _typedName.Clear(); // a click ends the typed name, as a key move does
         _vm.HideKeyboardCursor(); // the cursor's frame is for the keys only (a click moves the cursor itself)
         _cascade.WindowPressed(e.OriginalSource as DependencyObject); // a list the keys opened closes on a press outside it
+        ReleaseButtonFocus(e.OriginalSource as DependencyObject);
         // A press anywhere else commits the name being edited (first: the branches below may handle
         // the press). The items have no focus to take, so a lost focus alone would not end it.
         _rename.CommitIfOutside(e.OriginalSource);
@@ -574,10 +779,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
             }
 
             // ADR-2: in the details list (one column, ← → move nothing sideways) a plain → on a folder
-            // opens its list, like a tree's expand. The cards keep → for the move. A folder that has
-            // nothing to open moves on, as a file does.
+            // opens its list, like a tree's expand, and on a file its preview (← or Esc closes it).
+            // The cards keep → for the move. A folder that has nothing to open moves on.
             if (nav == NavKey.Right && modifiers == ModifierKeys.None && ReferenceEquals(ActiveList, Details)
-                && _vm.CursorCard() is { IsFolderLike: true } folder && OpenCascadeFromKeys(folder, toggle: false))
+                && _vm.CursorCard() is { } item && (item.IsFolderLike || item.IsFile) && OpenCascadeFromKeys(item, toggle: false))
             {
                 return true;
             }
@@ -603,6 +808,14 @@ public partial class MainWindow : Window, IMainView, ICardHost
             if (e.IsRepeat)
             {
                 return true; // a held Ctrl+Space flips once
+            }
+
+            // After Ctrl + arrows (the dotted cursor off the selection) a plain Space flips the
+            // cursor's item into the selection too, a folder as well, instead of selecting it alone
+            // or opening its list: Ctrl + arrows and Space pick items one by one, as Ctrl + click does.
+            if (modifiers == ModifierKeys.None && IsCtrlMoveMode())
+            {
+                return _vm.SelectAtCursor(toggle: true);
             }
 
             // ADR-2: a plain Space on a folder opens (or, open, closes) its list instead of selecting
@@ -793,9 +1006,35 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// Space presses a focused button or ticks a box; a list, a slider or a scroll bar keeps its
     /// arrows. Text boxes never get here (HandleSelectionKey is not called in one).
     /// </summary>
-    private static bool FocusedControlTakes(Key key) => Keyboard.FocusedElement switch
+    /// <summary>
+    /// The button that still holds the keyboard focus although the list was used since (see
+    /// <see cref="ReleaseButtonFocus"/>): Space is the list's, not that button's. Cleared by Tab (the
+    /// user goes to the controls on purpose) and when another element takes the focus.
+    /// </summary>
+    private ButtonBase? _staleButton;
+
+    /// <summary>
+    /// A button keeps the keyboard focus after its click (and its frame is not drawn: the toolbar's
+    /// and the sidebar's icon buttons have no focus visual), and the items never take the focus
+    /// (ADR-1). Without this, after a click on e.g. the sidebar's 登録 button every Space went to it
+    /// (<see cref="FocusedControlTakes"/>) and opened the folder dialog again, also after Ctrl +
+    /// arrows. So a press on anything but that button (an item, the blank list, a sidebar row) and a
+    /// move of the list's cursor by the keys mark the button stale. The focus itself is not moved:
+    /// the window is a focus scope, and focusing it hands the focus straight back to the button
+    /// (seen with Window.Focus), as does the activation after a dialog. A button reached with Tab
+    /// still takes Space until the list is used. Text boxes are left alone.
+    /// </summary>
+    private void ReleaseButtonFocus(DependencyObject? pressed = null)
     {
-        ButtonBase => key == Key.Space,
+        if (Keyboard.FocusedElement is ButtonBase button && (pressed is null || !RenameEditor.IsWithin(pressed, button)))
+        {
+            _staleButton = button;
+        }
+    }
+
+    private bool FocusedControlTakes(Key key) => Keyboard.FocusedElement switch
+    {
+        ButtonBase button => key == Key.Space && !ReferenceEquals(button, _staleButton),
         Selector or Slider or ScrollBar => true,
         _ => false,
     };
@@ -810,6 +1049,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// </summary>
     private bool OpenCascadeFromKeys(CardViewModel folder, bool toggle)
     {
+        // (a file row of the details list: its preview, see the → in HandleSelectionKey)
         _typedName.Clear(); // → in the details list: a move like the arrows (Space gets here only when no name is typed)
         if (_cascade.IsOpenOn(folder))
         {
@@ -824,10 +1064,22 @@ public partial class MainWindow : Window, IMainView, ICardHost
         return ActiveList.BringItemIntoView(folder) switch
         {
             CardView card => _cascade.OpenFromKeys(card),
-            DetailsRowView row when CardAnchor.For(folder, _vm.Services.Icons) is { } anchor => _cascade.OpenFromKeys(row.NameCell, anchor),
+            DetailsRowView row when CardAnchor.For(folder, _vm.Services.Icons) is { } anchor => anchor.File is not null
+                ? _cascade.OpenPreviewFromKeys(row.NameCell, anchor)
+                : _cascade.OpenFromKeys(row.NameCell, anchor),
             _ => false,
         };
     }
+
+    /// <summary>
+    /// The tab and the cursor item of the last Ctrl + arrow (Ctrl without Shift): while the cursor is
+    /// still there, in that tab, with its frame drawn, a plain Space adds instead of replacing.
+    /// </summary>
+    private (TabViewModel Tab, string Path)? _ctrlMovedTo;
+
+    private bool IsCtrlMoveMode() =>
+        _ctrlMovedTo is { } moved && ReferenceEquals(moved.Tab, _vm.SelectedTab) && _vm.SelectedTab.ShowsCursor
+        && _vm.SelectedTab.Selection.Cursor is { } cursor && PathTools.PathEquals(cursor, moved.Path);
 
     /// <summary>
     /// Moves the cursor of the shown list: a plain key selects the target alone, Shift the range from
@@ -836,6 +1088,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// </summary>
     private void MoveCursorByKey(NavKey nav, ModifierKeys modifiers)
     {
+        ReleaseButtonFocus(); // the keys work the list now: the Space that follows must not press a button
         _typedName.Clear(); // as in Explorer, a move ends the typed name: a Space now selects, a letter starts anew
         _cascade.CloseAll(); // the cursor leaves the item a list or a preview may hang on
         _cascade.NoteKeyMove(); // the scroll below moves items under a resting pointer: not a hover
@@ -846,6 +1099,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             list.BringItemIntoView(card);
         }
+
+        _ctrlMovedTo = (modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == ModifierKeys.Control
+            && _vm.SelectedTab.Selection.Cursor is { } at
+            ? (_vm.SelectedTab, at)
+            : null;
     }
 
     /// <summary>
@@ -1149,6 +1407,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
             {
                 DropEffects.Move => $"「{name}」へ移動",
                 DropEffects.Copy => $"「{name}」へコピー",
+                DropEffects.Link => $"「{name}」にショートカットを作成",
                 _ => null,
             });
             e.Handled = true;
@@ -1176,9 +1435,26 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 _crumbQuiet = true; // the pointer rests on the crumb after the drop: no list under it until it leaves (OnCrumbMouseLeave)
             }
 
-            if (d.Effect is not (DropEffects.Move or DropEffects.Copy))
+            if (d.Effect is not (DropEffects.Move or DropEffects.Copy or DropEffects.Link))
             {
                 e.Effects = DragDropEffects.None;
+                return;
+            }
+
+            if (d.Effect == DropEffects.Link)
+            {
+                // Alt: shortcuts, made by the app after the drop (the source keeps its items).
+                e.Effects = DragDropEffects.Link;
+                _altDropUp = Keyboard.IsKeyDown(Key.LeftAlt) || Keyboard.IsKeyDown(Key.RightAlt);
+                if (FileDragOut.Current is { } linker)
+                {
+                    linker.Dropped = new InAppDrop(d.Target.Folder, TransferKind.Copy, Link: true);
+                    return;
+                }
+
+                string[] linked = [.. d.Sources];
+                string linkFolder = d.Target.Folder;
+                _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, () => _ = _vm.LinkDropAsync(linked, linkFolder, fromOtherApp: true));
                 return;
             }
 

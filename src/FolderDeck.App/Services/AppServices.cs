@@ -15,6 +15,9 @@ public sealed class AppServices : IDisposable
     public const string ThumbCacheFolderName = "thumbs";
 
     private readonly StaWorkerPool _typeNameWorker = new(1, "TypeNames");
+
+    /// <summary>Property handlers open the files and may hang: two workers of their own, below normal.</summary>
+    private readonly StaWorkerPool _propertyWorker = new(2, "Properties", ThreadPriority.BelowNormal);
     private volatile ListingFilter _filter;
 
     public AppServices(DataStores stores)
@@ -26,7 +29,11 @@ public sealed class AppServices : IDisposable
             Path.Combine(stores.DataDirectory, ThumbCacheFolderName),
             stores.Settings.Current.ThumbCacheMb * 1024L * 1024L);
         TypeNames = new TypeNameCache(_typeNameWorker);
+        Properties = new ShellPropertyCache(_propertyWorker);
     }
+
+    /// <summary>The values of the details view's extra columns (撮影日時, 作成者…).</summary>
+    public ShellPropertyCache Properties { get; }
 
     public DataStores Stores { get; }
 
@@ -51,6 +58,12 @@ public sealed class AppServices : IDisposable
     /// can be busy for seconds (reading the Windows recent items), and the names would wait behind it.
     /// </summary>
     public TypeNameCache TypeNames { get; }
+
+    /// <summary>
+    /// 「ログオン時に起動」 reads and writes the Run key (<see cref="Shell.RunKeyRegistry"/>). False
+    /// with <c>--data-dir</c>: a test run keeps its hands off the registration of the copy in use.
+    /// </summary>
+    public bool ManagesRunKey { get; init; }
 
     /// <summary>At most 8 cards load their details at the same time (§7.4.1).</summary>
     public SemaphoreSlim DetailGate { get; } = new(8, 8);
@@ -96,5 +109,6 @@ public sealed class AppServices : IDisposable
         Icons.Dispose();
         Shell.Dispose();
         _typeNameWorker.Dispose();
+        _propertyWorker.Dispose();
     }
 }

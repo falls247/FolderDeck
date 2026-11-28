@@ -24,6 +24,7 @@ public enum ShortcutId
     Up,
     Refresh,
     CloseTab,
+    ReopenTab,
     Search,
     Address,
     ShortcutHelp,
@@ -59,7 +60,7 @@ public static class ShortcutCatalog
             new("Shift + 移動キー", "起点からの範囲を選択"), // same branch, extend
             new("Ctrl + 移動キー", "選択を変えずに現在の項目だけ移動"), // same branch, select: false
             new("Ctrl + Shift + 移動キー", "起点からの範囲を選択に追加"), // same branch, select: false + extend
-            new("Space", "現在の項目を選択（フォルダでは中身の一覧を開く / 閉じる）"), // HandleSelectionKey: Key.Space → OpenCascadeFromKeys / SelectAtCursor
+            new("Space", "現在の項目を選択（フォルダでは中身の一覧を開く / 閉じる。Ctrl + 移動キーで動かしたあとは、その項目も選択に加える / 外す）"), // HandleSelectionKey: Key.Space → IsCtrlMoveMode / OpenCascadeFromKeys / SelectAtCursor
             new("Ctrl + Space", "現在の項目の選択を切り替え"), // same branch, toggle
             new("文字キー", "名前がその文字で始まる次の項目へ（1 秒以内に続けて入力すると 1 つの名前として探す）"), // MainWindow.OnPreviewTextInput → JumpToTypedName
             new("Ctrl + A", "すべて選択"), // HandleSelectionKey: Ctrl + A / C / X / V switch
@@ -95,6 +96,7 @@ public static class ShortcutCatalog
             new("Ctrl + 1〜8", "左から n 番目のタブ"), // same switch: D1..D9, NumPad1..9 → SelectTabAt
             new("Ctrl + 9", "最後のタブ"), // same branch
             new("Ctrl + W", "表示中のタブを閉じる", ShortcutId.CloseTab), // same switch: Key.W → CloseTabCommand
+            new("Ctrl + Shift + T", "閉じたタブを開き直す（タブの右クリックのメニューにも。複製は「タブを複製」）", ShortcutId.ReopenTab), // same switch: Key.T → ReopenClosedTabCommand
         ]),
         new("検索・アドレス",
         [
@@ -109,7 +111,7 @@ public static class ShortcutCatalog
         new("カスケード（フォルダの中身の一覧）",
         [
             new("Space", "現在の項目のフォルダの一覧を開く / 閉じる"), // HandleSelectionKey: Key.Space → OpenCascadeFromKeys
-            new("→", "詳細表示：現在の項目のフォルダの一覧を開く"), // HandleSelectionKey: NavKey.Right in the details view → OpenCascadeFromKeys
+            new("→", "詳細表示：現在の項目のフォルダの一覧を開く（ファイルではプレビュー。← で閉じる）"), // HandleSelectionKey: NavKey.Right in the details view → OpenCascadeFromKeys
             new("↑ ↓", "一覧の行を選ぶ"), // CascadeController.HandleKey: Down / Up → MoveSelection
             new("→", "選んだフォルダの一覧を開く"), // HandleKey: Right → OpenSelectedChild
             new("←", "1 つ前の一覧へ戻る（キーで開いた最初の一覧では一覧を閉じる）"), // HandleKey: Left → CloseFrom; level 0 opened by keys → CloseAll

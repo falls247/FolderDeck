@@ -110,11 +110,18 @@ public sealed partial class MainViewModel : ObservableObject
     private CardShape _cardShape = CardShape.Portrait;
 
     /// <summary>
-    /// Widths of the columns of the details list (<c>details_columns</c>: always the four known keys,
-    /// name / modified / type / size). Replaced, never changed in place, by <see cref="SetDetailsColumnWidth"/>.
+    /// Widths of the columns of the details list (<c>details_columns</c>: always the known keys,
+    /// name / modified / type / size and the extra columns). Replaced, never changed in place, by <see cref="SetDetailsColumnWidth"/>.
     /// </summary>
     [ObservableProperty]
     private IReadOnlyDictionary<string, double> _detailsColumns = DetailsColumnRules.Defaults;
+
+    /// <summary>
+    /// The extra columns shown in the details list (<c>details_extra_columns</c>, ids of
+    /// <see cref="DetailsPropertyColumns"/>), chosen in the header's menu. Replaced by <see cref="SetDetailsColumnShown"/>.
+    /// </summary>
+    [ObservableProperty]
+    private IReadOnlyList<string> _detailsExtraColumns = [];
 
     /// <summary>Width of the sidebar (DIP), changed with the splitter; kept while the sidebar is hidden.</summary>
     [ObservableProperty]
@@ -135,6 +142,7 @@ public sealed partial class MainViewModel : ObservableObject
         _sidebarWidth = settings.SidebarWidth;
         _isSidebarCollapsed = settings.SidebarCollapsed;
         _detailsColumns = DetailsColumnRules.Normalize(settings.DetailsColumns);
+        _detailsExtraColumns = DetailsPropertyColumns.NormalizeShown(settings.DetailsExtraColumns);
         QuickSection = NewSection(SidebarSections.Quick, "クイック アクセス", settings);
         RegisteredSection = NewSection(SidebarSections.Registered, "登録フォルダ", settings);
         PcSection = NewSection(SidebarSections.Pc, "PC", settings);
@@ -203,13 +211,36 @@ public sealed partial class MainViewModel : ObservableObject
 
     private AppSettings Settings => _services.Stores.Settings.Current;
 
+    /// <summary>常駐モード: closing the window only hides it (read at every close).</summary>
+    public bool KeepRunningOnClose => Settings.KeepRunningOnClose;
+
+    /// <summary>A setting of 常駐モード changed on OK in the settings (the app shows or removes the tray icon).</summary>
+    public event Action? ResidentSettingsChanged;
+
     /// <summary>
     /// Every tab that holds data: the two fixed ones (open or not: a closed one is reloaded when it
     /// is opened again, so it has to go stale with the others), then the open folder tabs.
     /// </summary>
     private IEnumerable<TabViewModel> AllTabs => new[] { RecentTab, FrequentTab }.Concat(Tabs.Where(t => t.IsFolderTab));
 
-    private void Watch(TabViewModel tab) => tab.PropertyChanged += OnTabPropertyChanged;
+    private void Watch(TabViewModel tab)
+    {
+        tab.PropertyChanged += OnTabPropertyChanged;
+
+        // A batch of the subfolders' matches replaces the list: the user may be scrolling through it.
+        tab.AroundDeepBatch = show =>
+        {
+            if (!ReferenceEquals(tab, SelectedTab) || View is not { } view)
+            {
+                show();
+                return;
+            }
+
+            double offset = view.GetScrollOffset();
+            show();
+            view.ScrollTo(offset);
+        };
+    }
 
     private void OnTabPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -546,19 +577,149 @@ public sealed partial class MainViewModel : ObservableObject
         SaveLocations();
     }
 
-    private TabViewModel AddFolderTab(NavLocation location)
+    private TabViewModel AddFolderTab(NavLocation location, int? at = null)
     {
         var tab = new TabViewModel(_services, TabKind.Folder, location) { CutPaths = _cutPaths };
         Watch(tab);
-        AddToStrip(tab);
+        AddToStrip(tab, at);
         return tab;
     }
 
-    /// <summary>Puts a tab at the right end of the strip (<see cref="TabViewModel.IsOpen"/> follows <see cref="Tabs"/>).</summary>
-    private void AddToStrip(TabViewModel tab)
+    /// <summary>
+    /// Puts a tab at the right end of the strip, or at <paramref name="at"/> (a reopened or
+    /// duplicated tab). <see cref="TabViewModel.IsOpen"/> follows <see cref="Tabs"/>.
+    /// </summary>
+    private void AddToStrip(TabViewModel tab, int? at = null)
     {
-        Tabs.Add(tab);
+        if (at is int index)
+        {
+            Tabs.Insert(ClosedTabStack.InsertIndex(index, Tabs.Count), tab);
+        }
+        else
+        {
+            Tabs.Add(tab);
+        }
+
         tab.IsOpen = true;
+    }
+
+    // ---- 閉じたタブを開き直す・タブを複製 ------------------------------------------------------
+
+    /// <summary>
+    /// What a closed tab was: enough to open it again where it was, as it was (its back / forward
+    /// history and scroll position too). Not its search or selection (a move clears those as well).
+    /// Kept in memory only, as Explorer and the browsers do.
+    /// </summary>
+    private sealed record ClosedTab(
+        TabKind Kind, NavLocation Location, string? Identity, CardShape Shape, CardSortMode Sort,
+        IReadOnlyList<NavEntry> Back, IReadOnlyList<NavEntry> Forward, double ScrollOffset);
+
+    private readonly ClosedTabStack<ClosedTab> _closedTabs = new();
+
+    /// <summary>A closed tab can be opened again (the tab strip's menu).</summary>
+    public bool CanReopenClosedTab => _closedTabs.CanPop;
+
+    /// <summary>
+    /// Records <paramref name="tab"/> before it leaves the strip (every way of closing passes
+    /// <see cref="RemoveFromStrip"/>). A copy of the history: <see cref="TabViewModel.ResetToTop"/>
+    /// clears a fixed tab's lists right after. A fixed tab at its list with no history is not
+    /// recorded: reopening it would be the same as opening it from the sidebar.
+    /// </summary>
+    private void RecordClosed(TabViewModel tab, int index)
+    {
+        if (tab.IsPlaceholder || (!tab.IsFolderTab && tab.Location.IsTop && tab.BackStack.Count == 0 && tab.ForwardStack.Count == 0))
+        {
+            return;
+        }
+
+        double offset = ReferenceEquals(tab, SelectedTab) ? View?.GetScrollOffset() ?? 0 : tab.SavedScrollOffset;
+        _closedTabs.Push(
+            new ClosedTab(tab.Kind, tab.Location, tab.Identity, tab.CardShape, tab.SortMode, [.. tab.BackStack], [.. tab.ForwardStack], offset),
+            index);
+    }
+
+    /// <summary>
+    /// 「閉じたタブを開き直す」 (Ctrl + Shift + T, the tab strip's menu): the last closed tab comes back at
+    /// its place with its location, view, sort mode, history and scroll position. A folder tab is a
+    /// new tab even when another one shows that folder (as in Explorer and the browsers); a fixed tab
+    /// that is open again is skipped (it exists once), and the one closed before it comes back. A
+    /// folder that moved meanwhile is followed by its identity, as at startup.
+    /// </summary>
+    [RelayCommand(AllowConcurrentExecutions = true)]
+    private async Task ReopenClosedTab()
+    {
+        if (!_closedTabs.TryPop(c => c.Kind == TabKind.Folder || !FixedTabOf(c.Kind).IsOpen, out var closed, out int index))
+        {
+            Message.Info("開き直せる閉じたタブはありません。");
+            return;
+        }
+
+        View?.CloseCascade();
+        Message.ClearPersistent();
+        TabViewModel tab;
+        if (closed.Kind == TabKind.Folder)
+        {
+            tab = AddFolderTab(closed.Location, index);
+        }
+        else
+        {
+            tab = FixedTabOf(closed.Kind);
+            tab.Location = closed.Location;
+            AddToStrip(tab, index);
+        }
+
+        await ShowRestoredTabAsync(tab, closed.Location, closed.Identity, closed.Shape, closed.Sort, closed.Back, closed.Forward, closed.ScrollOffset);
+    }
+
+    /// <summary>「タブを複製」 can copy <paramref name="tab"/>: a folder tab, or a fixed tab inside a folder (its list exists once).</summary>
+    public static bool CanDuplicate(TabViewModel tab) =>
+        !tab.IsPlaceholder && (tab.IsFolderTab || tab.FolderTargetPath is not null);
+
+    /// <summary>
+    /// 「タブを複製」 (the tab strip's menu, as Explorer's タブの複製): a new folder tab right of
+    /// <paramref name="source"/> at the same folder, with its view, sort mode, history and scroll
+    /// position, and shown. A fixed tab inside a folder gives a folder tab of that folder without
+    /// the history: its entries belong to 最近の履歴 / よく使う項目 and Back would leave the tab.
+    /// </summary>
+    public async Task DuplicateTabAsync(TabViewModel source)
+    {
+        int index = Tabs.IndexOf(source);
+        if (index < 0 || !CanDuplicate(source))
+        {
+            return;
+        }
+
+        View?.CloseCascade();
+        Message.ClearPersistent();
+        double offset = ReferenceEquals(source, SelectedTab) ? View?.GetScrollOffset() ?? 0 : source.SavedScrollOffset;
+        bool folderTab = source.IsFolderTab;
+        var location = folderTab ? source.Location : new NavLocation(TabKind.Folder, source.Location.Root, source.Location.Rel);
+        var tab = AddFolderTab(location, index + 1);
+        await ShowRestoredTabAsync(
+            tab, location, source.Identity, source.CardShape, source.SortMode,
+            folderTab ? [.. source.BackStack] : [], folderTab ? [.. source.ForwardStack] : [], offset);
+    }
+
+    private TabViewModel FixedTabOf(TabKind kind) => kind == TabKind.Recent ? RecentTab : FrequentTab;
+
+    /// <summary>
+    /// The common end of reopening and duplicating: the tab's own view and sort mode (not
+    /// <see cref="InheritViewState"/>), history and scroll position, then it is shown (and listed).
+    /// </summary>
+    private async Task ShowRestoredTabAsync(
+        TabViewModel tab, NavLocation location, string? identity, CardShape shape, CardSortMode sort,
+        IReadOnlyList<NavEntry> back, IReadOnlyList<NavEntry> forward, double offset)
+    {
+        tab.SetIdentity(location, identity); // a folder renamed or moved meanwhile is followed on load
+        tab.SetViewState(shape, sort);
+        tab.BackStack.Clear();
+        tab.BackStack.AddRange(back);
+        tab.ForwardStack.Clear();
+        tab.ForwardStack.AddRange(forward);
+        tab.SavedScrollOffset = offset;
+        tab.IsStale = true;
+        await ShowTabAsync(tab);
+        SaveLocations();
     }
 
     /// <summary>
@@ -568,6 +729,7 @@ public sealed partial class MainViewModel : ObservableObject
     private void RemoveFromStrip(TabViewModel tab)
     {
         tab.CancelLoad();
+        RecordClosed(tab, Tabs.IndexOf(tab));
         Tabs.Remove(tab);
         tab.IsOpen = false;
         if (tab.IsFolderTab)
@@ -1017,6 +1179,14 @@ public sealed partial class MainViewModel : ObservableObject
             }
         }
 
+        // The closed tabs follow too (their history has no identity to be found by).
+        _closedTabs.ReplaceAll(c => c with
+        {
+            Location = Rebased(c.Location) ?? c.Location,
+            Back = c.Back.Select(e => Rebased(e.Location) is { } at ? e with { Location = at } : e).ToList(),
+            Forward = c.Forward.Select(e => Rebased(e.Location) is { } at ? e with { Location = at } : e).ToList(),
+        });
+
         if (moved)
         {
             AppLog.Info($"Followed {oldPath} => {newPath}");
@@ -1219,6 +1389,20 @@ public sealed partial class MainViewModel : ObservableObject
     /// Saved at once, like every other layout choice; an unknown key or a width that changes
     /// nothing is ignored.
     /// </summary>
+    /// <summary>The header's menu showed or hid the extra column <paramref name="id"/> (saved at once; the width it had comes back).</summary>
+    public void SetDetailsColumnShown(string id, bool shown)
+    {
+        var ids = DetailsExtraColumns.Where(c => c != id).ToList();
+        if (shown)
+        {
+            ids.Add(id);
+        }
+
+        var normalized = DetailsPropertyColumns.NormalizeShown(ids);
+        DetailsExtraColumns = normalized;
+        _services.Stores.Settings.Update(s => s.DetailsExtraColumns = [.. normalized]);
+    }
+
     public void SetDetailsColumnWidth(string key, double width)
     {
         var widths = new Dictionary<string, double>(DetailsColumns, StringComparer.Ordinal);
@@ -2485,6 +2669,34 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Ctrl+A: every enabled item of the shown list. Returns true when the selection changed.</summary>
     public bool SelectAll() => HasTab && SelectedTab.Selection.SelectAll(SelectedTab.SelectableKeys());
 
+    /// <summary><paramref name="card"/> is an item of the shown list (not a row of a cascade or the sidebar).</summary>
+    public bool IsShownCard(CardViewModel card) => HasTab && SelectedTab.Cards.Contains(card);
+
+    /// <summary>「ファイル種別選択」: the kinds in the shown list (as filtered and searched), usable items only.</summary>
+    public IReadOnlyList<TypeGroup> TypeGroupsShown() =>
+        HasTab
+            ? TypeGroups.Of(SelectedTab.Cards.Where(c => !c.IsDisabled).Select(c => (Path.GetFileName(c.Path), c.Kind == CardKind.Folder)))
+            : [];
+
+    /// <summary>
+    /// 「ファイル種別選択」: the shown items of kind <paramref name="key"/> (<see cref="TypeGroups.KeyOf"/>)
+    /// become the selection (it is replaced, as Ctrl+A replaces it).
+    /// </summary>
+    public void SelectByType(string key)
+    {
+        if (!HasTab)
+        {
+            return;
+        }
+
+        var tab = SelectedTab;
+        var keys = tab.Cards
+            .Where(c => !c.IsDisabled && TypeGroups.KeyOf(Path.GetFileName(c.Path), c.Kind == CardKind.Folder) == key)
+            .Select(c => c.Path)
+            .ToList();
+        tab.Selection.Replace(keys);
+    }
+
     /// <summary>
     /// Esc, a plain click, a press on the blank area. The keyboard cursor stays where it was (as
     /// Explorer's focus), so the next arrow goes on from there; only another folder forgets it
@@ -2912,7 +3124,9 @@ public sealed partial class MainViewModel : ObservableObject
 
         if (drag.Dropped is { } dropped)
         {
-            _ = DropAsync(drag.Paths, dropped.Folder, dropped.Kind, fromOtherApp: false, dropped.CopyInPlace);
+            _ = dropped.Link
+                ? LinkDropAsync(drag.Paths, dropped.Folder, fromOtherApp: false)
+                : DropAsync(drag.Paths, dropped.Folder, dropped.Kind, fromOtherApp: false, dropped.CopyInPlace);
             return;
         }
 
@@ -2974,6 +3188,88 @@ public sealed partial class MainViewModel : ObservableObject
 
             // A cut of this app among the moved items is cleared by the next activation's check.
             await ReloadAndSelectArrivedAsync(folder, done.Result);
+        }
+        finally
+        {
+            _fileOpBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// Alt + drop (<see cref="FileDrag.MakesLink"/>): a shortcut to each item in <paramref name="folder"/>,
+    /// as Explorer's Alt + drag (<see cref="ShellLinks"/>: "名前 - ショートカット.lnk"). One file
+    /// operation at a time, as a drop. Undone with Ctrl + Z (the shortcuts go to the Recycle Bin).
+    /// The new shortcuts are selected when the folder is the one shown.
+    /// </summary>
+    public async Task LinkDropAsync(IReadOnlyList<string> paths, string folder, bool fromOtherApp)
+    {
+        if (_fileOpBusy)
+        {
+            Message.Info("前の操作が終わってから実行してください。");
+            return;
+        }
+
+        _fileOpBusy = true;
+        try
+        {
+            View?.CloseCascade();
+            Message.ClearPersistent();
+            IReadOnlyList<string> sources = paths;
+            if (fromOtherApp)
+            {
+                string[] copy = [.. paths];
+                try
+                {
+                    sources = await Task.Run(() => copy.Select(ShellClipboard.ToLongPath).ToArray()).WaitAsync(SourceProbeTimeout);
+                }
+                catch (TimeoutException)
+                {
+                    Message.Error("ドロップした項目を確認できませんでした。");
+                    return;
+                }
+            }
+
+            // Not onto itself (FileDrag.DropEffectFor refused it already; a drop from another app is checked again).
+            sources = sources.Where(p => !PathTools.PathEquals(p.TrimEnd('\\'), folder.TrimEnd('\\'))).ToList();
+            if (sources.Count == 0)
+            {
+                return;
+            }
+
+            if (!await SourceProbe.FolderExistsAsync(folder, TargetCheckTimeout))
+            {
+                Message.Error($"ショートカットの作成先のフォルダが見つかりません：{folder}");
+                return;
+            }
+
+            AppLog.Info($"drop: {(fromOtherApp ? "other app" : "app")}, link, {sources.Count} items");
+            var result = await ShellLinks.CreateAsync(sources, folder);
+            if (result.Made.Count > 0)
+            {
+                RecordFileOp(FileOpStep.ShortcutsMade(result.Made));
+            }
+
+            string folderName = PathTools.DisplayName(folder);
+            if (result.Error is null)
+            {
+                Message.Success($"「{folderName}」にショートカットを作成しました（{result.Made.Count:N0} 個）。");
+            }
+            else if (result.Made.Count > 0)
+            {
+                Message.Warning($"ショートカットを {result.Made.Count:N0} / {result.Requested:N0} 個作成しました：{result.Error}");
+            }
+            else
+            {
+                Message.Error($"ショートカットを作成できませんでした：{result.Error}");
+            }
+
+            await ReloadAfterFileChangeAsync();
+            if (result.Made.Count > 0 && PathTools.PathEquals(SelectedTab.TransferTargetPath, folder))
+            {
+                var tab = SelectedTab;
+                tab.Selection.Replace(result.Made);
+                tab.Selection.Prune(tab.SelectableKeys());
+            }
         }
         finally
         {
@@ -3724,6 +4020,49 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 常駐モード: the window was hidden to the notification area. The state is saved (the stores
+    /// write on their own threads, waited for off the UI thread) and the checks for the screen stop.
+    /// </summary>
+    public void OnWindowHidden(WindowPlacementSetting? window)
+    {
+        SaveState(window);
+        _autoRefreshTimer?.Stop();
+        var stores = _services.Stores;
+        _ = Task.Run(stores.FlushAll);
+    }
+
+    /// <summary>
+    /// 常駐モード: the hidden window is shown again. The auto refresh resumes and the shown tab is
+    /// brought up to date at once (a folder: compared with a fresh listing, the cards stay where they
+    /// are; a list of 最近の履歴 / よく使う項目: read again). The other tabs read again when shown.
+    /// </summary>
+    public async Task OnWindowShownAsync()
+    {
+        ApplyAutoRefreshSetting(Settings);
+        foreach (var tab in AllTabs)
+        {
+            if (!ReferenceEquals(tab, SelectedTab))
+            {
+                tab.IsStale = true;
+            }
+        }
+
+        if (!HasTab)
+        {
+            return;
+        }
+
+        if (SelectedTab.AutoRefreshPath is not null)
+        {
+            await AutoRefreshTickAsync(force: true);
+        }
+        else
+        {
+            await LoadTabAsync(SelectedTab);
+        }
+    }
+
     /// <summary>The window closes: no more checks.</summary>
     public void StopAutoRefresh()
     {
@@ -3737,10 +4076,11 @@ public sealed partial class MainViewModel : ObservableObject
     /// (<see cref="IMainView.IsAutoRefreshBlocked"/>: a name's edit box, a marquee, the cascade or a
     /// menu, a dialog, a button held, input just now, the window minimized).
     /// </summary>
-    private bool CanAutoRefresh() =>
-        _autoRefreshMs > 0 && !_fileOpBusy && !_cutCheckBusy && !FileDragOut.IsDragging && View is { IsAutoRefreshBlocked: false };
+    private bool CanAutoRefresh(bool force = false) =>
+        (force || _autoRefreshMs > 0) && !_fileOpBusy && !_cutCheckBusy && !FileDragOut.IsDragging && View is { IsAutoRefreshBlocked: false };
 
-    private async Task AutoRefreshTickAsync()
+    /// <param name="force">Now, whatever the interval and the setting (the window was shown again).</param>
+    private async Task AutoRefreshTickAsync(bool force = false)
     {
         try
         {
@@ -3756,9 +4096,9 @@ public sealed partial class MainViewModel : ObservableObject
             }
 
             long now = Environment.TickCount64;
-            if (now - tab.LastListedAt < _autoRefreshMs
+            if ((!force && now - tab.LastListedAt < _autoRefreshMs)
                 || (PathTools.Comparer.Equals(path, _autoRefreshFailPath) && now < _autoRefreshHoldUntil)
-                || !CanAutoRefresh())
+                || !CanAutoRefresh(force))
             {
                 return; // not due, held back after failures, or busy: the next beat decides again
             }
@@ -3791,7 +4131,7 @@ public sealed partial class MainViewModel : ObservableObject
             }
 
             // Checked again after the await: the user may have moved, reloaded or started something.
-            if (!CanAutoRefresh() || !ReferenceEquals(SelectedTab, tab) || tab.LoadGeneration != generation
+            if (!CanAutoRefresh(force) || !ReferenceEquals(SelectedTab, tab) || tab.LoadGeneration != generation
                 || !PathTools.Comparer.Equals(tab.AutoRefreshPath, path) || _services.Listings.Filter != filter)
             {
                 return;
@@ -3898,6 +4238,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             ResetStatsAction = ResetStats,
             OpenDataFolderAction = OpenDataFolder,
+            ManagesRunKey = _services.ManagesRunKey,
         };
         if (View?.ShowSettings(vm) != true)
         {
@@ -3939,6 +4280,32 @@ public sealed partial class MainViewModel : ObservableObject
         if (before.AutoRefresh != after.AutoRefresh || before.AutoRefreshSeconds != after.AutoRefreshSeconds)
         {
             ApplyAutoRefreshSetting(after); // turned on: the shown folder is checked about a second after OK
+        }
+
+        if (before.SearchScope != after.SearchScope)
+        {
+            foreach (var tab in AllTabs)
+            {
+                tab.UpdateDeepSearch(); // a search under way follows the new scope
+            }
+        }
+
+        if (before.StartAtLogin != after.StartAtLogin && _services.ManagesRunKey)
+        {
+            bool wanted = after.StartAtLogin;
+            string? error = await Task.Run(() => RunKeyRegistry.Apply(wanted));
+            if (error is not null)
+            {
+                _services.Stores.Settings.Update(s => s.StartAtLogin = before.StartAtLogin); // the registry stays the truth
+                Message.Error($"Windows のスタートアップに{(wanted ? "登録" : "解除")}できませんでした：{error}");
+                ResidentSettingsChanged?.Invoke();
+                return;
+            }
+        }
+
+        if (before.StartAtLogin != after.StartAtLogin || before.KeepRunningOnClose != after.KeepRunningOnClose)
+        {
+            ResidentSettingsChanged?.Invoke();
         }
 
         Message.Success("設定を保存しました。");

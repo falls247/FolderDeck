@@ -4,17 +4,22 @@ namespace FolderDeck.Shell;
 
 /// <summary>
 /// Named mutex (<c>Local\FolderDeck.SingleInstance</c>) plus an event the second instance signals
-/// to bring the first one to the front (§4.4).
+/// to bring the first one to the front (§4.4), and an event that asks the running copy to quit
+/// (<c>Local\FolderDeck.Exit</c>: <c>tools\dev.ps1</c> before a build, when a resident copy has no
+/// visible window for <c>CloseMainWindow</c>).
 /// </summary>
 public sealed class SingleInstance : IDisposable
 {
     private const string MutexName = @"Local\FolderDeck.SingleInstance";
     private const string EventName = @"Local\FolderDeck.Activate";
+    private const string ExitEventName = @"Local\FolderDeck.Exit";
 
     private readonly Mutex _mutex;
     private readonly EventWaitHandle _event;
     private readonly bool _owned;
     private RegisteredWaitHandle? _wait;
+    private EventWaitHandle? _exitEvent;
+    private RegisteredWaitHandle? _exitWait;
 
     private SingleInstance(Mutex mutex, EventWaitHandle ev, bool owned)
     {
@@ -52,9 +57,18 @@ public sealed class SingleInstance : IDisposable
         _wait = ThreadPool.RegisterWaitForSingleObject(_event, (_, _) => onActivate(), null, Timeout.Infinite, executeOnlyOnce: false);
     }
 
+    /// <summary>First instance: <paramref name="onExit"/> runs (on a pool thread) when another program asks it to quit.</summary>
+    public void ListenExit(Action onExit)
+    {
+        _exitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ExitEventName);
+        _exitWait = ThreadPool.RegisterWaitForSingleObject(_exitEvent, (_, _) => onExit(), null, Timeout.Infinite, executeOnlyOnce: false);
+    }
+
     public void Dispose()
     {
         _wait?.Unregister(null);
+        _exitWait?.Unregister(null);
+        _exitEvent?.Dispose();
         if (_owned)
         {
             try

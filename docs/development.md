@@ -54,7 +54,7 @@ FolderDeck をビルド・テスト・起動し、配布用の exe を作ると�
 
 - ダブルクリックしたときは、最後に「Enter キーで閉じます」で止まるので結果を読めます（`run.bat` / `build-test-run.bat` が成功したときはアプリが出るので止まりません）。ターミナルから実行したときは止まりません。
 - 終了コードを返すので、ほかのスクリプトからも呼べます（成功 0、失敗 1、引数の誤り 2）。
-- これから上書きするフォルダ（`bin\Debug`、`bin\Release`、`publish`、コピー先の `dist`・`dist\uncompressed`・`dist\framework-dependent`）から FolderDeck が起動していると exe がロックされてビルドできないため、「閉じて続けますか？ [Y/n]」と聞いてから普通に閉じます（閉じるときに状態は保存されます）。ほかの場所から起動している FolderDeck には触れません。
+- これから上書きするフォルダ（`bin\Debug`、`bin\Release`、`publish`、コピー先の `dist`・`dist\uncompressed`・`dist\framework-dependent`）から FolderDeck が起動していると exe がロックされてビルドできないため、「閉じて続けますか？ [Y/n]」と聞いてから普通に閉じます（閉じるときに状態は保存されます）。ほかの場所から起動している FolderDeck には触れません。常駐モードで隠れている FolderDeck には `CloseMainWindow` が届かないため、終了の合図（名前付きイベント `Local\FolderDeck.Exit`）も送ります（常駐モードでも、ほかのプログラムからの終了の要求では隠れずに終了します）。
   - 入力できない実行（ほかのツールから呼んだときなど）では、閉じずに中止します。確認なしで閉じてよいときは、環境変数 `FOLDERDECK_AUTOCLOSE=1` を設定してください（[7.1](#71-閉じて続けますかと聞かれるexe-がロックされてビルドできない)）。
 - FolderDeck は 1 つしか起動できません。ほかの場所（`dist\` など）の FolderDeck が起動していると、`run.bat` / `build-test-run.bat` は新しいビルドを起動できない（既存のウィンドウが前に出るだけで `--data-dir` も効かない）ため、ビルドせずにその旨を表示して終了します。そちらを閉じてから実行してください（[7.2](#72-runbat-が新しいビルドを起動せずに終わる)）。
 - `test.bat` などへの追加の引数は、`-tl:off` や `-p:Name=Value` のような形もそのまま dotnet に渡ります。
@@ -216,7 +216,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\analyze-log.ps1 -LogDi
 | 終わり方の表示 | 意味 |
 |---|---|
 | ユーザーが閉じた | × ボタン、Alt+F4、タスクバーから閉じた |
-| 別のプログラムが閉じた（WM_CLOSE） | ほかのプログラムがウィンドウを閉じさせた（ビルドスクリプトの `CloseMainWindow`、`/F` なしの `taskkill`、インストーラーなど） |
+| 別のプログラムが閉じた（WM_CLOSE） | ほかのプログラムがウィンドウを閉じさせた（ビルドスクリプトの `CloseMainWindow`・終了の合図、`/F` なしの `taskkill`、インストーラーなど）。常駐モードの通知領域の「終了」もこう表示される（直前に `resident: exit requested by the tray menu` の行がある） |
 | Windows のセッション終了で閉じた | サインアウト・シャットダウン・更新（Restart Manager） |
 | クラッシュ（未処理の例外） | 例外の内容がログに残っています |
 | UI が応答しないまま終わった | 「UI の応答なし」の記録が戻らないまま終了処理が走っていない（固まったので強制終了されたと推定。[7.12](#712-folderdeck-が応答しなくなるファイルの多いフォルダ)） |

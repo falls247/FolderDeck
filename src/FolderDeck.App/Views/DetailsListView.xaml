@@ -90,9 +90,11 @@
         </Grid.RowDefinitions>
 
         <!-- Header. Margin: left = the rows' left padding; right = their right padding + the scroll bar. -->
-        <Border Grid.Row="0" Margin="12,8,12,0" Height="{DynamicResource Size.Details.Header}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1">
+        <!-- right click: the column chooser (DetailsListView.HeaderMenuRequested); the extra columns' cells are built in code -->
+        <Border x:Name="HeaderBar" Grid.Row="0" Margin="12,8,12,0" Height="{DynamicResource Size.Details.Header}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
+                Background="Transparent" MouseRightButtonUp="OnHeaderRightUp">
             <!-- the * column is the empty space right of the last column (the rows have it too) -->
-            <Grid ClipToBounds="True">
+            <Grid x:Name="HeaderGrid" ClipToBounds="True">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition x:Name="HeaderName" Width="360" />
                     <ColumnDefinition x:Name="HeaderModified" Width="150" />

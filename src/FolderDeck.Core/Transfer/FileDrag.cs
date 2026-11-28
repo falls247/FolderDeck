@@ -93,8 +93,9 @@ public static class FileDrag
     /// <summary>
     /// The effect of dropping <paramref name="sources"/> on the folder <paramref name="target"/>,
     /// as Explorer decides it: no key moves within one volume (<see cref="TransferRules.SameVolume"/>)
-    /// and copies across volumes and shares; Ctrl copies; Shift moves; Alt, Ctrl+Shift and the right
-    /// button give None (the app makes no shortcuts and has no drop menu). A default move that
+    /// and copies across volumes and shares; Ctrl copies; Shift moves; Alt makes shortcuts
+    /// (<see cref="DropEffects.Link"/>, see <see cref="MakesLink"/>); Ctrl+Shift and the right button
+    /// give None (the app has no drop menu). A default move that
     /// <paramref name="allowed"/> does not include becomes a copy; a forced one is refused. None when
     /// the target is unusable, a source is the target or contains it, a source lies in the Recycle
     /// Bin, or no source could go there at all (already in it, a root, not a path). Strings only, no
@@ -123,11 +124,52 @@ public static class FileDrag
     public static bool CopiesInPlace(DropKeys keys) =>
         (keys & (DropKeys.Control | DropKeys.Shift | DropKeys.Alt | DropKeys.RightButton)) == DropKeys.Control;
 
+    /// <summary>
+    /// Alt held at the drop (with the left button) makes shortcuts to the items in the target, as
+    /// Explorer's Alt + drag. Ctrl and Shift with it do not change that.
+    /// </summary>
+    public static bool MakesLink(DropKeys keys) =>
+        (keys & DropKeys.Alt) != 0 && (keys & DropKeys.RightButton) == 0;
+
+    /// <summary>
+    /// The shortcut drop: Link when at least one source can get a shortcut in <paramref name="target"/>
+    /// (any fully qualified path but the target itself; the folder it is in and a folder inside it are
+    /// fine, as in Explorer) and the source allows linking. Never falls back to a copy.
+    /// </summary>
+    private static DropEffects LinkEffect(IReadOnlyList<string> sources, string? target, DropEffects allowed)
+    {
+        if (target is null || !PathTools.IsFullyQualified(target) || IsInRecycleBin(target))
+        {
+            return DropEffects.None;
+        }
+
+        bool any = false;
+        foreach (string source in sources)
+        {
+            if (IsInRecycleBin(source))
+            {
+                return DropEffects.None;
+            }
+
+            if (PathTools.IsFullyQualified(source) && !PathTools.PathEquals(source.TrimEnd('\\'), target.TrimEnd('\\')))
+            {
+                any = true;
+            }
+        }
+
+        return any && (allowed & DropEffects.Link) != 0 ? DropEffects.Link : DropEffects.None;
+    }
+
     private static DropEffects EffectFor(IReadOnlyList<string>? sources, string? target, DropKeys keys, DropEffects allowed, bool copyInPlace)
     {
         if (sources is null || sources.Count == 0)
         {
             return DropEffects.None;
+        }
+
+        if (MakesLink(keys))
+        {
+            return LinkEffect(sources, target, allowed);
         }
 
         bool control = (keys & DropKeys.Control) != 0;
@@ -197,10 +239,15 @@ public static class FileDrag
     /// What a drop target answers in <c>Drop</c> once it accepted: Copy, never Move. The app runs
     /// the move itself, after the drop; answering Move would let the source delete the originals
     /// (a non-optimized move, see "Handling Shell Data Transfer Scenarios"), also those the user
-    /// then skips in the shell's collision dialog.
+    /// then skips in the shell's collision dialog. A shortcut drop answers Link (the source keeps
+    /// its items either way).
     /// </summary>
-    public static DropEffects DropResult(DropEffects chosen) =>
-        chosen == DropEffects.None ? DropEffects.None : DropEffects.Copy;
+    public static DropEffects DropResult(DropEffects chosen) => chosen switch
+    {
+        DropEffects.None => DropEffects.None,
+        DropEffects.Link => DropEffects.Link,
+        _ => DropEffects.Copy,
+    };
 
     private static bool IsInRecycleBin(string? path) =>
         path is not null && path.Replace('/', '\\').Contains(@"\$Recycle.Bin\", StringComparison.OrdinalIgnoreCase);
