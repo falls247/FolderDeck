@@ -215,7 +215,24 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     private IEnumerable<TabViewModel> AllTabs => new[] { RecentTab, FrequentTab }.Concat(Tabs.Where(t => t.IsFolderTab));
 
-    private void Watch(TabViewModel tab) => tab.PropertyChanged += OnTabPropertyChanged;
+    private void Watch(TabViewModel tab)
+    {
+        tab.PropertyChanged += OnTabPropertyChanged;
+
+        // A batch of the subfolders' matches replaces the list: the user may be scrolling through it.
+        tab.AroundDeepBatch = show =>
+        {
+            if (!ReferenceEquals(tab, SelectedTab) || View is not { } view)
+            {
+                show();
+                return;
+            }
+
+            double offset = view.GetScrollOffset();
+            show();
+            view.ScrollTo(offset);
+        };
+    }
 
     private void OnTabPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -2491,6 +2508,34 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Ctrl+A: every enabled item of the shown list. Returns true when the selection changed.</summary>
     public bool SelectAll() => HasTab && SelectedTab.Selection.SelectAll(SelectedTab.SelectableKeys());
 
+    /// <summary><paramref name="card"/> is an item of the shown list (not a row of a cascade or the sidebar).</summary>
+    public bool IsShownCard(CardViewModel card) => HasTab && SelectedTab.Cards.Contains(card);
+
+    /// <summary>「ファイル種別選択」: the kinds in the shown list (as filtered and searched), usable items only.</summary>
+    public IReadOnlyList<TypeGroup> TypeGroupsShown() =>
+        HasTab
+            ? TypeGroups.Of(SelectedTab.Cards.Where(c => !c.IsDisabled).Select(c => (Path.GetFileName(c.Path), c.Kind == CardKind.Folder)))
+            : [];
+
+    /// <summary>
+    /// 「ファイル種別選択」: the shown items of kind <paramref name="key"/> (<see cref="TypeGroups.KeyOf"/>)
+    /// become the selection (it is replaced, as Ctrl+A replaces it).
+    /// </summary>
+    public void SelectByType(string key)
+    {
+        if (!HasTab)
+        {
+            return;
+        }
+
+        var tab = SelectedTab;
+        var keys = tab.Cards
+            .Where(c => !c.IsDisabled && TypeGroups.KeyOf(Path.GetFileName(c.Path), c.Kind == CardKind.Folder) == key)
+            .Select(c => c.Path)
+            .ToList();
+        tab.Selection.Replace(keys);
+    }
+
     /// <summary>
     /// Esc, a plain click, a press on the blank area. The keyboard cursor stays where it was (as
     /// Explorer's focus), so the next arrow goes on from there; only another folder forgets it
@@ -3990,6 +4035,14 @@ public sealed partial class MainViewModel : ObservableObject
         if (before.AutoRefresh != after.AutoRefresh || before.AutoRefreshSeconds != after.AutoRefreshSeconds)
         {
             ApplyAutoRefreshSetting(after); // turned on: the shown folder is checked about a second after OK
+        }
+
+        if (before.SearchScope != after.SearchScope)
+        {
+            foreach (var tab in AllTabs)
+            {
+                tab.UpdateDeepSearch(); // a search under way follows the new scope
+            }
         }
 
         if (before.StartAtLogin != after.StartAtLogin && _services.ManagesRunKey)

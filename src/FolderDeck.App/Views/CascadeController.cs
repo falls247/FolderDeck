@@ -2044,6 +2044,26 @@ public sealed class CascadeController
         return IsOpen;
     }
 
+    /// <summary>
+    /// Opens the preview of <paramref name="item"/> (a details row's file: <see cref="CardAnchor"/>)
+    /// beside <paramref name="hover"/> (the row's name cell, laid out) at once, as the hover would
+    /// (a preview without a parent list: Esc or ← closes it, the other keys go on to the view).
+    /// False for a folder, an item that cannot be used or a frozen cascade.
+    /// </summary>
+    public bool OpenPreviewFromKeys(FrameworkElement hover, ICascadeAnchor item)
+    {
+        if (item.File is null || item.IsDisabled || !hover.IsVisible || !BeginKeysOpen())
+        {
+            return false;
+        }
+
+        _anchor = hover;
+        _anchorPlacement = hover;
+        _anchorItem = item;
+        OpenRoot(hover, hover, item);
+        return true;
+    }
+
     /// <summary>The cascade shows (or is about to show) the list of <paramref name="vm"/>, by key or by hover: Space closes it again.</summary>
     public bool IsOpenOn(CardViewModel vm) =>
         (IsOpen || _byKeys)
@@ -2132,8 +2152,9 @@ public sealed class CascadeController
     {
         if (_levels.Count == 0)
         {
-            // At most a preview beside an anchor: Esc closes it, the other keys go to the view.
-            return key == Key.Escape && CloseDeepest();
+            // At most a preview beside an anchor: Esc closes it (← too when the keys opened it, as
+            // the → that did), the other keys go to the view.
+            return (key == Key.Escape || (key == Key.Left && _byKeys)) && CloseDeepest();
         }
 
         int index = _keyLevel < 0 || _keyLevel >= _levels.Count ? _levels.Count - 1 : _keyLevel;

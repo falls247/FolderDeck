@@ -295,6 +295,21 @@ public sealed class AppSettings
     /// </summary>
     public bool KeepRunningOnClose { get; set; }
 
+    /// <summary>名前で検索 (Ctrl+F) looks only in the shown folder.</summary>
+    public const string SearchScopeFolder = "folder";
+
+    /// <summary>名前で検索 (Ctrl+F) also looks in the subfolders (Windows Search and a walk, see <see cref="Listing.DeepSearch"/>).</summary>
+    public const string SearchScopeRecursive = "recursive";
+
+    /// <summary>
+    /// Where the search of a folder looks: <see cref="SearchScopeFolder"/> (the default, the list
+    /// shown) or <see cref="SearchScopeRecursive"/>. Unknown values are the default.
+    /// </summary>
+    public string? SearchScope { get; set; } = SearchScopeFolder;
+
+    [JsonIgnore]
+    public bool SearchesRecursively => SearchScope == SearchScopeRecursive;
+
     public static int ClampCardSize(int value) => Snap(value, CardSizeMin, CardSizeMax, CardSizeStep);
 
     public static int ClampTextScale(int value) => Snap(value, TextScaleMin, TextScaleMax, TextScaleStep);
@@ -509,6 +524,7 @@ public sealed class AppSettings
         FrequentLimit = Math.Clamp(FrequentLimit, 10, 200);
         ThumbCacheMb = Math.Clamp(ThumbCacheMb, 0, ThumbCacheMbMax);
         AutoRefreshSeconds = Math.Clamp(AutoRefreshSeconds, AutoRefreshSecondsMin, AutoRefreshSecondsMax);
+        SearchScope = string.Equals(SearchScope?.Trim(), SearchScopeRecursive, StringComparison.OrdinalIgnoreCase) ? SearchScopeRecursive : SearchScopeFolder;
         NormalizeTabViews(); // last: reads the normalized open_tabs, card_shape and sort_modes
     }
 

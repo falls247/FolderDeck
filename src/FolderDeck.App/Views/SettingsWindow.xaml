@@ -177,6 +177,17 @@
                     <TextBlock Text=".vscode や .gitignore など。隠し属性も付いているもの（Git の .git フォルダなど）は、上の「隠しファイル・フォルダを表示」もオンにすると表示します。"
                                Style="{StaticResource Help}" Margin="20,0,0,0" />
 
+                    <TextBlock Text="名前で検索（Ctrl + F）" Style="{StaticResource Section}" />
+                    <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3" Background="{DynamicResource Brush.Surface2}"
+                            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="SearchScope" Content="表示中のフォルダだけ" IsChecked="{Binding IsSearchFolderOnly}" />
+                            <RadioButton Style="{StaticResource Toggle.Choice}" GroupName="SearchScope" Content="サブフォルダも検索" IsChecked="{Binding IsSearchRecursive}" Margin="3,0,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Text="「サブフォルダも検索」は、表示中のフォルダの一致のあとに、その下のフォルダの一致を、ある場所（フォルダ）を添えて並べます。Windows Search のインデックスにある場所はすぐに出し、ない場所もフォルダをたどって探します（見つかった順に増えます。最大 5,000 件）。最近の履歴・よく使う項目の一覧では、いつも一覧の中だけを検索します。"
+                               Style="{StaticResource Help}" Margin="0,6,0,0" />
+
                     <TextBlock Text="フォルダの自動更新" Style="{StaticResource Section}" />
                     <Border HorizontalAlignment="Left" CornerRadius="8" Padding="3" Background="{DynamicResource Brush.Surface2}"
                             BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">

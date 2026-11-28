@@ -43,6 +43,35 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _startAtLogin;
 
+    /// <summary>名前で検索の範囲: the subfolders too (<see cref="AppSettings.SearchScopeRecursive"/>). The two switches below show and set it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSearchFolderOnly), nameof(IsSearchRecursive))]
+    private bool _searchRecursive;
+
+    public bool IsSearchFolderOnly
+    {
+        get => !SearchRecursive;
+        set
+        {
+            if (value)
+            {
+                SearchRecursive = false;
+            }
+        }
+    }
+
+    public bool IsSearchRecursive
+    {
+        get => SearchRecursive;
+        set
+        {
+            if (value)
+            {
+                SearchRecursive = true;
+            }
+        }
+    }
+
     /// <summary>常駐モード: 閉じても終了しない (<see cref="AppSettings.KeepRunningOnClose"/>).</summary>
     [ObservableProperty]
     private bool _keepRunningOnClose;
@@ -96,6 +125,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _openOnDoubleClick = settings.OpenOnDoubleClick;
         _startAtLogin = settings.StartAtLogin;
         _keepRunningOnClose = settings.KeepRunningOnClose;
+        _searchRecursive = settings.SearchesRecursively;
         _itemMenu = ItemMenuStyles.FromSetting(settings.ItemMenu);
         _messagePlacement = MessagePlacements.FromSetting(settings.MessagePosition);
         _autoRefresh = settings.AutoRefresh;
@@ -300,6 +330,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.OpenOnDoubleClick = OpenOnDoubleClick;
         settings.StartAtLogin = StartAtLogin;
         settings.KeepRunningOnClose = KeepRunningOnClose;
+        settings.SearchScope = SearchRecursive ? AppSettings.SearchScopeRecursive : AppSettings.SearchScopeFolder;
         settings.ItemMenu = ItemMenuStyles.ToSetting(ItemMenu);
         settings.MessagePosition = MessagePlacements.ToSetting(MessagePlacement);
         settings.RecentLimit = RecentLimit;
