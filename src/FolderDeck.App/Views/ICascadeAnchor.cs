@@ -10,7 +10,7 @@ namespace FolderDeck.Views;
 /// a folder whose list opens in a flyout beside an element of the window. A sidebar row (登録フォルダ,
 /// drive) is one, a folder row of the details list (<see cref="CardAnchor"/>) another, a crumb of the
 /// address bar (<see cref="BreadcrumbItem"/>, its list under it) a third, the header of a tab that is
-/// not shown (<see cref="TabViewModel"/>, its list under it) a fourth; the element
+/// not shown (<see cref="TabLayoutViewModel"/>, its list under it) a fourth; the element
 /// itself is passed separately, so one item can be shown by any view.
 /// </summary>
 public interface ICascadeAnchor

@@ -24,13 +24,15 @@ public enum LoadOutcome
 }
 
 /// <summary>
-/// One tab (§5.2, §10): its location, its cards, and how to load them. 最近の履歴 and よく使う項目
-/// are fixed tabs with a top level (one instance each for the whole session, on the tab strip only
-/// while <see cref="IsOpen"/>); a folder tab (<see cref="TabKind.Folder"/>) is opened from the
-/// 登録フォルダ sidebar and always shows a folder. The placeholder (<see cref="TabKind.None"/>) is
-/// what is selected while no tab is open: it has no title, no crumb, no cards and no commands.
+/// One pane of a tab (§5.2, §10): its location, its cards, and how to load them (the class was
+/// <c>TabViewModel</c> while a tab had exactly one). The tab on the strip is <see cref="TabLayoutViewModel"/>:
+/// how its panes are laid out and which one is active. 最近の履歴 and よく使う項目 are fixed tabs
+/// with a top level (one pane each for the whole session, on the tab strip only while their tab
+/// <see cref="TabLayoutViewModel.IsOpen"/>); the panes of a folder tab (<see cref="TabKind.Folder"/>)
+/// always show a folder. The placeholder (<see cref="TabKind.None"/>) is the pane of the tab that is
+/// selected while no tab is open: it has no title, no crumb, no cards and no commands.
 /// </summary>
-public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
+public sealed partial class PaneViewModel : ObservableObject
 {
     private static readonly TimeSpan RecentCheckTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan SlowAfter = TimeSpan.FromSeconds(5);
@@ -73,14 +75,6 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     /// <summary>The shown cards: sorted, at the top level filtered (<see cref="Filter"/>), and searched (<see cref="SearchText"/>).</summary>
     [ObservableProperty]
     private IReadOnlyList<CardViewModel> _cards = [];
-
-    /// <summary>The tab is the one shown (tab strip highlight).</summary>
-    [ObservableProperty]
-    private bool _isSelected;
-
-    /// <summary>The tab is on the tab strip. Set by <c>MainViewModel</c> together with its <c>Tabs</c>.</summary>
-    [ObservableProperty]
-    private bool _isOpen;
 
     [ObservableProperty]
     private bool _isLoading;
@@ -143,7 +137,7 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     /// A fixed tab (最近の履歴 / よく使う項目), a folder tab at <paramref name="location"/>, or the
     /// placeholder (<see cref="TabKind.None"/>: no saved sort mode or filter).
     /// </summary>
-    public TabViewModel(AppServices services, TabKind kind, NavLocation? location = null)
+    public PaneViewModel(AppServices services, TabKind kind, NavLocation? location = null)
     {
         _services = services;
         Kind = kind;
@@ -300,40 +294,16 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     /// <summary>A fixed tab: 最近の履歴 or よく使う項目 (a top level, a filter, a manual order).</summary>
     private bool IsFixedTab => Kind is TabKind.Recent or TabKind.Frequent;
 
-    /// <summary>Tab strip text: the fixed tab's name, or the name of the folder a folder tab shows.</summary>
+    /// <summary>
+    /// Tab strip text: the fixed tab's name, or the name of the folder a folder pane shows (the tab
+    /// shows its active pane's, <see cref="TabLayoutViewModel.Title"/>).
+    /// </summary>
     public string Title => IsFolderTab
         ? (CurrentFolderPath is { } path ? PathTools.DisplayName(path) : "（不明）")
         : TabKinds.Title(Kind);
 
-    /// <summary>The folder a tab shows, whatever its kind (null at a top level: the title says it all).</summary>
+    /// <summary>The folder a pane shows, whatever its kind (null at a top level: the title says it all).</summary>
     public string? ToolTipText => CurrentFolderPath;
-
-    // ---- cascade anchor: the header of a tab that is not shown (FolderTabStrip → CascadeController) ----
-
-    /// <summary>Set by the cascade while the list under this tab's header is showing (the header stays highlighted, its tooltip off).</summary>
-    [ObservableProperty]
-    private bool _isHoverHeld;
-
-    string ICascadeAnchor.Path => CurrentFolderPath ?? string.Empty;
-
-    NavLocation? ICascadeAnchor.Target => CurrentFolderPath is null ? null : Location;
-
-    /// <summary>
-    /// Nothing to list: the shown tab (its content is on screen), the top list of 最近の履歴 / よく使う項目,
-    /// an unknown root, or a tab whose last load failed (its banner says why; it is read again when shown).
-    /// </summary>
-    bool ICascadeAnchor.IsDisabled => IsSelected || CurrentFolderPath is null || BannerText is not null;
-
-    /// <summary>
-    /// Outside the shown tab, as a sidebar row: picked folders open in a folder tab (an open tab of that
-    /// folder is selected), and the list outlives the shown tab's content (<see cref="ICascadeAnchor.OutlivesContent"/>).
-    /// </summary>
-    bool ICascadeAnchor.OpensInNewTab => true;
-
-    bool ICascadeAnchor.YieldsToModifiers => false;
-
-    /// <summary>The strip is at the top: the list goes under the header (files too: a look into the tab).</summary>
-    bool ICascadeAnchor.OpensBelow => true;
 
     public bool IsTop => Location.IsTop;
 
@@ -350,7 +320,9 @@ public sealed partial class TabViewModel : ObservableObject, ICascadeAnchor
     /// How this tab shows its items (cards of a shape, or the details list); kept per tab and saved in its
     /// open_tabs entry. <see cref="MainViewModel.CardShape"/> mirrors the shown tab's.
     /// </summary>
-    public CardShape CardShape { get; set; } = CardShape.Portrait;
+    /// <remarks>Observable: each pane's view (<c>PaneView</c>) shows the cards or the details list by it.</remarks>
+    [ObservableProperty]
+    private CardShape _cardShape = CardShape.Portrait;
 
     /// <summary>
     /// The view a tab starts with (saved, or inherited from the tab used last). Only for a tab without cards

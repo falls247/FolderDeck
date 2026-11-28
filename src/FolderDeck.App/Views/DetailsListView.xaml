@@ -137,11 +137,11 @@
                 <!-- after the titles, so that the grips lie on top of them (Tag: the DetailsColumns key) -->
                 <Thumb Grid.Column="0" Style="{StaticResource HeaderGrip}" Tag="name"
                        DragStarted="OnGripDragStarted" DragDelta="OnGripDragDelta" DragCompleted="OnGripDragCompleted" />
-                <Thumb Grid.Column="1" Style="{StaticResource HeaderGrip}" Tag="modified"
+                <Thumb x:Name="ModifiedGrip" Grid.Column="1" Style="{StaticResource HeaderGrip}" Tag="modified"
                        DragStarted="OnGripDragStarted" DragDelta="OnGripDragDelta" DragCompleted="OnGripDragCompleted" />
-                <Thumb Grid.Column="2" Style="{StaticResource HeaderGrip}" Tag="type"
+                <Thumb x:Name="TypeGrip" Grid.Column="2" Style="{StaticResource HeaderGrip}" Tag="type"
                        DragStarted="OnGripDragStarted" DragDelta="OnGripDragDelta" DragCompleted="OnGripDragCompleted" />
-                <Thumb Grid.Column="3" Style="{StaticResource HeaderGrip}" Tag="size"
+                <Thumb x:Name="SizeGrip" Grid.Column="3" Style="{StaticResource HeaderGrip}" Tag="size"
                        DragStarted="OnGripDragStarted" DragDelta="OnGripDragDelta" DragCompleted="OnGripDragCompleted" />
             </Grid>
         </Border>

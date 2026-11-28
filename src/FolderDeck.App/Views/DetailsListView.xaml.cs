@@ -424,7 +424,9 @@ public partial class DetailsListView : UserControl, IItemsView
 
     /// <summary>
     /// Applies the column widths to the header and, through <see cref="Metrics"/>, to the rows:
-    /// the stored widths (or the ones of the running resize), fitted to the width of the list.
+    /// the stored widths (or the ones of the running resize), fitted to the width of the list. A list
+    /// too narrow for every column at its smallest (a narrow pane) hides columns from the right
+    /// (<see cref="DetailsColumns.Arrange"/>): 0 wide, without their titles and grips.
     /// </summary>
     private void UpdateColumns()
     {
@@ -433,14 +435,15 @@ public partial class DetailsListView : UserControl, IItemsView
         var widths = _resize?.Widths ?? Columns ?? DetailsColumns.Defaults;
         var extras = ExtraColumns ?? [];
         double available = ActualWidth - HorizontalChrome - end;
-        var shown = available > 0
-            ? DetailsColumns.Fit(available, widths, extras)
-            : DetailsColumns.Normalize(widths); // not laid out yet
+        var layout = available > 0
+            ? DetailsColumns.Arrange(available, widths, extras)
+            : new DetailsColumnLayout(DetailsColumns.Normalize(widths), new HashSet<string>()); // not laid out yet
+        var shown = layout.Widths;
 
         var columns = DetailsPropertyColumns.All;
         for (int i = 0; i < columns.Count && i < _extraHeaders.Count; i++)
         {
-            bool on = extras.Contains(columns[i].Id);
+            bool on = extras.Contains(columns[i].Id) && !layout.Hidden.Contains(columns[i].Id);
             var width = new GridLength(on ? shown[columns[i].Id] : 0);
             var slot = Metrics.Extras[i];
             slot.Width = _extraHeaders[i].Column.Width = width;
@@ -453,6 +456,13 @@ public partial class DetailsListView : UserControl, IItemsView
         Metrics.TypeWidth = HeaderType.Width = new GridLength(shown[DetailsColumns.Type]);
         Metrics.SizeWidth = HeaderSize.Width = new GridLength(shown[DetailsColumns.Size]);
         Metrics.EndWidth = HeaderEnd.Width = new GridLength(end);
+        Show(ModifiedHeader, ModifiedGrip, DetailsColumns.Modified);
+        Show(TypeHeader, TypeGrip, DetailsColumns.Type);
+        Show(SizeHeader, SizeGrip, DetailsColumns.Size);
+
+        // A hidden base column is 0 wide in the rows too (their cells are clipped away); its title and grip go.
+        void Show(Button title, Thumb grip, string key) =>
+            title.Visibility = grip.Visibility = layout.Hidden.Contains(key) ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// <summary>Marks the title of the sorted column with its direction (none in the manual order).</summary>

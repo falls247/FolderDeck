@@ -167,17 +167,19 @@ public sealed partial class MainViewModel
     /// <summary>Selects what came back into the folder shown (as ReloadAndSelectArrivedAsync; only what the reloaded list shows).</summary>
     private void SelectArrived(IReadOnlyList<string> paths)
     {
-        var tab = SelectedTab;
-        if (tab.TransferTargetPath is not { } shown)
+        foreach (var tab in VisiblePanes)
         {
-            return;
-        }
+            if (tab.TransferTargetPath is not { } shown)
+            {
+                continue;
+            }
 
-        var here = paths.Where(p => PathTools.PathEquals(PathTools.ParentOf(p), shown)).ToList();
-        if (here.Count > 0)
-        {
-            tab.Selection.Replace(here);
-            tab.Selection.Prune(tab.SelectableKeys());
+            var here = paths.Where(p => PathTools.PathEquals(PathTools.ParentOf(p), shown)).ToList();
+            if (here.Count > 0)
+            {
+                tab.Selection.Replace(here);
+                tab.Selection.Prune(tab.SelectableKeys());
+            }
         }
     }
 

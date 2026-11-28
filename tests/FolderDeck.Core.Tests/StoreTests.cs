@@ -710,7 +710,7 @@ public class SettingsStoreTests
         string[] expected = ["recent||", @"frequent|E:\写真|2026", @"folder|E:\仕事|", @"folder|E:\写真|2026\夏"];
         Assert.Equal(expected, s.OpenTabs!.Select(Describe));
         Assert.Equal(3, s.SelectedTab); // the last folder tab (index 7 clamped)
-        Assert.Equal(2, s.Version);
+        Assert.Equal(AppSettings.CurrentVersion, s.Version);
         Assert.Null(s.LastTab);
         Assert.Null(s.Locations);
         Assert.Null(s.SelectedFolderTab);
@@ -720,7 +720,7 @@ public class SettingsStoreTests
         store.Update(_ => { });
         store.Flush();
         string text = File.ReadAllText(file);
-        Assert.Contains("\"version\": 2", text);
+        Assert.Contains("\"version\": 3", text);
         Assert.Contains("\"selected_tab\": 3", text);
         Assert.DoesNotContain("last_tab", text);
         Assert.DoesNotContain("locations", text);
@@ -757,13 +757,241 @@ public class SettingsStoreTests
         var s = store.Current;
         Assert.Equal(["recent||", "frequent||", @"folder|E:\写真|2026", @"folder|E:\仕事|"], s.OpenTabs!.Select(Describe));
         Assert.Equal(0, s.SelectedTab);
-        Assert.Equal(2, s.Version);
+        Assert.Equal(AppSettings.CurrentVersion, s.Version);
 
         // The version key alone does not decide: last_tab is only ever written by version 1.
         var mislabeled = new AppSettings { Version = 2, LastTab = AppSettings.TabFrequent, OpenTabs = [new OpenTabSetting { Root = @"E:\仕事" }] };
         mislabeled.Normalize();
         Assert.Equal(["recent||", "frequent||", @"folder|E:\仕事|"], mislabeled.OpenTabs!.Select(Describe));
         Assert.Equal(1, mislabeled.SelectedTab);
+    }
+
+    [Fact]
+    public void Version2File_LoadsUnsplit_WithoutTheVersion1Migration_AndIsWrittenAsVersion3()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+
+        // No よく使う項目 and 最近の履歴 not first: the version 1 migration would add and reorder tabs.
+        File.WriteAllText(file, """
+            {"version":2,"selected_tab":2,
+             "open_tabs":[{"kind":"folder","root":"E:\\仕事","path":"2026","file_id":"v1:a","card_shape":"details","sort_mode":"name_desc"},
+                          {"kind":"recent","root":"","path":"","card_shape":"portrait","sort_mode":"manual"},
+                          {"kind":"folder","root":"E:\\写真","path":"","card_shape":"square","sort_mode":"size_asc"}]}
+            """);
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        var s = store.Current;
+        string[] expected = [@"folder|E:\仕事|2026", "recent||", @"folder|E:\写真|"];
+        Assert.Equal(expected, s.OpenTabs!.Select(Describe));
+        Assert.Equal(2, s.SelectedTab);
+        Assert.Equal(["details", "portrait", "square"], s.OpenTabs!.Select(t => t.CardShape));
+        Assert.Equal("v1:a", s.OpenTabs![0].FileId);
+        Assert.Null(s.SplitLayout);
+
+        store.Update(_ => { });
+        store.Flush();
+        string text = File.ReadAllText(file);
+        Assert.Contains("\"version\": 3", text);
+        Assert.DoesNotContain("split_layout", text);
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        Assert.Equal(expected, reloaded.Current.OpenTabs!.Select(Describe));
+        Assert.Equal(2, reloaded.Current.SelectedTab);
+    }
+
+    /// <summary>The leaves of a split as text: "(first | second)" for columns, "(first / second)" for rows; "none" when not split.</summary>
+    private static string Leaves(PaneNodeSetting? node) => node is null
+        ? "none"
+        : node.Split is null ? $"{node.Pane}" : $"({Leaves(node.First)} {(node.Split == "columns" ? "|" : "/")} {Leaves(node.Second)})";
+
+    private static PaneNodeSetting Split(string split, PaneNodeSetting first, PaneNodeSetting second, double? ratio = null) =>
+        new() { Split = split, Ratio = ratio, First = first, Second = second };
+
+    private static PaneNodeSetting Tab(int index) => new() { Pane = index };
+
+    /// <summary>Five tabs, three of them shown: 2 | (0 / 4) at 0.3 and 0.6, tab 4 selected (the active pane).</summary>
+    private static AppSettings SplitWindow() => new()
+    {
+        OpenTabs =
+        [
+            new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\a" },
+            new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\b" },
+            new OpenTabSetting { Kind = AppSettings.TabRecent },
+            new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\d" },
+            new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\e", Path = "x" },
+        ],
+        SelectedTab = 4,
+        SplitLayout = Split("columns", Tab(2), Split("rows", Tab(0), Tab(4), 0.6), 0.3),
+    };
+
+    private static readonly string[] SplitWindowTabs = [@"folder|E:\a|", @"folder|E:\b|", "recent||", @"folder|E:\d|", @"folder|E:\e|x"];
+
+    [Fact]
+    public void SplitLayout_RoundTrips_AndAnOlderExeThatDropsItOpensTheSelectedTabAlone()
+    {
+        using var tmp = new TempDir();
+        string file = tmp.Combine("settings.json");
+        var store = new SettingsStore(file, FakeClock.Fixed());
+        store.Load();
+        var window = SplitWindow();
+        store.Update(s =>
+        {
+            s.OpenTabs = window.OpenTabs;
+            s.SelectedTab = window.SelectedTab;
+            s.SplitLayout = window.SplitLayout;
+        });
+        store.Flush();
+
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(file))!;
+        Assert.NotNull(json["split_layout"]);
+        // Every entry is a plain tab, as version 2 wrote it.
+        Assert.All(json["open_tabs"]!.AsArray(), e => Assert.Equal(
+            ["kind", "root", "path", "card_shape", "sort_mode"],
+            e!.AsObject().Select(kv => kv.Key).Where(k => k != "file_id")));
+
+        var reloaded = new SettingsStore(file, FakeClock.Fixed());
+        reloaded.Load();
+        var s = reloaded.Current;
+        Assert.Equal(SplitWindowTabs, s.OpenTabs!.Select(Describe));
+        Assert.Equal(4, s.SelectedTab);
+        Assert.Equal("(2 | (0 / 4))", Leaves(s.SplitLayout));
+        Assert.Equal(0.3, s.SplitLayout!.Ratio);
+        Assert.Equal(0.6, s.SplitLayout.Second!.Ratio);
+        Assert.Null(s.SplitLayout.First!.Ratio); // leaves carry only their index
+
+        // The copies are deep: changing one does not change the store.
+        s.SplitLayout.Ratio = 0.9;
+        s.SplitLayout.Second.First!.Pane = 1;
+        Assert.Equal(0.3, reloaded.Current.SplitLayout!.Ratio);
+        Assert.Equal("(2 | (0 / 4))", Leaves(reloaded.Current.Clone().SplitLayout));
+
+        // An exe without the split drops the key and writes its version: the same tabs, unsplit.
+        json.AsObject().Remove("split_layout");
+        json["version"] = 2;
+        File.WriteAllText(file, json.ToJsonString());
+        var downgraded = new SettingsStore(file, FakeClock.Fixed());
+        downgraded.Load();
+        Assert.Equal(SplitWindowTabs, downgraded.Current.OpenTabs!.Select(Describe));
+        Assert.Equal(4, downgraded.Current.SelectedTab);
+        Assert.Null(downgraded.Current.SplitLayout);
+    }
+
+    [Fact]
+    public void SplitLayout_FollowsItsTabs_WhenEntriesAreDropped_AndIsWrittenCanonically()
+    {
+        // A blank-root folder and a null before the shown tabs: the leaves move with their entries.
+        var s = new AppSettings
+        {
+            OpenTabs =
+            [
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\a" },
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = " " },
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\b" },
+                new OpenTabSetting { Kind = AppSettings.TabRecent },
+                null!,
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\e" },
+            ],
+            SelectedTab = 5,
+            SplitLayout = Split("columns", Tab(3), Split(" ROWS ", Tab(0), Tab(5), double.NaN), 3),
+        };
+        s.Normalize();
+        Assert.Equal([@"folder|E:\a|", @"folder|E:\b|", "recent||", @"folder|E:\e|"], s.OpenTabs!.Select(Describe));
+        Assert.Equal(3, s.SelectedTab);
+        Assert.Equal("(2 | (0 / 3))", Leaves(s.SplitLayout));
+        Assert.Equal(PaneRules.MaxRatio, s.SplitLayout!.Ratio);
+        Assert.Equal(PaneRules.DefaultRatio, s.SplitLayout.Second!.Ratio);
+
+        // A shown tab that is dropped (a second 最近の履歴) takes the whole split with it.
+        var dropped = new AppSettings
+        {
+            OpenTabs =
+            [
+                new OpenTabSetting { Kind = AppSettings.TabRecent },
+                new OpenTabSetting { Kind = AppSettings.TabFolder, Root = @"E:\a" },
+                new OpenTabSetting { Kind = AppSettings.TabRecent },
+            ],
+            SelectedTab = 1,
+            SplitLayout = Split("columns", Tab(1), Tab(2)),
+        };
+        dropped.Normalize();
+        Assert.Equal(["recent||", @"folder|E:\a|"], dropped.OpenTabs!.Select(Describe));
+        Assert.Equal(1, dropped.SelectedTab);
+        Assert.Null(dropped.SplitLayout);
+    }
+
+    [Fact]
+    public void SplitLayout_KeepsItsFolderTabs_WhenTheCapOfFolderTabsDropsOthers()
+    {
+        // 51 folder tabs (a split added the last one right of the 50th): the cap drops one folder tab,
+        // not the one on screen, so the split survives.
+        var tabs = Enumerable.Range(0, AppSettings.OpenTabsMax + 1)
+            .Select(i => new OpenTabSetting { Kind = AppSettings.TabFolder, Root = $@"E:\f{i}" })
+            .ToList();
+        var s = new AppSettings
+        {
+            OpenTabs = tabs,
+            SelectedTab = AppSettings.OpenTabsMax,
+            SplitLayout = Split("columns", Tab(AppSettings.OpenTabsMax - 1), Tab(AppSettings.OpenTabsMax)),
+        };
+        s.Normalize();
+        Assert.Equal(AppSettings.OpenTabsMax, s.OpenTabs!.Count);
+        Assert.Equal($@"folder|E:\f{AppSettings.OpenTabsMax}|", Describe(s.OpenTabs[s.SelectedTab]));
+        Assert.Equal($"({AppSettings.OpenTabsMax - 2} | {AppSettings.OpenTabsMax - 1})", Leaves(s.SplitLayout));
+        Assert.Equal(@"folder|E:\f47|", Describe(s.OpenTabs[^3])); // the one dropped is the rightmost tab not on screen (f48)
+        Assert.DoesNotContain(@"folder|E:\f48|", s.OpenTabs.Select(Describe));
+    }
+
+    public static TheoryData<string> InvalidSplitLayouts => new()
+    {
+        "the selected tab is not shown",
+        "one pane",
+        "five panes",
+        "an index twice",
+        "an index out of range",
+        "an unknown split",
+        "a split without its second part",
+        "a leaf with children",
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidSplitLayouts))]
+    public void SplitLayout_Invalid_OrWithoutTheSelectedTab_IsNotSplit(string broken)
+    {
+        var s = SplitWindow();
+        switch (broken)
+        {
+            case "the selected tab is not shown":
+                s.SelectedTab = 1;
+                break;
+            case "one pane":
+                s.SplitLayout = Tab(4);
+                break;
+            case "five panes":
+                s.SplitLayout = Split("columns", Split("rows", Tab(0), Tab(1)), Split("rows", Tab(2), Split("columns", Tab(3), Tab(4))));
+                break;
+            case "an index twice":
+                s.SplitLayout!.First!.Pane = 4;
+                break;
+            case "an index out of range":
+                s.SplitLayout!.First!.Pane = 5;
+                break;
+            case "an unknown split":
+                s.SplitLayout!.Second!.Split = "diagonal";
+                break;
+            case "a split without its second part":
+                s.SplitLayout!.Second!.Second = null;
+                break;
+            case "a leaf with children":
+                s.SplitLayout!.First!.First = Tab(1);
+                break;
+        }
+
+        int selected = s.SelectedTab;
+        s.Normalize();
+        Assert.Null(s.SplitLayout);
+        Assert.Equal(SplitWindowTabs, s.OpenTabs!.Select(Describe)); // the tabs stay as they are
+        Assert.Equal(selected, s.SelectedTab);
     }
 
     [Fact]

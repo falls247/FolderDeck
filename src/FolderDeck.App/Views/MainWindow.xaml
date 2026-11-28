@@ -127,7 +127,7 @@
                                 ToolTip="{views:ShortcutTip Text=クリックでパスを入力・コピー, Id=Address, Tail=。cmd・wsl・powershell などと入力すると、このフォルダで開きます}" />
                         <!-- the "…" lies over the room TrailPanel keeps free at the start while it leaves crumbs out -->
                         <Grid x:Name="Crumbs" Margin="1,0" HorizontalAlignment="Left" VerticalAlignment="Center">
-                            <ItemsControl x:Name="CrumbItems" ItemsSource="{Binding SelectedTab.Breadcrumbs}" ClipToBounds="True" Focusable="False">
+                            <ItemsControl x:Name="CrumbItems" ItemsSource="{Binding ActivePane.Breadcrumbs}" ClipToBounds="True" Focusable="False">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
                                         <views:TrailPanel LeadWidth="20" />
@@ -166,7 +166,7 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                             <TextBlock Text="…" Margin="6,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}"
-                                       ToolTip="{Binding SelectedTab.AddressText}"
+                                       ToolTip="{Binding ActivePane.AddressText}"
                                        Visibility="{Binding (views:TrailPanel.IsTrimmed), ElementName=CrumbItems, Converter={StaticResource BoolToVis}}" />
                         </Grid>
                         <TextBox x:Name="AddressEdit" Style="{StaticResource AddressBox}" Visibility="Collapsed"
@@ -176,18 +176,18 @@
 
                 <!-- its width is held while the address bar's edit box is open (BeginAddressEdit) -->
                 <StackPanel x:Name="CountPanel" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,12,0" ClipToBounds="True">
-                    <TextBlock Text="{Binding SelectedTab.ShownCountText}" Foreground="{DynamicResource Brush.Muted}"
+                    <TextBlock Text="{Binding ActivePane.ShownCountText}" Foreground="{DynamicResource Brush.Muted}"
                                VerticalAlignment="Center" Typography.NumeralAlignment="Tabular" />
                     <!-- 「3 個を選択」 while items are selected -->
-                    <TextBlock Text="{Binding SelectedTab.SelectionText}" Foreground="{DynamicResource Brush.Accent}" FontWeight="SemiBold"
+                    <TextBlock Text="{Binding ActivePane.SelectionText}" Foreground="{DynamicResource Brush.Accent}" FontWeight="SemiBold"
                                VerticalAlignment="Center" Margin="10,0,0,0" Typography.NumeralAlignment="Tabular"
-                               Visibility="{Binding SelectedTab.SelectionText, Converter={StaticResource NotEmptyToVis}}" />
+                               Visibility="{Binding ActivePane.SelectionText, Converter={StaticResource NotEmptyToVis}}" />
                 </StackPanel>
 
                 <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
                     <!--
                       Search of the shown list (Ctrl+F / F3): the items whose name holds every word typed
-                      (TabViewModel.SearchText). Right of the count, so that a count that changes while
+                      (PaneViewModel.SearchText). Right of the count, so that a count that changes while
                       typing does not move the box. The box is Collapsed except while typing (as the
                       address bar's edit box, see above: a TextBox in the layout keeps the IME busy);
                       while a search is on and the box is closed, the chip shows it (a click edits it,
@@ -197,12 +197,12 @@
                         <Border x:Name="SearchChip" CornerRadius="6" BorderThickness="1" Padding="8,2,2,2" Cursor="IBeam"
                                 BorderBrush="{DynamicResource Brush.Accent}" Background="{DynamicResource Brush.AccentSoft}"
                                 ToolTip="{views:ShortcutTip Text=一覧を名前で絞り込み中。クリックで編集, Id=Search, Tail=、× で解除}"
-                                Visibility="{Binding SelectedTab.IsSearching, Converter={StaticResource BoolToVis}}"
+                                Visibility="{Binding ActivePane.IsSearching, Converter={StaticResource BoolToVis}}"
                                 MouseLeftButtonUp="OnSearchChipClick">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE721;" FontFamily="{StaticResource Font.Icons}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"
                                            Foreground="{DynamicResource Brush.Accent}" />
-                                <TextBlock Text="{Binding SelectedTab.SearchText}" MaxWidth="180" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding ActivePane.SearchText}" MaxWidth="180" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                                 <Button Style="{StaticResource Btn.TabClose}" Margin="4,0,0,0" ToolTip="検索を解除" Click="OnSearchClearClick" />
                             </StackPanel>
                         </Border>
@@ -218,16 +218,16 @@
                     </Grid>
                     <Button Style="{StaticResource Btn}" Content="履歴をクリア" Margin="0,0,8,0" Padding="10,4"
                             Command="{Binding ClearHistoryCommand}"
-                            Visibility="{Binding SelectedTab.ShowClearHistory, Converter={StaticResource BoolToVis}}" />
+                            Visibility="{Binding ActivePane.ShowClearHistory, Converter={StaticResource BoolToVis}}" />
                 </StackPanel>
 
                 <!-- what the list of 最近の履歴 / よく使う項目 shows: everything, folders only, files only -->
                 <Button Grid.Column="4" Style="{StaticResource Btn}" Margin="0,0,8,0" Padding="10,4" Click="OnFilterClick"
                         ToolTip="表示する項目（タブごと）：すべて / フォルダのみ / ファイルのみ"
-                        Visibility="{Binding SelectedTab.ShowFilter, Converter={StaticResource BoolToVis}}">
+                        Visibility="{Binding ActivePane.ShowFilter, Converter={StaticResource BoolToVis}}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE71C;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
-                        <TextBlock Text="{Binding SelectedTab.FilterText}" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ActivePane.FilterText}" VerticalAlignment="Center" />
                         <TextBlock Text="&#xE70D;" FontFamily="{StaticResource Font.Icons}" FontSize="9" VerticalAlignment="Center" Margin="6,1,0,0"
                                    Foreground="{DynamicResource Brush.Muted}" />
                     </StackPanel>
@@ -238,14 +238,14 @@
                         ToolTip="並べ替え（タブごと。一覧の空いているところの右クリックからも選べます）。一覧はドラッグで並べた順、フォルダの中は既定の順（フォルダ→ファイル、名前順）が「手動」です。ピン留めした項目は位置が固定されます。">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8CB;" FontFamily="{StaticResource Font.Icons}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
-                        <TextBlock Text="{Binding SelectedTab.SortModeText}" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ActivePane.SortModeText}" VerticalAlignment="Center" />
                         <TextBlock Text="&#xE70D;" FontFamily="{StaticResource Font.Icons}" FontSize="9" VerticalAlignment="Center" Margin="6,1,0,0"
                                    Foreground="{DynamicResource Brush.Muted}" />
                     </StackPanel>
                 </Button>
 
                 <!--
-                  View mode of the shown tab (each tab keeps its own: TabViewModel.CardShape; MainViewModel.CardShape
+                  View mode of the shown tab (each tab keeps its own: PaneViewModel.CardShape; MainViewModel.CardShape
                   mirrors it): tall cards, square cards, or the details list. A click runs the
                   command; Checked covers the choices made without a click (UI Automation selects a radio
                   button by checking it), see OnViewModeChecked.
@@ -276,6 +276,30 @@
                             <Rectangle Height="1.5" Margin="0,3,0,0" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type RadioButton}}}" />
                         </StackPanel>
                     </RadioButton>
+
+                    <!-- split the active pane (MainViewModel.SplitPaneCommand): left | right, top / bottom -->
+                    <Button Style="{StaticResource Btn.Icon}" Width="30" Height="28" Margin="10,0,0,0"
+                            ToolTip="{views:ShortcutTip Text=左右に分割, Id=SplitColumns}" AutomationProperties.Name="左右に分割"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding SplitPaneCommand}" CommandParameter="{x:Static layout:SplitAxis.Columns}">
+                        <Grid Width="14" Height="12">
+                            <Rectangle RadiusX="1.5" RadiusY="1.5" StrokeThickness="1.5"
+                                       Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                            <Rectangle Width="1.5" HorizontalAlignment="Center"
+                                       Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                        </Grid>
+                    </Button>
+                    <Button Style="{StaticResource Btn.Icon}" Width="30" Height="28" Margin="2,0,0,0"
+                            ToolTip="{views:ShortcutTip Text=上下に分割, Id=SplitRows}" AutomationProperties.Name="上下に分割"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding SplitPaneCommand}" CommandParameter="{x:Static layout:SplitAxis.Rows}">
+                        <Grid Width="14" Height="12">
+                            <Rectangle RadiusX="1.5" RadiusY="1.5" StrokeThickness="1.5"
+                                       Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                            <Rectangle Height="1.5" VerticalAlignment="Center"
+                                       Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                        </Grid>
+                    </Button>
                 </StackPanel>
 
                 <!-- card size: nothing to size in the details list (disabled there, the value is kept) -->
@@ -303,14 +327,14 @@
                 <Grid Grid.Column="8">
                     <Button Style="{StaticResource Btn.Icon}" Content="&#xE72C;" ToolTip="{views:ShortcutTip Text=更新, Id=Refresh}"
                             Command="{Binding RefreshCommand}"
-                            IsEnabled="{Binding SelectedTab.IsLoading, Converter={StaticResource Not}}" />
+                            IsEnabled="{Binding ActivePane.IsLoading, Converter={StaticResource Not}}" />
                     <ContentControl Style="{StaticResource Spinner}" Width="16" Height="16"
-                                    Visibility="{Binding SelectedTab.IsLoading, Converter={StaticResource BoolToVis}}" />
+                                    Visibility="{Binding ActivePane.IsLoading, Converter={StaticResource BoolToVis}}" />
                 </Grid>
             </Grid>
         </Border>
 
-        <!-- Messages, notice, error banner (§5.4, §8.4, §10.2) -->
+        <!-- Messages (§5.4) -->
         <StackPanel Grid.Row="2">
             <!-- top: メッセージの表示 = 上 (and all but success while it is 表示しない); the bottom one is under ContentHost -->
             <Border Style="{StaticResource MessageBar}" Visibility="{Binding Message.ShowsAtTop, Converter={StaticResource BoolToVis}}">
@@ -320,80 +344,17 @@
                     <TextBlock Text="{Binding Message.Text}" TextWrapping="Wrap" VerticalAlignment="Center" />
                 </DockPanel>
             </Border>
-            <Border Margin="16,8,16,0" Padding="12,7" CornerRadius="8" Background="{DynamicResource Brush.WarnSoft}"
-                    Visibility="{Binding SelectedTab.NoticeText, Converter={StaticResource NotEmptyToVis}}">
-                <TextBlock Text="{Binding SelectedTab.NoticeText}" TextWrapping="Wrap" Foreground="{DynamicResource Brush.Warn}" />
-            </Border>
-            <Border Margin="16,8,16,0" Padding="12,8" CornerRadius="8" Background="{DynamicResource Brush.DangerSoft}"
-                    Visibility="{Binding SelectedTab.BannerText, Converter={StaticResource NotEmptyToVis}}">
-                <DockPanel>
-                    <Button DockPanel.Dock="Right" Style="{StaticResource Btn}" Padding="10,3" Margin="12,0,0,0"
-                            Command="{Binding BackToTopCommand}" Content="{Binding SelectedTab.BackText}" />
-                    <TextBlock Text="{Binding SelectedTab.BannerText}" TextWrapping="Wrap" VerticalAlignment="Center"
-                               Foreground="{DynamicResource Brush.Danger}" />
-                </DockPanel>
-            </Border>
+            <!-- each pane's notice and error banner are at the top of the pane (PaneView) -->
         </StackPanel>
 
         <!--
-          The items of the shown tab (§6): the card grid or the details list, by the view mode
-          (CardShape). Only the one that is shown has the items; the other gets none, so that it
-          keeps no containers alive and loads nothing while hidden.
+          The items of the shown tab (§6): its panes (PaneView), each with the card grid or the
+          details list by its own view mode.
         -->
         <!-- transparent, not null: a press on the blank area clears the selection, a right click there offers 貼り付け -->
         <Grid x:Name="ContentHost" Grid.Row="3" Background="Transparent">
-            <views:CardGrid x:Name="Grid" CardSize="{Binding CardSize}" CardShape="{Binding CardShape}">
-                <views:CardGrid.Style>
-                    <Style TargetType="{x:Type views:CardGrid}">
-                        <Setter Property="Items" Value="{Binding SelectedTab.Cards}" />
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding SelectedTab.IsLoading}" Value="True">
-                                <Setter Property="Opacity" Value="0.55" />
-                                <Setter Property="IsHitTestVisible" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding CardShape}" Value="{x:Static layout:CardShape.Details}">
-                                <Setter Property="Items" Value="{x:Null}" />
-                                <Setter Property="Visibility" Value="Collapsed" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </views:CardGrid.Style>
-            </views:CardGrid>
-
-            <views:DetailsListView x:Name="Details" SortMode="{Binding SelectedTab.SortMode}" Columns="{Binding DetailsColumns}" ExtraColumns="{Binding DetailsExtraColumns}">
-                <views:DetailsListView.Style>
-                    <Style TargetType="{x:Type views:DetailsListView}">
-                        <Setter Property="Visibility" Value="Collapsed" />
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding SelectedTab.IsLoading}" Value="True">
-                                <Setter Property="Opacity" Value="0.55" />
-                                <Setter Property="IsHitTestVisible" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding CardShape}" Value="{x:Static layout:CardShape.Details}">
-                                <Setter Property="Items" Value="{Binding SelectedTab.Cards}" />
-                                <Setter Property="Visibility" Value="Visible" />
-                            </DataTrigger>
-                            <!-- No tab: the column titles must not stay above the empty state (last trigger wins) -->
-                            <DataTrigger Binding="{Binding HasTab}" Value="False">
-                                <Setter Property="Visibility" Value="Collapsed" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </views:DetailsListView.Style>
-            </views:DetailsListView>
-
-            <TextBlock Text="{Binding SelectedTab.ShownEmptyText}" HorizontalAlignment="Center" VerticalAlignment="Center"
-                       Foreground="{DynamicResource Brush.Muted}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="560" Margin="24"
-                       IsHitTestVisible="False" Visibility="{Binding SelectedTab.ShownEmptyText, Converter={StaticResource NotEmptyToVis}}" />
-
-            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,24,0,0" Padding="14,8" CornerRadius="8"
-                    Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1"
-                    Visibility="{Binding SelectedTab.IsSlow, Converter={StaticResource BoolToVis}}">
-                <StackPanel Orientation="Horizontal">
-                    <ContentControl Style="{StaticResource Spinner}" Margin="0,0,8,0" />
-                    <TextBlock Text="応答がありません（待機中…）" Foreground="{DynamicResource Brush.Muted}" />
-                </StackPanel>
-            </Border>
+            <!-- The panes of the shown tab: one PaneView each, with splitters between them (MainWindow.BuildPanes from ShownLayout) -->
+            <Border x:Name="PaneArea" />
 
             <!-- Empty state: every tab was closed (the placeholder tab is selected: no cards, no texts of its own) -->
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">

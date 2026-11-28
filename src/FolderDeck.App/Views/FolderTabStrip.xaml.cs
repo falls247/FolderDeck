@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using FolderDeck.Core.Transfer;
+using FolderDeck.Core.Layout;
 using FolderDeck.ViewModels;
 
 namespace FolderDeck.Views;
@@ -22,7 +23,7 @@ namespace FolderDeck.Views;
 public partial class FolderTabStrip : UserControl
 {
     private MainViewModel? _vm;
-    private TabViewModel? _pressed;
+    private TabLayoutViewModel? _pressed;
     private Point _pressedAt;
     private bool _moving;
 
@@ -127,7 +128,7 @@ public partial class FolderTabStrip : UserControl
     }
 
     /// <summary>Left and right edge of a tab in the scrolled content's coordinates (null: not realized).</summary>
-    private (double Left, double Right)? EdgesOf(TabViewModel tab)
+    private (double Left, double Right)? EdgesOf(TabLayoutViewModel tab)
     {
         if (Tabs.ItemContainerGenerator.ContainerFromItem(tab) is not FrameworkElement container)
         {
@@ -257,10 +258,10 @@ public partial class FolderTabStrip : UserControl
     /// </summary>
     private Point? _quietAt;
 
-    public event Action<FrameworkElement, TabViewModel>? TabEntered;
+    public event Action<FrameworkElement, TabLayoutViewModel>? TabEntered;
 
     /// <summary>A move with no button held; the position is in the strip's coordinates (they do not scroll with the tabs).</summary>
-    public event Action<FrameworkElement, TabViewModel, Point>? TabMoved;
+    public event Action<FrameworkElement, TabLayoutViewModel, Point>? TabMoved;
 
     public event Action<FrameworkElement>? TabLeft;
 
@@ -294,7 +295,7 @@ public partial class FolderTabStrip : UserControl
 
     private void OnTabEnter(object sender, MouseEventArgs e)
     {
-        if (HoverAllowed(e) && sender is FrameworkElement { DataContext: TabViewModel tab } element)
+        if (HoverAllowed(e) && sender is FrameworkElement { DataContext: TabLayoutViewModel tab } element)
         {
             TabEntered?.Invoke(element, tab);
         }
@@ -302,7 +303,7 @@ public partial class FolderTabStrip : UserControl
 
     private void OnTabMove(object sender, MouseEventArgs e)
     {
-        if (HoverAllowed(e) && sender is FrameworkElement { DataContext: TabViewModel tab } element)
+        if (HoverAllowed(e) && sender is FrameworkElement { DataContext: TabLayoutViewModel tab } element)
         {
             TabMoved?.Invoke(element, tab, e.GetPosition(this));
         }
@@ -316,9 +317,9 @@ public partial class FolderTabStrip : UserControl
         }
     }
 
-    private static TabViewModel? TabAt(object? source) =>
+    private static TabLayoutViewModel? TabAt(object? source) =>
         CardView.FindAncestor<ButtonBase>(source as DependencyObject) is null
-            ? (source as FrameworkElement)?.DataContext as TabViewModel
+            ? (source as FrameworkElement)?.DataContext as TabLayoutViewModel
             : null; // the × button handles its own clicks
 
     private void OnLeftDown(object sender, MouseButtonEventArgs e)
@@ -364,7 +365,7 @@ public partial class FolderTabStrip : UserControl
     /// Swaps the dragged tab with a neighbour once the pointer is past that neighbour's middle
     /// (so tabs of different widths do not flip back and forth).
     /// </summary>
-    private void MoveTowards(TabViewModel tab, double x)
+    private void MoveTowards(TabLayoutViewModel tab, double x)
     {
         if (_vm is null)
         {
@@ -400,7 +401,7 @@ public partial class FolderTabStrip : UserControl
     }
 
     /// <summary>Horizontal middle of a tab, in the strip's coordinates (null: not realized).</summary>
-    private double? MiddleOf(TabViewModel tab) =>
+    private double? MiddleOf(TabLayoutViewModel tab) =>
         Tabs.ItemContainerGenerator.ContainerFromItem(tab) is FrameworkElement container
             ? container.TranslatePoint(new Point(container.ActualWidth / 2, 0), Tabs).X
             : null;
@@ -445,6 +446,33 @@ public partial class FolderTabStrip : UserControl
         var duplicate = new MenuItem { Header = "タブを複製", IsEnabled = MainViewModel.CanDuplicate(tab) };
         duplicate.Click += (_, _) => _ = vm.DuplicateTabAsync(tab);
         menu.Items.Add(duplicate);
+
+        // Panes: a folder tab splits (it is shown first, in the active pane); a tab in a pane of the
+        // split can leave it (the tab stays on the strip).
+        bool inSplit = tab.PaneSlot >= 0;
+        if (tab.IsFolderTab || inSplit)
+        {
+            menu.Items.Add(new Separator());
+        }
+
+        if (tab.IsFolderTab)
+        {
+            bool canSplit = vm.ShownLayout.Panes.Count < PaneRules.MaxPanes;
+            var columns = new MenuItem { Header = "左右に分割", IsEnabled = canSplit, InputGestureText = ShortcutCatalog.MainKeysOf(ShortcutId.SplitColumns) };
+            columns.Click += (_, _) => _ = vm.SplitTabAsync(tab, SplitAxis.Columns);
+            menu.Items.Add(columns);
+            var rows = new MenuItem { Header = "上下に分割", IsEnabled = canSplit, InputGestureText = ShortcutCatalog.MainKeysOf(ShortcutId.SplitRows) };
+            rows.Click += (_, _) => _ = vm.SplitTabAsync(tab, SplitAxis.Rows);
+            menu.Items.Add(rows);
+        }
+
+        if (inSplit)
+        {
+            var closePane = new MenuItem { Header = "ペインを閉じる" };
+            closePane.Click += (_, _) => vm.ClosePane(tab.ActivePane);
+            menu.Items.Add(closePane);
+        }
+
         menu.Items.Add(new Separator());
         var close = new MenuItem { Header = "タブを閉じる" };
         close.Click += (_, _) => vm.CloseTabCommand.Execute(tab);
