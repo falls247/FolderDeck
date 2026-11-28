@@ -320,7 +320,9 @@ public sealed partial class PaneViewModel : ObservableObject
     /// How this tab shows its items (cards of a shape, or the details list); kept per tab and saved in its
     /// open_tabs entry. <see cref="MainViewModel.CardShape"/> mirrors the shown tab's.
     /// </summary>
-    public CardShape CardShape { get; set; } = CardShape.Portrait;
+    /// <remarks>Observable: each pane's view (<c>PaneView</c>) shows the cards or the details list by it.</remarks>
+    [ObservableProperty]
+    private CardShape _cardShape = CardShape.Portrait;
 
     /// <summary>
     /// The view a tab starts with (saved, or inherited from the tab used last). Only for a tab without cards

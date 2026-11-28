@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using FolderDeck.Core.Infrastructure;
 using FolderDeck.Core.Layout;
@@ -115,30 +116,27 @@ public partial class MainWindow : Window, IMainView, ICardHost
                 ApplySidebarLayout();
                 _sidebarJustToggled = true;
             }
+            else if (e.PropertyName == nameof(MainViewModel.ShownLayout))
+            {
+                BuildPanes(); // announced before ActivePane: the views are there when it is
+            }
             else if (e.PropertyName == nameof(MainViewModel.ActivePane))
             {
-                EndAddressEdit(); // the path in the box is the other tab's
-                WatchCrumbs(vm.ActivePane); // the other tab's crumbs replace these
+                MarkActivePane();
+                EndAddressEdit(); // the path in the box is the other pane's
+                WatchCrumbs(vm.ActivePane); // the other pane's crumbs replace these
             }
         };
+        BuildPanes();
         WatchCrumbs(vm.ActivePane);
 
-        Grid.Scrolled += (_, _) => _cascade.CloseCardCascade();
-        Grid.CardSizeStepRequested += step => vm.StepCardSize(step);
-
-        // The details list: like the grid, its scrolling only concerns what hangs on its own rows.
-        Details.Scrolled += (_, _) => _cascade.CloseCardCascade();
-        Details.HeaderClicked += column => vm.SetSortMode(CardSortModes.Next(vm.ActivePane.SortMode, column));
-        Details.ColumnResized += (key, width) => vm.SetDetailsColumnWidth(key, width);
-
-        // The header's right click: Explorer's column chooser. Windows' names of the extra columns are
-        // read once off the UI thread (the built-in titles show until then).
-        Details.HeaderMenuRequested += target =>
-        {
-            _cascade.CloseAll();
-            _menus.ShowDetailsColumns(target, _columnTitles);
-        };
+        // Windows' names of the details view's extra columns are read once off the UI thread (the
+        // built-in titles show until then; NewPaneView gives them to every pane's list).
         _ = LoadColumnTitlesAsync();
+
+        // A click in a cascade opened from an item of a pane that is not the active one: that pane
+        // becomes active first, so that what the click does (navigate, open, the menu) acts on it.
+        _cascade.ContentActivated = element => ActivatePaneOf(element);
 
         // A sidebar row is one element: the pointer rests on it and its list goes beside it.
         Sidebar.ItemEntered += (row, item) => _cascade.AnchorMouseEnter(row, row, item);
@@ -280,7 +278,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
         try
         {
             _columnTitles = await _vm.Services.Properties.TitlesAsync();
-            Details.SetExtraTitles(_columnTitles);
+            foreach (var view in _paneViews)
+            {
+                view.DetailsList.SetExtraTitles(_columnTitles);
+            }
         }
         catch (Exception ex)
         {
@@ -649,8 +650,30 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
                 break;
             case Key.W when Keyboard.Modifiers == ModifierKeys.Control && _vm.HasTab:
-                e.Handled = true; // like Explorer: closes the shown tab, whatever its kind
-                _vm.CloseTabCommand.Execute(_vm.SelectedTab);
+                e.Handled = true; // like Explorer: closes the shown tab, whatever its kind; of a split tab, the active pane
+                _ = _vm.ClosePaneOrTabAsync();
+                break;
+            case Key.Oem5 or Key.OemBackslash when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.Control && _vm.HasTab && !IsMenuTakingKeys():
+                // Ctrl + \ (the ¥ key and the ろ key of a Japanese keyboard, \ of others): left | right;
+                // with Shift, top / bottom. Also in the search / address box (neither types with Ctrl).
+                e.Handled = true;
+                if (!e.IsRepeat)
+                {
+                    EndAddressEdit();
+                    var axis = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? SplitAxis.Rows : SplitAxis.Columns;
+                    _ = _vm.SplitActivePaneAsync(axis);
+                }
+
+                break;
+            case Key.F6 when (Keyboard.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.None && _vm.HasTab && !IsMenuTakingKeys():
+                // the next / previous pane of a split tab (as Windows Terminal's focus moves); nothing otherwise
+                if (_vm.SelectedTab.IsSplit)
+                {
+                    e.Handled = true;
+                    EndAddressEdit();
+                    _vm.SelectAdjacentPane(back: (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
+                }
+
                 break;
             case Key.T when Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && !IsMenuTakingKeys():
                 e.Handled = true; // as the browsers: the last closed tab comes back (also with no tab open)
@@ -736,6 +759,14 @@ public partial class MainWindow : Window, IMainView, ICardHost
             _sidebarJustToggled = false;
         }
 
+        // The mouse's back / forward buttons act on the pane under the pointer (handled here, at the
+        // window's preview, before PaneView's own preview would make it active).
+        if (e.ChangedButton is MouseButton.XButton1 or MouseButton.XButton2
+            && PaneViewOf(e.OriginalSource as DependencyObject)?.Pane is { } pressed)
+        {
+            _vm.ActivatePane(pressed);
+        }
+
         if (e.ChangedButton == MouseButton.XButton1)
         {
             e.Handled = true;
@@ -781,7 +812,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
             // ADR-2: in the details list (one column, ← → move nothing sideways) a plain → on a folder
             // opens its list, like a tree's expand, and on a file its preview (← or Esc closes it).
             // The cards keep → for the move. A folder that has nothing to open moves on.
-            if (nav == NavKey.Right && modifiers == ModifierKeys.None && ReferenceEquals(ActiveList, Details)
+            if (nav == NavKey.Right && modifiers == ModifierKeys.None && ActiveList is DetailsListView
                 && _vm.CursorCard() is { } item && (item.IsFolderLike || item.IsFile) && OpenCascadeFromKeys(item, toggle: false))
             {
                 return true;
@@ -1116,7 +1147,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// </summary>
     private void OnContentLeftDown(object sender, MouseButtonEventArgs e)
     {
-        if (IsOnItemOrControl(e.OriginalSource))
+        if (IsOnItemOrControl(e.OriginalSource) || IsOnPaneBanner(e.OriginalSource))
         {
             return;
         }
@@ -1169,7 +1200,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
             return;
         }
 
-        if (e.Handled || !_vm.HasTab || IsOnItemOrControl(e.OriginalSource))
+        if (e.Handled || !_vm.HasTab || IsOnItemOrControl(e.OriginalSource) || IsOnPaneBanner(e.OriginalSource))
         {
             return;
         }
@@ -1187,7 +1218,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
 
         _cascade.CloseAll();
-        _menus.ShowBlank(ContentHost);
+        _menus.ShowBlank(ActivePaneView.ItemsHost);
     }
 
     /// <summary>
@@ -1552,6 +1583,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// </summary>
     private FolderTarget? FolderTargetAt(object? originalSource)
     {
+        var pane = PaneViewOf(originalSource as DependencyObject)?.Pane; // a drop on a pane that is not the active one is that pane's
         for (var node = originalSource as DependencyObject; node is not null; node = ParentOf(node))
         {
             switch (node)
@@ -1564,8 +1596,10 @@ public partial class MainWindow : Window, IMainView, ICardHost
                     return FolderCard(card);
                 case DetailsRowView { ViewModel: { } row }:
                     return FolderCard(row);
-                case DependencyObject when ReferenceEquals(node, ContentHost):
+                case PaneView view when pane is not null && IsInItemsHost(view, originalSource as DependencyObject):
                     return ShownFolderTarget();
+                case GridSplitter splitter when _splitOf.ContainsKey(splitter):
+                    return RefusedInFolder(); // between two panes: no registration, no transfer
                 case Button { DataContext: BreadcrumbItem crumb }:
                     // a folder of the address bar (not a fixed tab's list or （不明）); the last one is the shown folder (FolderDropOf)
                     return crumb.ToolTip is { } path && PathTools.IsFullyQualified(path) ? new FolderTarget(path, crumb) : null;
@@ -1581,12 +1615,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
         // no highlight: the whole list is the target, and a card's mark would say "into this folder"
         FolderTarget? ShownFolderTarget(string? onFile = null) =>
-            _vm.HasTab && _vm.PasteFolderOf(null) is { } shown ? new FolderTarget(shown, null, ShownFolder: true, onFile) : RefusedInFolder();
+            _vm.HasTab && _vm.PasteFolderOf(null, pane) is { } shown ? new FolderTarget(shown, null, ShownFolder: true, onFile) : RefusedInFolder();
 
         // a real folder's list that takes no drop now refuses it; only the top lists (最近の履歴 /
         // よく使う項目 / PC) and the placeholder keep the old null (a registration for Explorer drags)
         FolderTarget? RefusedInFolder() =>
-            _vm.HasTab && _vm.ActivePane.FolderTargetPath is { } real ? new FolderTarget(real, null, Refused: true) : null;
+            _vm.HasTab && (pane ?? _vm.ActivePane).FolderTargetPath is { } real ? new FolderTarget(real, null, Refused: true) : null;
     }
 
     /// <summary>The paths of another app's file drop (null when it carries none or cannot be read).</summary>
@@ -1693,7 +1727,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
     /// details list. Scroll position and reorder drag go through it. The other one is hidden and
     /// has no items (MainWindow.xaml), so its scroll position is never read or set.
     /// </summary>
-    private IItemsView ActiveList => CardShapes.IsCards(_vm.CardShape) ? Grid : Details;
+    private IItemsView ActiveList => ActivePaneView.ActiveList;
 
     public void CardMouseEnter(CardView card) => _cascade.CardMouseEnter(card);
 
@@ -1981,13 +2015,13 @@ public partial class MainWindow : Window, IMainView, ICardHost
             }
             else
             {
-                ShowItemMenu(card, ContentHost, new Point(0, 0)); // not laid out yet: still the selection's menu
+                ShowItemMenu(card, ActivePaneView.ItemsHost, new Point(0, 0)); // not laid out yet: still the selection's menu
             }
 
             return;
         }
 
-        _menus.ShowBlank(ContentHost, new Point(0, 0));
+        _menus.ShowBlank(ActivePaneView.ItemsHost, new Point(0, 0));
     }
 
     public void ItemRemove(CardViewModel vm) => _vm.RemoveCard(vm);
@@ -2789,6 +2823,366 @@ public partial class MainWindow : Window, IMainView, ICardHost
         _crumbs = next;
     }
 
+    // ---- panes: one PaneView per pane of the shown tab --------------------------------------------
+
+    /// <summary>Every pane view made so far (at most <see cref="PaneRules.MaxPanes"/>), kept for the window's life.</summary>
+    private readonly List<PaneView> _paneViews = [];
+
+    /// <summary>The views on screen, by the pane they show (the panes of <see cref="MainViewModel.ShownLayout"/>).</summary>
+    private Dictionary<PaneViewModel, PaneView> _shownViews = [];
+
+    /// <summary>The layout the views are laid out by (to tell a moved splitter from a new shape).</summary>
+    private PaneLayout<PaneViewModel>? _builtLayout;
+
+    /// <summary>The split each splitter on screen drags (rebuilt with the layout).</summary>
+    private readonly Dictionary<GridSplitter, PaneSplit<PaneViewModel>> _splitOf = [];
+
+    /// <summary>The view of the active pane (the first view while nothing is built yet).</summary>
+    private PaneView ActivePaneView =>
+        _shownViews.TryGetValue(_vm.ActivePane, out var view) ? view : _paneViews.Count > 0 ? _paneViews[0] : NewPaneView();
+
+    /// <summary>
+    /// Lays the views out by the shown tab's layout (<see cref="MainViewModel.ShownLayout"/>). A view
+    /// stays with its pane while the pane stays on screen; a pane new on screen gets a free view (a
+    /// tab of one pane always the same one, without moving it: as the one grid of the window before
+    /// panes). Only a moved splitter (the same panes, the same shape) updates the sizes in place;
+    /// anything else rebuilds the splits, and the views that moved get their scroll positions back.
+    /// </summary>
+    private void BuildPanes()
+    {
+        var layout = _vm.ShownLayout;
+        if (_builtLayout is { } built && SameShape(built.Root, layout.Root))
+        {
+            _builtLayout = layout;
+            UpdateSplits(layout.Root);
+            MarkActivePane();
+            return;
+        }
+
+        var shown = new Dictionary<PaneViewModel, PaneView>();
+        foreach (var pane in layout.Panes)
+        {
+            if (_shownViews.TryGetValue(pane, out var kept))
+            {
+                shown[pane] = kept;
+            }
+        }
+
+        var free = new Queue<PaneView>(_paneViews.Where(v => !shown.ContainsValue(v)));
+        foreach (var pane in layout.Panes.Where(p => !shown.ContainsKey(p)))
+        {
+            var view = free.Count > 0 ? free.Dequeue() : NewPaneView();
+            view.DataContext = pane;
+            shown[pane] = view;
+        }
+
+        // Views that move to another split lose their layout: their positions come back after it.
+        var offsets = shown.Where(s => _shownViews.ContainsKey(s.Key)).ToDictionary(s => s.Key, s => s.Value.ActiveList.VerticalOffset);
+
+        _shownViews = shown;
+        _builtLayout = layout;
+        _splitOf.Clear();
+        foreach (var view in free)
+        {
+            Detach(view);
+            view.DataContext = null; // its cards go with its pane
+        }
+
+        if (layout.Root is PaneLeaf<PaneViewModel> { Pane: var only } && ReferenceEquals(PaneArea.Child, shown[only]))
+        {
+            // the same view as before, the same place: only its pane changed (a tab switch)
+        }
+        else
+        {
+            var root = Build(layout.Root);
+            if (!ReferenceEquals(PaneArea.Child, root))
+            {
+                Detach(root);
+                PaneArea.Child = root;
+            }
+        }
+
+        foreach (var (pane, offset) in offsets)
+        {
+            shown[pane].ScrollWhenReady(offset);
+        }
+
+        MarkActivePane();
+    }
+
+    private UIElement Build(PaneNode<PaneViewModel> node)
+    {
+        if (node is PaneLeaf<PaneViewModel> leaf)
+        {
+            var view = _shownViews[leaf.Pane];
+            Detach(view);
+            return view;
+        }
+
+        var split = (PaneSplit<PaneViewModel>)node;
+        bool columns = split.Axis == SplitAxis.Columns;
+        var grid = new Grid();
+        var splitter = new GridSplitter
+        {
+            ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+            ResizeDirection = columns ? GridResizeDirection.Columns : GridResizeDirection.Rows,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Focusable = false,
+            Cursor = columns ? Cursors.SizeWE : Cursors.SizeNS,
+            ToolTip = "ドラッグでペインの大きさを変更",
+        };
+        splitter.SetResourceReference(BackgroundProperty, "Brush.Border");
+        splitter.DragStarted += OnPaneSplitterDragStarted;
+        splitter.DragCompleted += OnPaneSplitterDragCompleted;
+        _splitOf[splitter] = split;
+        var first = Build(split.First);
+        var second = Build(split.Second);
+        if (columns)
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(PaneRules.SplitterThickness) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+            Grid.SetColumn(splitter, 1);
+            Grid.SetColumn(second, 2);
+        }
+        else
+        {
+            grid.RowDefinitions.Add(new RowDefinition());
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(PaneRules.SplitterThickness) });
+            grid.RowDefinitions.Add(new RowDefinition());
+            Grid.SetRow(splitter, 1);
+            Grid.SetRow(second, 2);
+        }
+
+        grid.Children.Add(first);
+        grid.Children.Add(splitter);
+        grid.Children.Add(second);
+        SetRatio(grid, split);
+        return grid;
+    }
+
+    /// <summary>The first part's share of a split grid as star sizes (the splitter between them is fixed).</summary>
+    private static void SetRatio(Grid grid, PaneSplit<PaneViewModel> split)
+    {
+        var a = new GridLength(split.Ratio, GridUnitType.Star);
+        var b = new GridLength(1 - split.Ratio, GridUnitType.Star);
+        if (split.Axis == SplitAxis.Columns)
+        {
+            grid.ColumnDefinitions[0].Width = a;
+            grid.ColumnDefinitions[2].Width = b;
+        }
+        else
+        {
+            grid.RowDefinitions[0].Height = a;
+            grid.RowDefinitions[2].Height = b;
+        }
+    }
+
+    /// <summary>The same panes in the same places (only ratios may differ).</summary>
+    private static bool SameShape(PaneNode<PaneViewModel> a, PaneNode<PaneViewModel> b) => (a, b) switch
+    {
+        (PaneLeaf<PaneViewModel> x, PaneLeaf<PaneViewModel> y) => ReferenceEquals(x.Pane, y.Pane),
+        (PaneSplit<PaneViewModel> x, PaneSplit<PaneViewModel> y) => x.Axis == y.Axis && SameShape(x.First, y.First) && SameShape(x.Second, y.Second),
+        _ => false,
+    };
+
+    /// <summary>A splitter moved: the grids on screen take the new layout's nodes and ratios (they are new objects).</summary>
+    private void UpdateSplits(PaneNode<PaneViewModel> root)
+    {
+        var byGrid = _splitOf.ToDictionary(s => (Grid)s.Key.Parent, s => s.Key);
+        _splitOf.Clear();
+        Walk(PaneArea.Child, root);
+
+        void Walk(UIElement? element, PaneNode<PaneViewModel> node)
+        {
+            if (node is not PaneSplit<PaneViewModel> split || element is not Grid grid || !byGrid.TryGetValue(grid, out var splitter))
+            {
+                return;
+            }
+
+            _splitOf[splitter] = split;
+            SetRatio(grid, split);
+            Walk(grid.Children[0], split.First);
+            Walk(grid.Children[2], split.Second);
+        }
+    }
+
+    private static void Detach(UIElement element)
+    {
+        switch (VisualTreeHelper.GetParent(element) ?? LogicalTreeHelper.GetParent(element))
+        {
+            case Panel panel:
+                panel.Children.Remove(element);
+                break;
+            case Decorator decorator when ReferenceEquals(decorator.Child, element):
+                decorator.Child = null;
+                break;
+        }
+    }
+
+    private PaneView NewPaneView()
+    {
+        var view = new PaneView();
+        view.ActivationRequested += v =>
+        {
+            if (v.Pane is { } pane)
+            {
+                _vm.ActivatePane(pane);
+            }
+        };
+
+        // A list's scrolling only concerns what hangs on its own items.
+        view.CardGrid.Scrolled += (_, _) => _cascade.CloseCardCascade();
+        view.CardGrid.CardSizeStepRequested += step => _vm.StepCardSize(step);
+        view.DetailsList.Scrolled += (_, _) => _cascade.CloseCardCascade();
+
+        // The press on a column title made the pane active (PaneView.ActivationRequested): its sort mode changes.
+        view.DetailsList.HeaderClicked += column => _vm.SetSortMode(CardSortModes.Next(_vm.ActivePane.SortMode, column));
+        view.DetailsList.ColumnResized += (key, width) => _vm.SetDetailsColumnWidth(key, width);
+
+        // The header's right click: Explorer's column chooser.
+        view.DetailsList.HeaderMenuRequested += target =>
+        {
+            _cascade.CloseAll();
+            _menus.ShowDetailsColumns(target, _columnTitles);
+        };
+        if (_columnTitles is not null)
+        {
+            view.DetailsList.SetExtraTitles(_columnTitles);
+        }
+
+        _paneViews.Add(view);
+        return view;
+    }
+
+    /// <summary>The frame of the active pane, and whether the tab is split (each view's look).</summary>
+    private void MarkActivePane()
+    {
+        bool split = _shownViews.Count > 1;
+        foreach (var (pane, view) in _shownViews)
+        {
+            view.IsSplit = split;
+            view.IsActive = ReferenceEquals(pane, _vm.ActivePane);
+        }
+    }
+
+    /// <summary>The pane view <paramref name="node"/> is in, or null (outside the panes: the toolbar, the sidebar, a popup).</summary>
+    private PaneView? PaneViewOf(DependencyObject? node)
+    {
+        for (; node is not null; node = ParentOf(node))
+        {
+            if (node is PaneView view)
+            {
+                return _shownViews.ContainsValue(view) ? view : null;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary><paramref name="node"/> is in the items area of <paramref name="view"/> (not its notice or banner).</summary>
+    private static bool IsInItemsHost(PaneView view, DependencyObject? node)
+    {
+        for (; node is not null && !ReferenceEquals(node, view); node = ParentOf(node))
+        {
+            if (ReferenceEquals(node, view.ItemsHost))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// A cascade opened from an item of a pane was clicked: that pane becomes active (nothing for
+    /// other anchors). The cascade stays: it is that pane's, and a right click on its row opens a menu over it.
+    /// </summary>
+    private void ActivatePaneOf(FrameworkElement element)
+    {
+        if (PaneViewOf(element)?.Pane is { } pane)
+        {
+            _vm.ActivatePane(pane, closeCardCascade: false);
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="source"/> is in a pane but above its items (its notice or error banner): not
+    /// the blank area (no clearing of the selection, no marquee, no blank menu), as when they were
+    /// above the items area of the window.
+    /// </summary>
+    private bool IsOnPaneBanner(object? source)
+    {
+        var node = source as DependencyObject;
+        return PaneViewOf(node) is { } view && !IsInItemsHost(view, node);
+    }
+
+    /// <summary>
+    /// A splitter is grabbed: neither side can be dragged below what its panes need
+    /// (<see cref="PaneRules.MinExtent"/>), unless the window is too small for both, then the
+    /// splitter moves freely (the panes share what there is).
+    /// </summary>
+    private void OnPaneSplitterDragStarted(object sender, DragStartedEventArgs e)
+    {
+        _cascade.CloseAll();
+        if (sender is not GridSplitter { Parent: Grid grid } splitter || !_splitOf.TryGetValue(splitter, out var split))
+        {
+            return;
+        }
+
+        bool columns = split.Axis == SplitAxis.Columns;
+        double extent = columns ? grid.ActualWidth : grid.ActualHeight;
+        double first = PaneRules.MinExtent(split.First, split.Axis);
+        double second = PaneRules.MinExtent(split.Second, split.Axis);
+        if (first + second + PaneRules.SplitterThickness > extent)
+        {
+            return;
+        }
+
+        if (columns)
+        {
+            grid.ColumnDefinitions[0].MinWidth = first;
+            grid.ColumnDefinitions[2].MinWidth = second;
+        }
+        else
+        {
+            grid.RowDefinitions[0].MinHeight = first;
+            grid.RowDefinitions[2].MinHeight = second;
+        }
+    }
+
+    /// <summary>A splitter is let go: the split keeps its new ratio (saved with the tab).</summary>
+    private void OnPaneSplitterDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (sender is not GridSplitter { Parent: Grid grid } splitter || !_splitOf.TryGetValue(splitter, out var split))
+        {
+            return;
+        }
+
+        bool columns = split.Axis == SplitAxis.Columns;
+        double a = columns ? grid.ColumnDefinitions[0].ActualWidth : grid.RowDefinitions[0].ActualHeight;
+        double b = columns ? grid.ColumnDefinitions[2].ActualWidth : grid.RowDefinitions[2].ActualHeight;
+        if (columns)
+        {
+            grid.ColumnDefinitions[0].MinWidth = 0;
+            grid.ColumnDefinitions[2].MinWidth = 0;
+        }
+        else
+        {
+            grid.RowDefinitions[0].MinHeight = 0;
+            grid.RowDefinitions[2].MinHeight = 0;
+        }
+
+        if (a + b <= 0)
+        {
+            return;
+        }
+
+        double extent = a + b + PaneRules.SplitterThickness;
+        _vm.SetSplitRatio(split, PaneRules.ClampRatio(split, extent, a / (a + b)));
+    }
+
     // ---- IMainView ----------------------------------------------------------------------------
 
     public void CloseCascade() => _cascade.CloseAll();
@@ -2798,6 +3192,36 @@ public partial class MainWindow : Window, IMainView, ICardHost
     public double GetScrollOffset() => ActiveList.VerticalOffset;
 
     public void ScrollTo(double offset) => ActiveList.ScrollTo(offset);
+
+    public double GetScrollOffset(PaneViewModel pane) =>
+        _shownViews.TryGetValue(pane, out var view) ? view.ActiveList.VerticalOffset : pane.SavedScrollOffset;
+
+    public void ScrollTo(PaneViewModel pane, double offset)
+    {
+        if (_shownViews.TryGetValue(pane, out var view))
+        {
+            view.ScrollWhenReady(offset);
+        }
+    }
+
+    public Size PaneSize(PaneViewModel pane)
+    {
+        if (!_shownViews.TryGetValue(pane, out var view))
+        {
+            return Size.Empty;
+        }
+
+        if (!view.IsArrangeValid)
+        {
+            UpdateLayout(); // a tab just switched to (the tab menu's split): its panes are laid out first
+        }
+
+        // A view just given to the pane (a tab switched to) is laid out on the next pass: a tab of
+        // one pane has the whole items area.
+        return view.ActualWidth > 0 || _shownViews.Count > 1
+            ? new Size(view.ActualWidth, view.ActualHeight)
+            : new Size(ContentHost.ActualWidth, ContentHost.ActualHeight);
+    }
 
     public nint WindowHandle => new WindowInteropHelper(this).Handle;
 
@@ -2835,7 +3259,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         WindowState == WindowState.Minimized
         || IsNameBusy
         || IsAddressEditing // a list swapped under the edit box is the IME's way into a big layout (see MainWindow.xaml)
-        || ActiveList.IsMarqueeRunning
+        || _shownViews.Values.Any(v => v.ActiveList.IsMarqueeRunning)
         || _cascade.IsOpen || _cascade.IsMenuOpen || _cascade.IsHoverPending
         || _modalDepth > 0
         || Mouse.LeftButton == MouseButtonState.Pressed

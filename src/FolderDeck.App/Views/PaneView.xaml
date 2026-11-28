@@ -1,0 +1,154 @@
+<!--
+  One pane of the shown tab (DataContext = PaneViewModel): its notice and error banner, then its
+  items: the card grid or the details list by the pane's own view mode (CardShape). Only the one
+  that is shown has the items; the other gets none, so that it keeps no containers alive and loads
+  nothing while hidden. MainWindow builds one per pane of the shown tab (PaneLayout) and marks the
+  active one (IsActive) while the tab is split (IsSplit).
+-->
+<UserControl x:Class="FolderDeck.Views.PaneView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:FolderDeck.Views"
+             xmlns:layout="clr-namespace:FolderDeck.Core.Layout;assembly=FolderDeck.Core"
+             x:Name="Root">
+    <UserControl.Resources>
+        <views:NotEmptyToVisibilityConverter x:Key="NotEmptyToVis" />
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!--
+          The active pane of a split tab: a faint accent tint under the whole pane (the lists' backgrounds are
+          transparent), with the frame below. A tab of one pane keeps the window's background.
+        -->
+        <Border Grid.RowSpan="3" Background="{DynamicResource Brush.AccentSoft}" Opacity="0.45" IsHitTestVisible="False">
+            <Border.Style>
+                <Style TargetType="{x:Type Border}">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsSplit, ElementName=Root}" Value="True" />
+                                <Condition Binding="{Binding IsActive, ElementName=Root}" Value="True" />
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="Visibility" Value="Visible" />
+                        </MultiDataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+        </Border>
+
+        <!-- Notice and error banner of this pane (§8.4, §10.2) -->
+        <Border Grid.Row="0" Margin="16,8,16,0" Padding="12,7" CornerRadius="8" Background="{DynamicResource Brush.WarnSoft}"
+                Visibility="{Binding NoticeText, Converter={StaticResource NotEmptyToVis}}">
+            <TextBlock Text="{Binding NoticeText}" TextWrapping="Wrap" Foreground="{DynamicResource Brush.Warn}" />
+        </Border>
+        <Border Grid.Row="1" Margin="16,8,16,0" Padding="12,8" CornerRadius="8" Background="{DynamicResource Brush.DangerSoft}"
+                Visibility="{Binding BannerText, Converter={StaticResource NotEmptyToVis}}">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Padding="10,3" Margin="12,0,0,0"
+                        Command="{Binding DataContext.BackToTopCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+                    <Button.Style>
+                        <Style TargetType="{x:Type Button}" BasedOn="{StaticResource Btn}">
+                            <Setter Property="Content" Value="{Binding BackText}" />
+                            <Style.Triggers>
+                                <!-- a folder pane of a split tab closes alone (MainViewModel.ClosePaneOrTabAsync) -->
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding IsSplit, ElementName=Root}" Value="True" />
+                                        <Condition Binding="{Binding IsFolderTab}" Value="True" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Content" Value="ペインを閉じる" />
+                                </MultiDataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <TextBlock Text="{Binding BannerText}" TextWrapping="Wrap" VerticalAlignment="Center"
+                           Foreground="{DynamicResource Brush.Danger}" />
+            </DockPanel>
+        </Border>
+
+        <!-- transparent, not null: a press on the blank area clears the selection, a right click there offers 貼り付け -->
+        <Grid x:Name="Host" Grid.Row="2" Background="Transparent">
+            <views:CardGrid x:Name="Grid" CardShape="{Binding CardShape}"
+                            CardSize="{Binding DataContext.CardSize, RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+                <views:CardGrid.Style>
+                    <Style TargetType="{x:Type views:CardGrid}">
+                        <Setter Property="Items" Value="{Binding Cards}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsLoading}" Value="True">
+                                <Setter Property="Opacity" Value="0.55" />
+                                <Setter Property="IsHitTestVisible" Value="False" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding CardShape}" Value="{x:Static layout:CardShape.Details}">
+                                <Setter Property="Items" Value="{x:Null}" />
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </views:CardGrid.Style>
+            </views:CardGrid>
+
+            <views:DetailsListView x:Name="Details" SortMode="{Binding SortMode}"
+                                   Columns="{Binding DataContext.DetailsColumns, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                   ExtraColumns="{Binding DataContext.DetailsExtraColumns, RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+                <views:DetailsListView.Style>
+                    <Style TargetType="{x:Type views:DetailsListView}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsLoading}" Value="True">
+                                <Setter Property="Opacity" Value="0.55" />
+                                <Setter Property="IsHitTestVisible" Value="False" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding CardShape}" Value="{x:Static layout:CardShape.Details}">
+                                <Setter Property="Items" Value="{Binding Cards}" />
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <!-- No tab (the placeholder's pane): the column titles must not stay above the empty state (last trigger wins) -->
+                            <DataTrigger Binding="{Binding IsPlaceholder}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </views:DetailsListView.Style>
+            </views:DetailsListView>
+
+            <TextBlock Text="{Binding ShownEmptyText}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Foreground="{DynamicResource Brush.Muted}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="560" Margin="24"
+                       IsHitTestVisible="False" Visibility="{Binding ShownEmptyText, Converter={StaticResource NotEmptyToVis}}" />
+
+            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,24,0,0" Padding="14,8" CornerRadius="8"
+                    Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1"
+                    Visibility="{Binding IsSlow, Converter={StaticResource BoolToVis}}">
+                <StackPanel Orientation="Horizontal">
+                    <ContentControl Style="{StaticResource Spinner}" Margin="0,0,8,0" />
+                    <TextBlock Text="応答がありません（待機中…）" Foreground="{DynamicResource Brush.Muted}" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- The active pane of a split tab: an accent frame over the whole pane (never in the way of the pointer) -->
+        <Border Grid.RowSpan="3" BorderThickness="2" BorderBrush="{DynamicResource Brush.Accent}" IsHitTestVisible="False">
+            <Border.Style>
+                <Style TargetType="{x:Type Border}">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsSplit, ElementName=Root}" Value="True" />
+                                <Condition Binding="{Binding IsActive, ElementName=Root}" Value="True" />
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="Visibility" Value="Visible" />
+                        </MultiDataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+        </Border>
+    </Grid>
+</UserControl>

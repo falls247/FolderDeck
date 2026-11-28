@@ -44,9 +44,9 @@ public sealed class PaneSplit<T>(SplitAxis axis, double ratio, PaneNode<T> first
 
 /// <summary>
 /// How a tab arranges its panes (as Windows Terminal or tmux): a binary tree whose leaves are the
-/// panes, each pane once. Immutable: a change makes a new layout. A tab that is not split is one
-/// leaf. <typeparamref name="T"/> is the pane (the app's <c>PaneViewModel</c>); the layout compares
-/// panes by reference.
+/// panes, each pane once. Immutable: a change makes a new layout (the nodes of the parts it does not
+/// touch are kept). A tab that is not split is one leaf. <typeparamref name="T"/> is the pane (the
+/// app's <c>PaneViewModel</c>); the layout compares panes by reference.
 /// </summary>
 public sealed class PaneLayout<T>
     where T : class
@@ -77,6 +77,169 @@ public sealed class PaneLayout<T>
 
     public bool Contains(T pane) => Panes.Any(p => ReferenceEquals(p, pane));
 
+    /// <summary>
+    /// <paramref name="target"/> shares its space with the new pane <paramref name="added"/>, half each:
+    /// <paramref name="added"/> goes right of (<see cref="SplitAxis.Columns"/>) or below
+    /// (<see cref="SplitAxis.Rows"/>) the target. The size rules are <see cref="PaneRules.CanSplit"/>'s.
+    /// </summary>
+    public PaneLayout<T> Split(T target, SplitAxis axis, T added)
+    {
+        ArgumentNullException.ThrowIfNull(added);
+        RequireContains(target, nameof(target));
+        if (Contains(added))
+        {
+            throw new ArgumentException("The pane is already in the layout.", nameof(added));
+        }
+
+        return new(Replace(Root, node => node is PaneLeaf<T> leaf && ReferenceEquals(leaf.Pane, target)
+            ? new PaneSplit<T>(axis, 0.5, leaf, new PaneLeaf<T>(added))
+            : null));
+    }
+
+    /// <summary>
+    /// The layout without <paramref name="pane"/>: the other part of its split takes its space. Null
+    /// when <paramref name="pane"/> is the only pane (the tab closes). <paramref name="next"/> is the pane
+    /// to work in now: the one of the other part nearest to where the closed pane was (its first pane
+    /// when the closed one came first, its last pane when it came second).
+    /// </summary>
+    public PaneLayout<T>? Close(T pane, out T? next)
+    {
+        RequireContains(pane, nameof(pane));
+        next = default;
+        if (Root is PaneLeaf<T>)
+        {
+            return null;
+        }
+
+        T? nearest = default;
+        var root = Replace(Root, node =>
+        {
+            if (node is not PaneSplit<T> split)
+            {
+                return null;
+            }
+
+            if (split.First is PaneLeaf<T> first && ReferenceEquals(first.Pane, pane))
+            {
+                nearest = Edge(split.Second, last: false);
+                return split.Second;
+            }
+
+            if (split.Second is PaneLeaf<T> second && ReferenceEquals(second.Pane, pane))
+            {
+                nearest = Edge(split.First, last: true);
+                return split.First;
+            }
+
+            return null;
+        });
+        next = nearest;
+        return new(root);
+    }
+
+    /// <summary>
+    /// The same layout with <paramref name="split"/> (a node of this layout) at <paramref name="ratio"/>,
+    /// pulled into <see cref="PaneRules.MinRatio"/>–<see cref="PaneRules.MaxRatio"/>. The minimum pane
+    /// sizes are <see cref="PaneRules.ClampRatio"/>'s, which the caller applies first.
+    /// </summary>
+    public PaneLayout<T> WithRatio(PaneSplit<T> split, double ratio)
+    {
+        ArgumentNullException.ThrowIfNull(split);
+        bool found = false;
+        var root = Replace(Root, node =>
+        {
+            if (!ReferenceEquals(node, split))
+            {
+                return null;
+            }
+
+            found = true;
+            return new PaneSplit<T>(split.Axis, PaneRules.NormalizeRatio(ratio), split.First, split.Second);
+        });
+        return found ? new(root) : throw new ArgumentException("The split is not in the layout.", nameof(split));
+    }
+
+    /// <summary>The same shape and ratios with each pane replaced by <paramref name="map"/>'s result.</summary>
+    public PaneLayout<TOut> Map<TOut>(Func<T, TOut> map)
+        where TOut : class
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        PaneNode<TOut> Of(PaneNode<T> node) => node switch
+        {
+            PaneLeaf<T> leaf => new PaneLeaf<TOut>(map(leaf.Pane)),
+            PaneSplit<T> split => new PaneSplit<TOut>(split.Axis, split.Ratio, Of(split.First), Of(split.Second)),
+            _ => throw new InvalidOperationException(),
+        };
+        return new(Of(Root));
+    }
+
+    /// <summary>The pane after (<paramref name="back"/>: before) <paramref name="pane"/> in reading order, wrapping around (F6 / Shift+F6).</summary>
+    public T Next(T pane, bool back)
+    {
+        int index = IndexOf(pane);
+        if (index < 0)
+        {
+            throw new ArgumentException("The pane is not in the layout.", nameof(pane));
+        }
+
+        return Panes[(index + (back ? Panes.Count - 1 : 1)) % Panes.Count];
+    }
+
+    private int IndexOf(T pane)
+    {
+        for (int i = 0; i < Panes.Count; i++)
+        {
+            if (ReferenceEquals(Panes[i], pane))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private void RequireContains(T pane, string name)
+    {
+        if (!Contains(pane))
+        {
+            throw new ArgumentException("The pane is not in the layout.", name);
+        }
+    }
+
+    /// <summary>
+    /// The tree with the first node (top down, in reading order) that <paramref name="replace"/> gives a
+    /// node for replaced by it; a split none of whose parts changed is kept as it is.
+    /// </summary>
+    private static PaneNode<T> Replace(PaneNode<T> node, Func<PaneNode<T>, PaneNode<T>?> replace)
+    {
+        if (replace(node) is { } replaced)
+        {
+            return replaced;
+        }
+
+        if (node is not PaneSplit<T> split)
+        {
+            return node;
+        }
+
+        var first = Replace(split.First, replace);
+        var second = ReferenceEquals(first, split.First) ? Replace(split.Second, replace) : split.Second;
+        return ReferenceEquals(first, split.First) && ReferenceEquals(second, split.Second)
+            ? split
+            : new PaneSplit<T>(split.Axis, split.Ratio, first, second);
+    }
+
+    /// <summary>The first (or <paramref name="last"/>) pane of <paramref name="node"/> in reading order.</summary>
+    private static T Edge(PaneNode<T> node, bool last)
+    {
+        while (node is PaneSplit<T> split)
+        {
+            node = last ? split.Second : split.First;
+        }
+
+        return ((PaneLeaf<T>)node).Pane;
+    }
+
     private static void Collect(PaneNode<T> node, List<T> into)
     {
         switch (node)
@@ -90,4 +253,89 @@ public sealed class PaneLayout<T>
                 break;
         }
     }
+}
+
+/// <summary>Why a pane cannot be split (<see cref="PaneRules.CanSplit"/>).</summary>
+public enum SplitRefusal
+{
+    None,
+
+    /// <summary>The tab already has <see cref="PaneRules.MaxPanes"/> panes.</summary>
+    TooManyPanes,
+
+    /// <summary>Side by side, the two halves would be narrower than <see cref="PaneRules.MinWidth"/>.</summary>
+    TooNarrow,
+
+    /// <summary>Stacked, the two halves would be lower than <see cref="PaneRules.MinHeight"/>.</summary>
+    TooLow,
+}
+
+/// <summary>
+/// Size rules of the panes of a tab (DIP). A pane is never hidden or closed because the window got
+/// small: below the minimum sizes the panes shrink together.
+/// </summary>
+public static class PaneRules
+{
+    public const int MaxPanes = 4;
+
+    public const double MinWidth = 280;
+
+    public const double MinHeight = 160;
+
+    /// <summary>The bar between the two parts of a split (dragged to resize them).</summary>
+    public const double SplitterThickness = 5;
+
+    /// <summary>Range of <see cref="PaneSplit{T}.Ratio"/> whatever the size of the window.</summary>
+    public const double MinRatio = 0.05;
+
+    public const double MaxRatio = 0.95;
+
+    public const double DefaultRatio = 0.5;
+
+    /// <summary>Whether a pane of <paramref name="paneWidth"/> × <paramref name="paneHeight"/> in a tab of <paramref name="paneCount"/> panes can be split along <paramref name="axis"/>.</summary>
+    public static SplitRefusal CanSplit(int paneCount, double paneWidth, double paneHeight, SplitAxis axis)
+    {
+        if (paneCount >= MaxPanes)
+        {
+            return SplitRefusal.TooManyPanes;
+        }
+
+        return axis == SplitAxis.Columns
+            ? paneWidth >= (2 * MinWidth) + SplitterThickness ? SplitRefusal.None : SplitRefusal.TooNarrow
+            : paneHeight >= (2 * MinHeight) + SplitterThickness ? SplitRefusal.None : SplitRefusal.TooLow;
+    }
+
+    /// <summary>The least extent along <paramref name="axis"/> that <paramref name="node"/> needs for every pane in it to keep its minimum size.</summary>
+    public static double MinExtent<T>(PaneNode<T> node, SplitAxis axis)
+        where T : class => node switch
+        {
+            PaneSplit<T> split when split.Axis == axis => MinExtent(split.First, axis) + SplitterThickness + MinExtent(split.Second, axis),
+            PaneSplit<T> split => Math.Max(MinExtent(split.First, axis), MinExtent(split.Second, axis)),
+            _ => axis == SplitAxis.Columns ? MinWidth : MinHeight,
+        };
+
+    /// <summary>
+    /// <paramref name="ratio"/> for <paramref name="split"/> whose whole extent along its axis (the
+    /// splitter included) is <paramref name="extent"/>, pulled in so that both parts keep their
+    /// <see cref="MinExtent"/>. When the extent is too small for both, only the range of
+    /// <see cref="NormalizeRatio"/> applies (the parts shrink below their minimum together).
+    /// </summary>
+    public static double ClampRatio<T>(PaneSplit<T> split, double extent, double ratio)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(split);
+        double value = NormalizeRatio(ratio);
+        double available = extent - SplitterThickness;
+        double minFirst = MinExtent(split.First, split.Axis);
+        double minSecond = MinExtent(split.Second, split.Axis);
+        if (!double.IsFinite(available) || available <= 0 || minFirst + minSecond > available)
+        {
+            return value;
+        }
+
+        return NormalizeRatio(Math.Clamp(value, minFirst / available, 1 - (minSecond / available)));
+    }
+
+    /// <summary><paramref name="ratio"/> pulled into <see cref="MinRatio"/>–<see cref="MaxRatio"/> (not a number: <see cref="DefaultRatio"/>).</summary>
+    public static double NormalizeRatio(double ratio) => double.IsNaN(ratio) ? DefaultRatio : Math.Clamp(ratio, MinRatio, MaxRatio);
 }

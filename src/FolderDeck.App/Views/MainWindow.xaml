@@ -276,6 +276,30 @@
                             <Rectangle Height="1.5" Margin="0,3,0,0" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type RadioButton}}}" />
                         </StackPanel>
                     </RadioButton>
+
+                    <!-- split the active pane (MainViewModel.SplitPaneCommand): left | right, top / bottom -->
+                    <Button Style="{StaticResource Btn.Icon}" Width="30" Height="28" Margin="10,0,0,0"
+                            ToolTip="{views:ShortcutTip Text=左右に分割, Id=SplitColumns}" AutomationProperties.Name="左右に分割"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding SplitPaneCommand}" CommandParameter="{x:Static layout:SplitAxis.Columns}">
+                        <Grid Width="14" Height="12">
+                            <Rectangle RadiusX="1.5" RadiusY="1.5" StrokeThickness="1.5"
+                                       Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                            <Rectangle Width="1.5" HorizontalAlignment="Center"
+                                       Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                        </Grid>
+                    </Button>
+                    <Button Style="{StaticResource Btn.Icon}" Width="30" Height="28" Margin="2,0,0,0"
+                            ToolTip="{views:ShortcutTip Text=上下に分割, Id=SplitRows}" AutomationProperties.Name="上下に分割"
+                            ToolTipService.ShowOnDisabled="True"
+                            Command="{Binding SplitPaneCommand}" CommandParameter="{x:Static layout:SplitAxis.Rows}">
+                        <Grid Width="14" Height="12">
+                            <Rectangle RadiusX="1.5" RadiusY="1.5" StrokeThickness="1.5"
+                                       Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                            <Rectangle Height="1.5" VerticalAlignment="Center"
+                                       Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                        </Grid>
+                    </Button>
                 </StackPanel>
 
                 <!-- card size: nothing to size in the details list (disabled there, the value is kept) -->
@@ -310,7 +334,7 @@
             </Grid>
         </Border>
 
-        <!-- Messages, notice, error banner (§5.4, §8.4, §10.2) -->
+        <!-- Messages (§5.4) -->
         <StackPanel Grid.Row="2">
             <!-- top: メッセージの表示 = 上 (and all but success while it is 表示しない); the bottom one is under ContentHost -->
             <Border Style="{StaticResource MessageBar}" Visibility="{Binding Message.ShowsAtTop, Converter={StaticResource BoolToVis}}">
@@ -320,80 +344,17 @@
                     <TextBlock Text="{Binding Message.Text}" TextWrapping="Wrap" VerticalAlignment="Center" />
                 </DockPanel>
             </Border>
-            <Border Margin="16,8,16,0" Padding="12,7" CornerRadius="8" Background="{DynamicResource Brush.WarnSoft}"
-                    Visibility="{Binding ActivePane.NoticeText, Converter={StaticResource NotEmptyToVis}}">
-                <TextBlock Text="{Binding ActivePane.NoticeText}" TextWrapping="Wrap" Foreground="{DynamicResource Brush.Warn}" />
-            </Border>
-            <Border Margin="16,8,16,0" Padding="12,8" CornerRadius="8" Background="{DynamicResource Brush.DangerSoft}"
-                    Visibility="{Binding ActivePane.BannerText, Converter={StaticResource NotEmptyToVis}}">
-                <DockPanel>
-                    <Button DockPanel.Dock="Right" Style="{StaticResource Btn}" Padding="10,3" Margin="12,0,0,0"
-                            Command="{Binding BackToTopCommand}" Content="{Binding ActivePane.BackText}" />
-                    <TextBlock Text="{Binding ActivePane.BannerText}" TextWrapping="Wrap" VerticalAlignment="Center"
-                               Foreground="{DynamicResource Brush.Danger}" />
-                </DockPanel>
-            </Border>
+            <!-- each pane's notice and error banner are at the top of the pane (PaneView) -->
         </StackPanel>
 
         <!--
-          The items of the shown tab (§6): the card grid or the details list, by the view mode
-          (CardShape). Only the one that is shown has the items; the other gets none, so that it
-          keeps no containers alive and loads nothing while hidden.
+          The items of the shown tab (§6): its panes (PaneView), each with the card grid or the
+          details list by its own view mode.
         -->
         <!-- transparent, not null: a press on the blank area clears the selection, a right click there offers 貼り付け -->
         <Grid x:Name="ContentHost" Grid.Row="3" Background="Transparent">
-            <views:CardGrid x:Name="Grid" CardSize="{Binding CardSize}" CardShape="{Binding CardShape}">
-                <views:CardGrid.Style>
-                    <Style TargetType="{x:Type views:CardGrid}">
-                        <Setter Property="Items" Value="{Binding ActivePane.Cards}" />
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding ActivePane.IsLoading}" Value="True">
-                                <Setter Property="Opacity" Value="0.55" />
-                                <Setter Property="IsHitTestVisible" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding CardShape}" Value="{x:Static layout:CardShape.Details}">
-                                <Setter Property="Items" Value="{x:Null}" />
-                                <Setter Property="Visibility" Value="Collapsed" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </views:CardGrid.Style>
-            </views:CardGrid>
-
-            <views:DetailsListView x:Name="Details" SortMode="{Binding ActivePane.SortMode}" Columns="{Binding DetailsColumns}" ExtraColumns="{Binding DetailsExtraColumns}">
-                <views:DetailsListView.Style>
-                    <Style TargetType="{x:Type views:DetailsListView}">
-                        <Setter Property="Visibility" Value="Collapsed" />
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding ActivePane.IsLoading}" Value="True">
-                                <Setter Property="Opacity" Value="0.55" />
-                                <Setter Property="IsHitTestVisible" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding CardShape}" Value="{x:Static layout:CardShape.Details}">
-                                <Setter Property="Items" Value="{Binding ActivePane.Cards}" />
-                                <Setter Property="Visibility" Value="Visible" />
-                            </DataTrigger>
-                            <!-- No tab: the column titles must not stay above the empty state (last trigger wins) -->
-                            <DataTrigger Binding="{Binding HasTab}" Value="False">
-                                <Setter Property="Visibility" Value="Collapsed" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </views:DetailsListView.Style>
-            </views:DetailsListView>
-
-            <TextBlock Text="{Binding ActivePane.ShownEmptyText}" HorizontalAlignment="Center" VerticalAlignment="Center"
-                       Foreground="{DynamicResource Brush.Muted}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="560" Margin="24"
-                       IsHitTestVisible="False" Visibility="{Binding ActivePane.ShownEmptyText, Converter={StaticResource NotEmptyToVis}}" />
-
-            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,24,0,0" Padding="14,8" CornerRadius="8"
-                    Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1"
-                    Visibility="{Binding ActivePane.IsSlow, Converter={StaticResource BoolToVis}}">
-                <StackPanel Orientation="Horizontal">
-                    <ContentControl Style="{StaticResource Spinner}" Margin="0,0,8,0" />
-                    <TextBlock Text="応答がありません（待機中…）" Foreground="{DynamicResource Brush.Muted}" />
-                </StackPanel>
-            </Border>
+            <!-- The panes of the shown tab: one PaneView each, with splitters between them (MainWindow.BuildPanes from ShownLayout) -->
+            <Border x:Name="PaneArea" />
 
             <!-- Empty state: every tab was closed (the placeholder tab is selected: no cards, no texts of its own) -->
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">

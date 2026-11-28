@@ -2470,7 +2470,20 @@ public sealed class CascadeController
         {
             _window.Activate();
         }
+
+        // what the click does acts on the pane the cascade came from (a card's, a details row's)
+        if ((_card as FrameworkElement ?? _anchor) is { } root)
+        {
+            ContentActivated?.Invoke(root);
+        }
     }
+
+    /// <summary>
+    /// A click (or a menu) in the cascade is about to act: called with the element it was opened
+    /// from (a card, a row, a sidebar row, a crumb, a tab header). The window makes the pane that
+    /// element is in the active one, so that the click acts on that pane.
+    /// </summary>
+    public Action<FrameworkElement>? ContentActivated { get; set; }
 
     private void ShowMenu(ItemRef item, FrameworkElement target)
     {

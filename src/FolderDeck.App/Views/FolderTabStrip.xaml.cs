@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using FolderDeck.Core.Transfer;
+using FolderDeck.Core.Layout;
 using FolderDeck.ViewModels;
 
 namespace FolderDeck.Views;
@@ -445,6 +446,26 @@ public partial class FolderTabStrip : UserControl
         var duplicate = new MenuItem { Header = "タブを複製", IsEnabled = MainViewModel.CanDuplicate(tab) };
         duplicate.Click += (_, _) => _ = vm.DuplicateTabAsync(tab);
         menu.Items.Add(duplicate);
+
+        // Panes (folder tabs only): the tab's active pane splits (the tab is shown first), or closes.
+        if (tab.IsFolderTab)
+        {
+            menu.Items.Add(new Separator());
+            bool canSplit = tab.Panes.Count < PaneRules.MaxPanes;
+            var columns = new MenuItem { Header = "左右に分割", IsEnabled = canSplit, InputGestureText = ShortcutCatalog.MainKeysOf(ShortcutId.SplitColumns) };
+            columns.Click += (_, _) => _ = vm.SplitTabAsync(tab, SplitAxis.Columns);
+            menu.Items.Add(columns);
+            var rows = new MenuItem { Header = "上下に分割", IsEnabled = canSplit, InputGestureText = ShortcutCatalog.MainKeysOf(ShortcutId.SplitRows) };
+            rows.Click += (_, _) => _ = vm.SplitTabAsync(tab, SplitAxis.Rows);
+            menu.Items.Add(rows);
+            if (tab.IsSplit)
+            {
+                var closePane = new MenuItem { Header = "ペインを閉じる" };
+                closePane.Click += (_, _) => _ = vm.ClosePaneAsync(tab.ActivePane);
+                menu.Items.Add(closePane);
+            }
+        }
+
         menu.Items.Add(new Separator());
         var close = new MenuItem { Header = "タブを閉じる" };
         close.Click += (_, _) => vm.CloseTabCommand.Execute(tab);

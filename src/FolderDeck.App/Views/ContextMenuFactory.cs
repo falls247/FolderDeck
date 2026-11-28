@@ -458,6 +458,7 @@ public sealed class ContextMenuFactory
         entries.Add(SortEntry());
         entries.Add(TypeSelectEntry());
         entries.Add(new("最新の情報に更新", RefreshGlyph, true, () => _vm.RefreshCommand.Execute(null), Keys: ShortcutId.Refresh));
+        AddPaneEntries(entries);
 
         if (shown is not null)
         {
@@ -474,6 +475,41 @@ public sealed class ContextMenuFactory
 
         nativePaths = shown is null ? null : [shown.Path];
         return entries;
+    }
+
+    /// <summary>
+    /// The pane entries of the blank area of a folder tab: 「左右に分割」 / 「上下に分割」 of the pane
+    /// of the right click (it is the active one: the press made it so), and 「ペインを閉じる」 while
+    /// the tab is split. For that pane only (RunEntry may run the action after the menu closed).
+    /// </summary>
+    private void AddPaneEntries(List<MenuEntry> entries)
+    {
+        if (!_vm.HasTab || !_vm.SelectedTab.IsFolderTab)
+        {
+            return; // a fixed tab is never split
+        }
+
+        var pane = _vm.ActivePane;
+        entries.Add(MenuEntry.Separator);
+        entries.Add(new("左右に分割", SplitColumnsGlyph, _vm.CanSplit, () => Split(SplitAxis.Columns), Keys: ShortcutId.SplitColumns));
+        entries.Add(new("上下に分割", SplitRowsGlyph, _vm.CanSplit, () => Split(SplitAxis.Rows), Keys: ShortcutId.SplitRows));
+        if (_vm.SelectedTab.IsSplit)
+        {
+            entries.Add(new("ペインを閉じる", ClosePaneGlyph, true, () =>
+            {
+                BeforeNavigate?.Invoke(); // the panes are laid out again
+                _ = _vm.ClosePaneAsync(pane);
+            }, Keys: ShortcutId.CloseTab));
+        }
+
+        void Split(SplitAxis axis)
+        {
+            if (ReferenceEquals(pane, _vm.ActivePane))
+            {
+                BeforeNavigate?.Invoke();
+                _ = _vm.SplitActivePaneAsync(axis);
+            }
+        }
     }
 
     /// <summary>
@@ -854,6 +890,10 @@ public sealed class ContextMenuFactory
     /// Explorer's menu by MF_CHECKED. <see cref="Keys"/>: the shortcut that does the same, shown on the
     /// right of the WPF entry (not in Explorer's menu); only where the key acts on the same items.
     /// </summary>
+    private const string SplitColumnsGlyph = "\uE90D"; // DockRight
+    private const string SplitRowsGlyph = "\uE90E"; // DockBottom
+    private const string ClosePaneGlyph = "\uE711"; // Cancel
+
     private sealed record MenuEntry(
         string? Header, string Glyph, bool Enabled, Action? Action, bool IsDefault = false, IReadOnlyList<MenuEntry>? Children = null,
         bool? Checked = null, ShortcutId? Keys = null)
