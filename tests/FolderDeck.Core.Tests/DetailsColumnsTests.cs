@@ -33,6 +33,45 @@ public class DetailsColumnsTests
     }
 
     [Fact]
+    public void Arrange_HidesColumnsFromTheRight_OnlyWhenEvenTheirSmallestWidthsDoNotFit()
+    {
+        var stored = DetailsColumns.Normalize(null);
+        double allAtMinimum = DetailsColumns.NameMin + (3 * DetailsColumns.Min); // 264
+
+        // Room for every column at its minimum: nothing hidden, the widths are Fit's.
+        var fits = DetailsColumns.Arrange(allAtMinimum, stored, []);
+        Assert.Empty(fits.Hidden);
+        Assert.Equal(DetailsColumns.Fit(allAtMinimum, stored, []), fits.Widths);
+
+        // One pixel less: 種類 goes first, and the rest is fitted into the width.
+        var narrow = DetailsColumns.Arrange(allAtMinimum - 1, stored, []);
+        Assert.Equal([DetailsColumns.Type], narrow.Hidden);
+        Assert.Equal(0, narrow.Widths[DetailsColumns.Type]);
+        Assert.True(narrow.Widths[DetailsColumns.Name] + narrow.Widths[DetailsColumns.Modified] + narrow.Widths[DetailsColumns.Size] <= allAtMinimum - 1);
+
+        // Then サイズ, then 更新日時; 名前 stays, clipped when even it does not fit.
+        Assert.True(DetailsColumns.Arrange(DetailsColumns.NameMin + DetailsColumns.Min, stored, []).Hidden.SetEquals([DetailsColumns.Type, DetailsColumns.Size]));
+        var nameOnly = DetailsColumns.Arrange(60, stored, []);
+        Assert.Equal(3, nameOnly.Hidden.Count);
+        Assert.Equal(DetailsColumns.NameMin, nameOnly.Widths[DetailsColumns.Name]);
+
+        // A wide stored width does not hide anything while the minimums fit (Fit shrinks it).
+        Assert.Empty(DetailsColumns.Arrange(300, stored, []).Hidden);
+    }
+
+    [Fact]
+    public void Arrange_HidesTheShownExtraColumnsFirst_RightmostFirst()
+    {
+        var extras = DetailsPropertyColumns.All.Take(2).Select(c => c.Id).ToList();
+        var stored = DetailsColumns.Normalize(null);
+        double allAtMinimum = DetailsColumns.NameMin + (5 * DetailsColumns.Min);
+        var layout = DetailsColumns.Arrange(allAtMinimum - 1, stored, extras);
+        Assert.Equal([extras[1]], layout.Hidden);
+        Assert.Equal(0, layout.Widths[extras[1]]);
+        Assert.Equal([extras[1], extras[0], DetailsColumns.Type, DetailsColumns.Size, DetailsColumns.Modified], DetailsColumns.HideOrder(extras));
+    }
+
+    [Fact]
     public void Fit_CountsOnlyTheShownExtraColumns_AndShrinksThemWithTheOthers()
     {
         var widths = DetailsColumns.Normalize(new Dictionary<string, double> { ["date_taken"] = 200, ["authors"] = 300 });
