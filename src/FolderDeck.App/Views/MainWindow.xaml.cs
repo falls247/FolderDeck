@@ -234,6 +234,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         {
             HideDropHint();
             SetDropMark(null);
+            MarkDropView(null);
         };
         Drop += OnDrop;
         Closing += OnClosing;
@@ -1472,6 +1473,11 @@ public partial class MainWindow : Window, IMainView, ICardHost
     private void OnDragOver(object sender, DragEventArgs e)
     {
         NoteInput(); // OLE calls it over and over during a drag over the window
+        if (DragOverEmptyPane(e))
+        {
+            return; // a folder onto an empty pane: it opens there
+        }
+
         if (FolderDropOf(e) is { } drop)
         {
             e.Effects = ToWpf(drop.Effect);
@@ -1497,6 +1503,12 @@ public partial class MainWindow : Window, IMainView, ICardHost
 
     private async void OnDrop(object sender, DragEventArgs e)
     {
+        if (DropOnEmptyPane(e))
+        {
+            SetDropMark(null);
+            return;
+        }
+
         var drop = FolderDropOf(e); // the position and the keys at the release decide again
         SetDropMark(null);
         HideDropHint();
@@ -3296,72 +3308,7 @@ public partial class MainWindow : Window, IMainView, ICardHost
         }
     }
 
-    // ---- a tab dragged from the strip onto a pane ------------------------------------------------
-
-    /// <summary>The pane view marked as where the dragged tab would go (null: none).</summary>
-    private PaneView? _tabDropView;
-
-    /// <summary>
-    /// The tab strip's drag is over the panes (<paramref name="screen"/>; null: it left them): marks the
-    /// pane of the group on screen under the pointer, unless it is the dragged tab's own. True when one is marked.
-    /// </summary>
-    private bool OnTabDraggedOverPanes(TabLayoutViewModel tab, Point? screen)
-    {
-        var view = screen is { } at && _vm.IsSplit ? PaneViewAtScreen(at) : null;
-        if (view?.Pane is not { } pane || ReferenceEquals(pane, tab.ActivePane))
-        {
-            view = null;
-        }
-
-        if (!ReferenceEquals(view, _tabDropView))
-        {
-            if (_tabDropView is not null)
-            {
-                _tabDropView.IsTabDropTarget = false;
-            }
-
-            _tabDropView = view;
-            if (view is not null)
-            {
-                view.IsTabDropTarget = true;
-            }
-        }
-
-        return view is not null;
-    }
-
-    /// <summary>The dragged tab was released over the panes: the pane under the pointer takes it (MainViewModel.PutInPaneAsync).</summary>
-    private bool OnTabDroppedOnPanes(TabLayoutViewModel tab, Point screen)
-    {
-        bool target = OnTabDraggedOverPanes(tab, screen);
-        var pane = _tabDropView?.Pane;
-        OnTabDraggedOverPanes(tab, null);
-        if (!target || pane is null)
-        {
-            return false;
-        }
-
-        _cascade.CloseAll();
-        _ = _vm.PutInPaneAsync(tab, pane);
-        return true;
-    }
-
-    /// <summary>The pane view under a point of the screen (not a splitter), or null.</summary>
-    private PaneView? PaneViewAtScreen(Point screen)
-    {
-        if (!PaneArea.IsVisible || PresentationSource.FromVisual(PaneArea) is null)
-        {
-            return null;
-        }
-
-        Point p = PaneArea.PointFromScreen(screen);
-        if (p.X < 0 || p.Y < 0 || p.X > PaneArea.ActualWidth || p.Y > PaneArea.ActualHeight)
-        {
-            return null;
-        }
-
-        return PaneArea.InputHitTest(p) is DependencyObject hit ? PaneViewOf(hit) : null;
-    }
+    // (a tab dragged from the strip onto the panes, a folder onto an empty pane: MainWindow.PaneDrag.cs)
 
     // ---- auto refresh: what a replaced item list would break ------------------------------------
 

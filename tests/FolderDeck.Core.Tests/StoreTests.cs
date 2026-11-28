@@ -736,6 +736,7 @@ public class SettingsStoreTests
         Assert.Equal("top", s.MessagePosition);
         Assert.Empty(s.PaneGroups!);
         Assert.Equal(-1, s.ShownGroup);
+        Assert.False(s.AllowDuplicateTabs);
         Assert.False(s.PaneAutoRecord);
         Assert.True(s.PaneReuseOpenTabs);
         Assert.False(s.PaneCloseClosesTab);

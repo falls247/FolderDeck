@@ -390,6 +390,16 @@
             <!-- The panes of the shown tab: one PaneView each, with splitters between them (MainWindow.BuildPanes from ShownLayout) -->
             <Border x:Name="PaneArea" />
 
+            <!-- A tab dragged to the top of the panes: the layouts to drop it in (MainWindow.PaneDrag.cs draws them from PanePresets) -->
+            <Border x:Name="SnapBar" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,8,0,0" Padding="12,8,12,12" CornerRadius="10"
+                    Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1"
+                    Visibility="Collapsed" IsHitTestVisible="False" Panel.ZIndex="10">
+                <StackPanel>
+                    <TextBlock Text="配置を選んでドロップ" HorizontalAlignment="Center" FontSize="12" Foreground="{DynamicResource Brush.Muted}" Margin="0,0,0,8" />
+                    <StackPanel x:Name="SnapLayouts" Orientation="Horizontal" />
+                </StackPanel>
+            </Border>
+
             <!-- Empty state: every tab was closed (the placeholder tab is selected: no cards, no texts of its own; an empty pane of a group has its own hint) -->
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
                 <StackPanel.Style>

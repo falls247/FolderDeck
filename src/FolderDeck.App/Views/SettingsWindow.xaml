@@ -76,12 +76,12 @@
                              ToolTip="開き方・右クリックのメニュー・エクスプローラー" />
                 <RadioButton x:Name="TabFolders" Style="{StaticResource PageTab}" GroupName="Page" Content="フォルダ" Checked="OnTabChecked"
                              ToolTip="隠しファイル・フォルダの自動更新" />
+                <RadioButton x:Name="TabPanes" Style="{StaticResource PageTab}" GroupName="Page" Content="ペイン" Checked="OnTabChecked"
+                             ToolTip="登録ペイン・ペインを閉じるときの動作" />
                 <RadioButton x:Name="TabHistory" Style="{StaticResource PageTab}" GroupName="Page" Content="履歴" Checked="OnTabChecked"
                              ToolTip="最近の履歴・よく使う項目" />
                 <RadioButton x:Name="TabData" Style="{StaticResource PageTab}" GroupName="Page" Content="データ" Checked="OnTabChecked"
                              ToolTip="サムネイルのキャッシュ・データフォルダ" />
-                <RadioButton x:Name="TabPanes" Style="{StaticResource PageTab}" GroupName="Page" Content="ペイン" Checked="OnTabChecked"
-                             ToolTip="登録ペイン・ペインを閉じるときの動作" />
             </StackPanel>
         </Border>
 
@@ -122,6 +122,11 @@
                     </Border>
                     <TextBlock Text="サイドバー・カード・詳細表示・中身の一覧（オーバーレイ・フライアウト）の文字を大きくします（タブ・ツールバー・メニュー・プレビューは変わりません）。OK を押すと切り替わります。"
                                Style="{StaticResource Help}" Margin="0,6,0,0" />
+
+                    <TextBlock Text="タブ" Style="{StaticResource Section}" />
+                    <CheckBox Content="タブバーの重複を許可する" IsChecked="{Binding AllowDuplicateTabs}" />
+                    <TextBlock Text="オンにすると、登録フォルダ・ドライブなどからフォルダを開くとき、同じフォルダのタブがあっても新しいタブで開きます。オフのときは、そのフォルダのタブ（ペインに表示中のものを優先）を表示します。"
+                               Style="{StaticResource Help}" Margin="20,0,0,0" />
                 </StackPanel>
 
                 <!-- 操作 -->

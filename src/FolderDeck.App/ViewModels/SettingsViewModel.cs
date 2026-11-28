@@ -103,6 +103,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _thumbCacheMbText;
 
+    /// <summary>表示: タブバーの重複を許可する (<see cref="AppSettings.AllowDuplicateTabs"/>).</summary>
+    [ObservableProperty]
+    private bool _allowDuplicateTabs;
+
     /// <summary>ペイン: 登録ペインの内容を自動記録する (<see cref="AppSettings.PaneAutoRecord"/>). While on, 「現在のペインを上書きする」 is off.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(OverwritePaneNote))]
@@ -163,6 +167,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _recentLimitText = settings.RecentLimit.ToString(CultureInfo.InvariantCulture);
         _frequentLimitText = settings.FrequentLimit.ToString(CultureInfo.InvariantCulture);
         _thumbCacheMbText = settings.ThumbCacheMb.ToString(CultureInfo.InvariantCulture);
+        _allowDuplicateTabs = settings.AllowDuplicateTabs;
         _paneAutoRecord = settings.PaneAutoRecord;
         _paneReuseOpenTabs = settings.PaneReuseOpenTabs;
         _paneCloseClosesTab = settings.PaneCloseClosesTab;
@@ -398,6 +403,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.ThumbCacheMb = ThumbCacheMb;
         settings.AutoRefresh = AutoRefresh;
         settings.AutoRefreshSeconds = AutoRefreshSeconds;
+        settings.AllowDuplicateTabs = AllowDuplicateTabs;
         settings.PaneAutoRecord = PaneAutoRecord;
         settings.PaneReuseOpenTabs = PaneReuseOpenTabs;
         settings.PaneCloseClosesTab = PaneCloseClosesTab;

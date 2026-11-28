@@ -48,6 +48,7 @@
         <RepeatButton x:Name="RightArrow" Style="{StaticResource Btn.TabScroll}" Content="&#xEDDA;" ToolTip="右のタブを表示" />
     </StackPanel>
     <ScrollViewer x:Name="Scroller" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" Focusable="False">
+        <StackPanel Orientation="Horizontal">
         <ItemsControl x:Name="Tabs" ItemsSource="{Binding Tabs}" Focusable="False" Background="Transparent">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
@@ -72,9 +73,12 @@
                         </DockPanel>
                         <Border x:Name="Line" Height="3" VerticalAlignment="Bottom" CornerRadius="2" Margin="8,0"
                                 Background="{DynamicResource Brush.Folder}" Visibility="Hidden" />
-                        <!-- a pane group: one bar over its tabs (bridging the gap to the next tab of the group) -->
-                        <Border x:Name="GroupBar" Height="2" VerticalAlignment="Top" Margin="0,1,-2,0" CornerRadius="1"
-                                Background="{DynamicResource Brush.Border}" Visibility="Hidden" IsHitTestVisible="False" />
+                        <!-- a pane group: one bar over its tabs (bridging the gap to the next tab of the group); dragged, it moves the whole group (FolderTabStrip) -->
+                        <Grid x:Name="GroupHandle" Height="7" VerticalAlignment="Top" Margin="0,0,-2,0" Background="Transparent" Cursor="SizeAll"
+                              Visibility="Hidden" ToolTip="ドラッグしてグループごと移動" ToolTipService.InitialShowDelay="700">
+                            <Border x:Name="GroupBar" Height="2" VerticalAlignment="Top" Margin="0,1,0,0" CornerRadius="1"
+                                    Background="{DynamicResource Brush.Border}" />
+                        </Grid>
                     </Grid>
                     <DataTemplate.Triggers>
                         <!-- fixed tabs: their icon, the accent colour -->
@@ -139,8 +143,11 @@
                         </DataTrigger>
                         <!-- pane groups: a bar over the group (accent while it is on screen), a gap at its ends, and paler colours while it is not on screen -->
                         <DataTrigger Binding="{Binding IsGrouped}" Value="True">
-                            <Setter TargetName="GroupBar" Property="Visibility" Value="Visible" />
+                            <Setter TargetName="GroupHandle" Property="Visibility" Value="Visible" />
                         </DataTrigger>
+                        <Trigger SourceName="GroupHandle" Property="IsMouseOver" Value="True">
+                            <Setter TargetName="GroupBar" Property="Height" Value="4" />
+                        </Trigger>
                         <DataTrigger Binding="{Binding IsOnScreen}" Value="True">
                             <Setter TargetName="GroupBar" Property="Background" Value="{DynamicResource Brush.Accent}" />
                         </DataTrigger>
@@ -156,7 +163,7 @@
                         </DataTrigger>
                         <DataTrigger Binding="{Binding IsGroupEnd}" Value="True">
                             <Setter TargetName="Tab" Property="Margin" Value="0,0,10,0" />
-                            <Setter TargetName="GroupBar" Property="Margin" Value="0,1,0,0" />
+                            <Setter TargetName="GroupHandle" Property="Margin" Value="0" />
                         </DataTrigger>
                         <MultiDataTrigger>
                             <MultiDataTrigger.Conditions>
@@ -169,6 +176,11 @@
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
+        <!-- ＋: an empty pane right of the active one (MainViewModel.AddEmptyPane), right after the last tab -->
+        <Button x:Name="AddPaneButton" Style="{StaticResource Btn.Icon}" Width="30" Height="30" Margin="2,0,0,0" FontSize="12"
+                VerticalAlignment="Center" Content="&#xE710;" AutomationProperties.Name="空のペインを追加" Command="{Binding AddEmptyPaneCommand}" IsEnabled="{Binding CanSplit}"
+                ToolTip="空のペインを追加（選択中のペインを左右に分割）" ToolTipService.ShowOnDisabled="True" />
+        </StackPanel>
     </ScrollViewer>
     </DockPanel>
 </UserControl>

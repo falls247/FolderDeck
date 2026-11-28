@@ -20,8 +20,8 @@ public partial class SettingsWindow : Window
         InitializeComponent();
         _vm = vm;
         DataContext = vm;
-        _tabs = [TabView, TabActions, TabFolders, TabHistory, TabData, TabPanes];
-        _pages = [PageView, PageActions, PageFolders, PageHistory, PageData, PagePanes];
+        _tabs = [TabView, TabActions, TabFolders, TabPanes, TabHistory, TabData];
+        _pages = [PageView, PageActions, PageFolders, PagePanes, PageHistory, PageData];
         ShowPage(s_lastPage);
         PreviewKeyDown += OnWindowKeyDown;
         SourceInitialized += (_, _) => (Application.Current as App)?.Theme?.ApplyTitleBar(this);
@@ -98,9 +98,9 @@ public partial class SettingsWindow : Window
         (int page, TextBox box)? field = _vm.ErrorField switch
         {
             nameof(SettingsViewModel.AutoRefreshSecondsText) => (2, IntervalBox),
-            nameof(SettingsViewModel.RecentLimitText) => (3, RecentBox),
-            nameof(SettingsViewModel.FrequentLimitText) => (3, FrequentBox),
-            nameof(SettingsViewModel.ThumbCacheMbText) => (4, CacheBox),
+            nameof(SettingsViewModel.RecentLimitText) => (4, RecentBox),
+            nameof(SettingsViewModel.FrequentLimitText) => (4, FrequentBox),
+            nameof(SettingsViewModel.ThumbCacheMbText) => (5, CacheBox),
             _ => null,
         };
         if (field is { } f)

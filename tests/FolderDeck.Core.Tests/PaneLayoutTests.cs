@@ -399,4 +399,30 @@ public class PaneLayoutTests
     [MemberData(nameof(SavedLayouts))]
     public void Settings_IsValidSaved(string json, bool valid) =>
         Assert.Equal(valid, PaneLayoutSettings.IsValidSaved(JsonSerializer.Deserialize<PaneNodeSetting>(json, JsonFile.Options)));
+
+    // ---- presets (the snap layouts of a tab dragged to the top of the panes) ----
+
+    [Fact]
+    public void Presets_PutPanesInReadingOrder_AndCoverTheSquare()
+    {
+        for (int preset = 0; preset < PanePresets.Count; preset++)
+        {
+            int count = PanePresets.ZoneCount(preset);
+            Assert.InRange(count, 2, PaneRules.MaxPanes);
+            var panes = Enumerable.Range(0, count).Select(i => $"p{i}").ToList();
+            var layout = PanePresets.Build(preset, panes);
+            Assert.Equal(panes, layout.Panes);
+            var zones = PanePresets.ZonesOf(preset);
+            Assert.Equal(count, zones.Count);
+            Assert.Equal(1.0, zones.Sum(z => z.Width * z.Height), 6);
+        }
+    }
+
+    [Fact]
+    public void Presets_ThreeColumns_AreEqual_AndWrongCountThrows()
+    {
+        var zones = PanePresets.ZonesOf(2);
+        Assert.All(zones, z => Assert.Equal(1.0 / 3, z.Width, 6));
+        Assert.Throws<ArgumentException>(() => PanePresets.Build(0, new[] { "a" }));
+    }
 }

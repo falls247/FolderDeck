@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.Input;
 using FolderDeck.Core.Layout;
+using FolderDeck.Core.Paths;
 using FolderDeck.Core.Stores;
 
 namespace FolderDeck.ViewModels;
@@ -341,6 +342,23 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>「このペインを閉じる」 of an empty pane (a press in it made it the active pane first).</summary>
+    [RelayCommand]
+    private void CloseActivePane() => ClosePane(ActivePane);
+
+    /// <summary>The tab strip's ＋: an empty pane right of the active pane (as 左右に分割), filled by the next tab picked.</summary>
+    [RelayCommand]
+    private Task AddEmptyPane()
+    {
+        if (!CanSplit)
+        {
+            Message.Info(HasPanes ? $"ペインは {PaneRules.MaxPanes} 個まで並べられます。" : "空のペインは、タブを開いてから追加できます。");
+            return Task.CompletedTask;
+        }
+
+        return SplitActivePaneAsync(SplitAxis.Columns);
+    }
+
     /// <summary>
     /// Splits the active pane along <paramref name="axis"/>: an empty pane takes the half right of
     /// (<see cref="SplitAxis.Columns"/>) or below (<see cref="SplitAxis.Rows"/>) it and becomes the active
@@ -610,6 +628,172 @@ public sealed partial class MainViewModel
         {
             View?.ScrollTo(pane, pane.SavedScrollOffset);
         }
+    }
+
+    /// <summary>
+    /// A tab dragged to the top of the panes was dropped on zone <paramref name="zone"/> of the layout
+    /// <paramref name="preset"/> (<see cref="PanePresets"/>, as Windows 11's snap layouts): the group on
+    /// screen takes that layout (a tab shown alone starts one), with the tab in that zone and the panes
+    /// that showed a tab in the other zones in reading order; zones left over are empty panes, panes
+    /// left over leave the group (their tabs stay on the strip). A tab of another group leaves that one.
+    /// </summary>
+    public async Task PlaceInPresetAsync(TabLayoutViewModel tab, int preset, int zone)
+    {
+        if (!Tabs.Contains(tab) || preset < 0 || preset >= PanePresets.Count || zone < 0 || zone >= PanePresets.ZoneCount(preset))
+        {
+            return;
+        }
+
+        View?.CloseCascade();
+        Message.ClearPersistent();
+        foreach (var shown in VisiblePanes)
+        {
+            shown.SavedScrollOffset = View?.GetScrollOffset(shown) ?? 0;
+        }
+
+        var pane = tab.ActivePane;
+        var group = _shownGroup;
+        var others = VisiblePanes.Where(p => !ReferenceEquals(p, pane)).ToList();
+        if (GroupOf(pane) is { } own && !ReferenceEquals(own, group))
+        {
+            TakeOutOfGroup(pane, Settings.PaneDragOutKeepsEmpty, out _);
+            if (group is not null && !_groups.Contains(group))
+            {
+                group = null; // cannot happen: the two groups are different
+            }
+        }
+
+        var leaves = new List<PaneViewModel>(PanePresets.ZoneCount(preset));
+        int next = 0;
+        for (int i = 0; i < PanePresets.ZoneCount(preset); i++)
+        {
+            leaves.Add(i == zone ? pane : next < others.Count ? others[next++] : NewEmptyPane().ActivePane);
+        }
+
+        var layout = PanePresets.Build(preset, leaves);
+        group ??= new PaneGroup(layout);
+        SetGroupLayout(group, layout); // the empty panes made above are in it before anything is forgotten
+        bool switched = !ReferenceEquals(tab, SelectedTab);
+        if (switched)
+        {
+            LeaveSelectedTab();
+        }
+
+        group.LastActive = pane;
+        SetShownGroup(group);
+        if (switched)
+        {
+            SelectedTab = tab; // announces the layout, then the active pane
+        }
+        else
+        {
+            AnnounceLayout();
+        }
+
+        SaveLocations();
+        if (pane.IsStale)
+        {
+            await LoadTabAsync(pane);
+        }
+
+        foreach (var shown in VisiblePanes)
+        {
+            View?.ScrollTo(shown, shown.SavedScrollOffset); // each view may now show another pane
+        }
+    }
+
+    /// <summary>
+    /// A folder dropped on an empty pane (a folder dragged from another pane, a 登録フォルダ, Explorer):
+    /// it opens there in a new folder tab, also when another tab shows it (the drop says where).
+    /// </summary>
+    public async Task OpenInEmptyPaneAsync(PaneViewModel pane, string folder)
+    {
+        if (!IsEmptyPane(pane) || !IsVisible(pane))
+        {
+            return;
+        }
+
+        ActivatePane(pane);
+        if (!ReferenceEquals(ActivePane, pane))
+        {
+            return;
+        }
+
+        View?.CloseCascade();
+        Message.ClearPersistent();
+        var tab = AddFolderTab(new NavLocation(TabKind.Folder, PathTools.NormalizeOrSelf(folder), string.Empty));
+        InheritViewState(tab.ActivePane);
+        await ShowTabAsync(tab); // fills the active empty pane (PlaceInSplit)
+        SaveLocations();
+    }
+
+    // ---- moving a whole group on the strip ----------------------------------------------------------
+
+    /// <summary>
+    /// The strip in blocks: each pane group's tabs (they stand together) as one block, every other
+    /// tab as a block of its own; in strip order. What a group dragged by its bar moves past.
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<TabLayoutViewModel>> StripBlocks()
+    {
+        var blocks = new List<List<TabLayoutViewModel>>();
+        PaneGroup? current = null;
+        foreach (var tab in Tabs)
+        {
+            var group = GroupOf(tab.ActivePane);
+            if (group is not null && ReferenceEquals(group, current))
+            {
+                blocks[^1].Add(tab);
+            }
+            else
+            {
+                blocks.Add([tab]);
+                current = group;
+            }
+        }
+
+        return blocks;
+    }
+
+    /// <summary>
+    /// The group of <paramref name="tab"/> (dragged by its bar) moves past the block next to it on the
+    /// right (<paramref name="right"/>) or left: a tab, or another group as a whole. False at the end of
+    /// the strip or outside a group. The panes do not change. Saved when the drag ends (<see cref="CommitGroupMove"/>).
+    /// </summary>
+    public bool MoveGroupBlock(TabLayoutViewModel tab, bool right)
+    {
+        if (GroupOf(tab.ActivePane) is null)
+        {
+            return false;
+        }
+
+        var blocks = StripBlocks().ToList();
+        int at = blocks.FindIndex(b => b.Contains(tab));
+        int to = right ? at + 1 : at - 1;
+        if (at < 0 || to < 0 || to >= blocks.Count)
+        {
+            return false;
+        }
+
+        (blocks[at], blocks[to]) = (blocks[to], blocks[at]);
+        var order = blocks.SelectMany(b => b).ToList();
+        for (int i = 0; i < order.Count; i++)
+        {
+            int from = Tabs.IndexOf(order[i]);
+            if (from != i)
+            {
+                Tabs.Move(from, i);
+            }
+        }
+
+        ArrangeGroupTabs(); // the ends of each group again
+        return true;
+    }
+
+    /// <summary>A group dragged by its bar was released: the strip's order is saved.</summary>
+    public void CommitGroupMove()
+    {
+        ArrangeGroupTabs();
+        SaveLocations();
     }
 
     /// <summary>

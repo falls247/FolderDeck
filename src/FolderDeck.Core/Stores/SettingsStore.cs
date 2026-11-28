@@ -433,6 +433,12 @@ public sealed class AppSettings
     public bool SearchesRecursively => SearchScope == SearchScopeRecursive;
 
     /// <summary>
+    /// タブバーの重複を許可する: opening a folder (a 登録フォルダ, a drive, the cascade opened from them) always
+    /// opens a new folder tab. Off by default: a folder tab that already shows that folder is shown instead.
+    /// </summary>
+    public bool AllowDuplicateTabs { get; set; }
+
+    /// <summary>
     /// 登録ペインの内容を自動記録する: a pane group opened from a registered pane writes its layout back to
     /// it whenever it changes (現在のペインを上書きする is then not needed). Off by default.
     /// </summary>

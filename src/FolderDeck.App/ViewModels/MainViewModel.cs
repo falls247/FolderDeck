@@ -658,7 +658,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// Opens a folder in a folder tab of its own: what a click on a 登録フォルダ of the sidebar, or
     /// on a row / header of the cascade opened from it, does. A folder tab that already shows that
     /// very folder is selected instead of opening a second one (a fixed tab inside the same folder
-    /// does not count). A target without a root is no folder: nothing opens.
+    /// does not count), unless タブバーの重複を許可する (<see cref="AppSettings.AllowDuplicateTabs"/>) is on. A target without a root is no folder: nothing opens.
     /// </summary>
     public async Task OpenFolderTabAsync(NavLocation target, string? recordPath = null)
     {
@@ -669,7 +669,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         View?.CloseCascade();
         Message.ClearPersistent();
-        var tab = FolderTabShowing(target);
+        var tab = Settings.AllowDuplicateTabs ? null : FolderTabShowing(target);
         if (tab is null)
         {
             tab = AddFolderTab(target with { Tab = TabKind.Folder });
@@ -3324,7 +3324,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     public void FinishDrag(OutgoingDrag drag)
     {
-        if (!drag.Ran)
+        if (!drag.Ran || drag.OpenedInPane)
         {
             return;
         }

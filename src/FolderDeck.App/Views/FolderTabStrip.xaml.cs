@@ -18,7 +18,9 @@ namespace FolderDeck.Views;
 /// of a neighbour), dragging it down onto a pane of the group on screen puts it in that pane
 /// (<see cref="TabDraggedOverPanes"/> / <see cref="TabDroppedOnPanes"/>), a middle click or × closes it.
 /// A press on a tab outside the group on screen shows it only when the button is released without a
-/// drag (shown at once, the group would leave the screen before the tab could be dropped on a pane). When the tabs do not fit, ◀ / ▶ appear on the
+/// drag (shown at once, the group would leave the screen before the tab could be dropped on a pane).
+/// The bar over a pane group's tabs, dragged, moves the whole group past the tabs and groups beside it.
+/// A drag shows a see-through picture of what it holds under the pointer (<see cref="DragGhost"/>). When the tabs do not fit, ◀ / ▶ appear on the
 /// left (next to the sidebar button) and step one tab at a time, and the wheel (vertical or
 /// horizontal) over the strip scrolls it; there is no scroll bar. Resting on a tab that is not shown
 /// lists its folder under it: the hover events go to the main window's cascade (<see cref="TabEntered"/>).
@@ -36,6 +38,12 @@ public partial class FolderTabStrip : UserControl
     /// <summary>The dragged tab is over the panes (not the strip): moving it does not reorder the strip.</summary>
     private bool _overPanes;
 
+    /// <summary>The press was on the bar over a pane group: the drag moves the whole group (<see cref="MoveGroupTowards"/>).</summary>
+    private bool _groupDrag;
+
+    /// <summary>The picture under the pointer while a drag runs.</summary>
+    private DragGhost? _ghost;
+
     public FolderTabStrip()
     {
         InitializeComponent();
@@ -50,12 +58,21 @@ public partial class FolderTabStrip : UserControl
             {
                 _moving = false;
                 EndOverPanes(tab);
-                _vm?.CommitTabMove(tab);
+                if (_groupDrag)
+                {
+                    _vm?.CommitGroupMove();
+                }
+                else
+                {
+                    _vm?.CommitTabMove(tab);
+                }
             }
 
+            EndDragVisuals();
             _moving = false;
             _pressed = null;
             _selectOnRelease = false;
+            _groupDrag = false;
         };
         Tabs.PreviewMouseDown += OnMouseDown;
         Tabs.MouseRightButtonUp += OnRightUp;
@@ -354,7 +371,8 @@ public partial class FolderTabStrip : UserControl
         _moving = false;
         _overPanes = false;
         Interacted?.Invoke();
-        _selectOnRelease = _vm.IsSplit && !tab.IsOnScreen; // a click still fills an active empty pane (on release)
+        _groupDrag = tab.IsGrouped && OnGroupHandle(e.OriginalSource);
+        _selectOnRelease = _groupDrag || (_vm.IsSplit && !tab.IsOnScreen); // a click still fills an active empty pane (on release)
         if (!_selectOnRelease)
         {
             _vm.SelectTabCommand.Execute(tab);
@@ -379,6 +397,14 @@ public partial class FolderTabStrip : UserControl
 
             _moving = true; // after CaptureMouse: taking the capture resets the press state of a previous one
             _pressed = tab;
+            StartGhost(tab);
+        }
+
+        _ghost?.MoveTo(Tabs.PointToScreen(p));
+        if (_groupDrag)
+        {
+            MoveGroupTowards(tab, p.X); // along the strip only: a group is not dropped on a pane
+            return;
         }
 
         // Below the strip: over the panes (the window marks the pane it would go in). Back on the strip: reordering again.
@@ -394,6 +420,86 @@ public partial class FolderTabStrip : UserControl
         EndOverPanes(tab);
         MoveTowards(tab, p.X);
     }
+
+    /// <summary>The element pressed is (in) the bar over a pane group's tabs.</summary>
+    private static bool OnGroupHandle(object? source)
+    {
+        for (var node = source as DependencyObject; node is not null and not ContentPresenter; node = System.Windows.Media.VisualTreeHelper.GetParent(node))
+        {
+            if (node is FrameworkElement { Name: "GroupHandle" })
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The see-through picture of the dragged tab (or of the whole group for a drag by its bar).</summary>
+    private void StartGhost(TabLayoutViewModel tab)
+    {
+        EndDragVisuals();
+        var block = _groupDrag && _vm?.StripBlocks().FirstOrDefault(b => b.Contains(tab)) is { } tabs ? tabs : [tab];
+        if (EdgesOf(block[0]) is { } first && EdgesOf(block[^1]) is { } last)
+        {
+            _ghost = DragGhost.Start(Tabs, new Rect(first.Left, 0, Math.Max(0, last.Right - first.Left), Tabs.ActualHeight), _pressedAt);
+        }
+
+        if (_groupDrag)
+        {
+            Tabs.Cursor = Cursors.SizeAll;
+        }
+    }
+
+    private void EndDragVisuals()
+    {
+        _ghost?.End();
+        _ghost = null;
+        if (_groupDrag)
+        {
+            Tabs.ClearValue(CursorProperty);
+        }
+    }
+
+    /// <summary>
+    /// A group dragged by its bar moves past the block beside it (a tab, or another group as a whole)
+    /// once the pointer is past that block's middle, as a single tab does.
+    /// </summary>
+    private void MoveGroupTowards(TabLayoutViewModel tab, double x)
+    {
+        if (_vm is null)
+        {
+            return;
+        }
+
+        for (int guard = 0; guard < 64; guard++)
+        {
+            var blocks = _vm.StripBlocks();
+            int at = -1;
+            for (int i = 0; i < blocks.Count && at < 0; i++)
+            {
+                at = blocks[i].Contains(tab) ? i : -1;
+            }
+
+            if (at < 0)
+            {
+                return;
+            }
+
+            bool right = at + 1 < blocks.Count && MiddleOf(blocks[at + 1]) is { } r && x > r;
+            bool left = !right && at > 0 && MiddleOf(blocks[at - 1]) is { } l && x < l;
+            if (!(right || left) || !_vm.MoveGroupBlock(tab, right))
+            {
+                return;
+            }
+
+            Tabs.UpdateLayout(); // the next move is judged against the new positions
+        }
+    }
+
+    /// <summary>Horizontal middle of a block of tabs, in the strip's coordinates (null: not realized).</summary>
+    private double? MiddleOf(IReadOnlyList<TabLayoutViewModel> block) =>
+        EdgesOf(block[0]) is { } first && EdgesOf(block[^1]) is { } last ? (first.Left + last.Right) / 2 : null;
 
     /// <summary>How far below the strip a dragged tab is still over it (DIP).</summary>
     private const double DragOutMargin = 8;
@@ -467,12 +573,23 @@ public partial class FolderTabStrip : UserControl
     {
         bool moving = _moving;
         bool select = _selectOnRelease;
+        bool group = _groupDrag;
         var tab = _pressed;
         _moving = false; // before the capture goes: LostMouseCapture must not end the drag a second time
         _pressed = null;
         _selectOnRelease = false;
+        EndDragVisuals();
+        _groupDrag = false;
         if (tab is null || _vm is null)
         {
+            return;
+        }
+
+        if (moving && group)
+        {
+            Tabs.ReleaseMouseCapture();
+            _vm.CommitGroupMove();
+            RevealSelected();
             return;
         }
 
